@@ -122,6 +122,66 @@ def _should_run(
     return True, ""
 
 
+def _propose_retention(old_dr: float, cmrr: float, max_step: float) -> float | None:
+    """Damp a freshly computed CMRR into a bounded desired-retention change.
+
+    `cmrr` is the backend's "compute minimum recommended retention" value for
+    one preset (already clamped to [0.7, 0.95] server-side -- see
+    rslib/src/scheduler/fsrs/retention.rs). Rather than jumping straight to
+    it, the proposed value is only allowed to move at most `max_step` away
+    from `old_dr` per run, and is rounded to 2dp to match the precision the
+    deck options screen displays/accepts. Returns None if the (rounded)
+    change would be smaller than 0.01, i.e. not worth bothering the user (or
+    rewriting config) over.
+
+    >>> round(_propose_retention(0.80, 0.90, 0.02), 2)
+    0.82
+    >>> round(_propose_retention(0.90, 0.70, 0.02), 2)
+    0.88
+
+    Below the 0.01 change threshold -- nothing proposed:
+
+    >>> _propose_retention(0.85, 0.85, 0.03) is None
+    True
+
+    Already at a clamp boundary, CMRR agrees -- nothing proposed:
+
+    >>> _propose_retention(0.70, 0.70, 0.03) is None
+    True
+    >>> _propose_retention(0.95, 0.95, 0.03) is None
+    True
+
+    Ordinary moves, clamped to +/- max_step:
+
+    >>> round(_propose_retention(0.90, 0.80, 0.03), 2)
+    0.87
+    >>> round(_propose_retention(0.90, 0.99, 0.03), 2)
+    0.93
+    """
+    new_dr = max(old_dr - max_step, min(old_dr + max_step, cmrr))
+    new_dr = round(new_dr, 2)
+    if abs(new_dr - old_dr) < 0.01:
+        return None
+    return new_dr
+
+
+def _current_fsrs_params(config: object) -> list[float]:
+    """Mirror DeckConfig::fsrs_params() (rslib/src/deckconfig/mod.rs):
+    prefer fsrs_params_6, falling back to _5, then _4. Returns [] if none of
+    the three has ever been populated (i.e. FSRS optimization has never been
+    run for this preset)."""
+    if config.fsrs_params_6:
+        return list(config.fsrs_params_6)
+    if config.fsrs_params_5:
+        return list(config.fsrs_params_5)
+    return list(config.fsrs_params_4)
+
+
+def _escape_preset_name_for_search(name: str) -> str:
+    "Mirror ts/routes/deck-options/lib.ts:getCurrentNameForSearch()."
+    return name.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def setup(mw: aqt.main.AnkiQt) -> None:
     """Wire up automatic FSRS optimization. Called once from AnkiQt.setupUI()."""
     from aqt import gui_hooks
@@ -248,8 +308,237 @@ def _run_optimize(mw: aqt.main.AnkiQt) -> None:
         mw.col.set_config(_CONFIG_KEY, config)
         _after_optimize(mw, info)
 
-    update_deck_configs_op(parent=mw, input=request).success(on_success).run_in_background()
+    update_deck_configs_op(parent=mw, input=request).success(
+        on_success
+    ).run_in_background()
+
+
+def _eligible_presets(info: object) -> list:
+    """Presets worth computing a CMRR for: at least one deck uses them, and
+    they have FSRS params to simulate with (mirrors the rust-side
+    `fsrs_params()` fallback -- a preset that's never been optimized has
+    nothing to simulate)."""
+    return [
+        c.config
+        for c in info.all_config  # DeckConfigsForUpdate.ConfigWithExtra
+        if c.use_count > 0 and _current_fsrs_params(c.config.config)
+    ]
+
+
+def _build_simulate_request(config: object, new_cards_ignore_review_limit: bool):
+    """Build a SimulateFsrsReviewRequest for one preset, field-for-field the
+    same request the deck options screen builds -- see
+    ts/routes/deck-options/FsrsOptions.svelte (base request) and
+    SimulatorModal.svelte's updateRequest() (daysToSimulate/deckSize/
+    suspendAfterLapseCount/easyDaysPercentages overrides)."""
+    from anki import deck_config_pb2, scheduler_pb2
+
+    cfg = config.config  # DeckConfig.Config
+    request = scheduler_pb2.SimulateFsrsReviewRequest(
+        params=_current_fsrs_params(cfg),
+        desired_retention=cfg.desired_retention,
+        deck_size=0,
+        days_to_simulate=365,
+        new_limit=cfg.new_per_day,
+        review_limit=cfg.reviews_per_day,
+        max_interval=cfg.maximum_review_interval,
+        search=f'preset:"{_escape_preset_name_for_search(config.name)}" -is:suspended',
+        new_cards_ignore_review_limit=new_cards_ignore_review_limit,
+        easy_days_percentages=list(cfg.easy_days_percentages),
+        review_order=cfg.review_order,
+        historical_retention=cfg.historical_retention,
+        learning_step_count=len(cfg.learn_steps),
+        relearning_step_count=len(cfg.relearn_steps),
+    )
+    # suspend_after_lapse_count is proto3-optional (a None/unset value is
+    # meaningfully different from 0); only set it when leeches suspend.
+    if cfg.leech_action == deck_config_pb2.DeckConfig.Config.LeechAction.LEECH_ACTION_SUSPEND:
+        request.suspend_after_lapse_count = cfg.leech_threshold
+    return request
+
+
+def _compute_cmrr_proposals(col, presets: list, new_cards_ignore_review_limit: bool):
+    """Runs on a background thread (see `_after_optimize` for the QueryOp
+    that calls this). `compute_optimal_retention` is a pure, read-only
+    simulation -- rslib/src/scheduler/fsrs/retention.rs neither transacts
+    nor writes an undo entry, it just crunches revlog data -- but simulating
+    365 days for every eligible preset is CPU-bound and can take a
+    noticeable amount of time, so it still must not run on the main thread."""
+    results = []
+    for preset in presets:
+        request = _build_simulate_request(preset, new_cards_ignore_review_limit)
+        cmrr = col._backend.compute_optimal_retention(request)
+        results.append((preset, cmrr))
+    return results
 
 
 def _after_optimize(mw: aqt.main.AnkiQt, info: object) -> None:
-    """Phase 4 hook: CMRR chaining"""
+    """Phase 4: after optimizing FSRS params, compute a minimum recommended
+    retention (CMRR) for every preset with params to simulate, and propose
+    (or, if configured, silently apply) a damped desired-retention change.
+
+    Runs the simulations via QueryOp rather than CollectionOp: the compute
+    step itself never mutates the collection or needs undo support (see
+    `_compute_cmrr_proposals`'s docstring), so QueryOp -- the lighter-weight
+    of the two, without CollectionOp's undo bookkeeping and
+    operation_did_execute/state_did_reset hooks -- is the right tool. The
+    later apply step (`_apply_retention_changes`) *does* mutate deck configs,
+    so that one goes through the existing CollectionOp-backed
+    `update_deck_configs` op, same as `_run_optimize`.
+    """
+    from aqt.operations import QueryOp
+
+    assert mw.col is not None
+    deck_id = mw.col.decks.get_current_id()
+    # info passed in is from before this optimize run; re-fetch so the
+    # freshly-optimized params are what gets simulated.
+    fresh_info = mw.col.decks.get_deck_configs_for_update(deck_id)
+    presets = _eligible_presets(fresh_info)
+    if not presets:
+        return
+
+    QueryOp(
+        parent=mw,
+        op=lambda col: _compute_cmrr_proposals(
+            col, presets, fresh_info.new_cards_ignore_review_limit
+        ),
+        success=lambda results: _on_cmrr_computed(mw, fresh_info, results),
+    ).with_progress("Computing retention proposals...").run_in_background()
+
+
+def _on_cmrr_computed(mw: aqt.main.AnkiQt, info: object, results: list) -> None:
+    "Runs on the main thread once every preset's CMRR has been computed."
+    assert mw.col is not None
+    config = _load_config(mw)
+    max_step = config.get("maxRetentionStep", _DEFAULT_CONFIG["maxRetentionStep"])
+    now = int(time.time())
+    presets_bookkeeping = config.setdefault("presets", {})
+
+    proposals = []  # (preset, old_dr, new_dr, cmrr)
+    for preset, cmrr in results:
+        old_dr = preset.config.desired_retention
+        new_dr = _propose_retention(old_dr, cmrr, max_step)
+        if new_dr is None:
+            # nothing worth changing -- record the CMRR anyway so the user
+            # (or a future run) can see it was checked.
+            entry = presets_bookkeeping.setdefault(str(preset.id), {})
+            entry.update(
+                lastCmrr=now, cmrrValue=cmrr, prevRetention=old_dr, lastRetention=old_dr
+            )
+        else:
+            proposals.append((preset, old_dr, new_dr, cmrr))
+    mw.col.set_config(_CONFIG_KEY, config)
+
+    if not proposals:
+        return
+
+    if config.get("autoApplyRetention", False):
+        _apply_retention_changes(mw, info, proposals)
+    else:
+        mw.taskman.run_on_main(lambda: _show_retention_proposal_dialog(mw, info, proposals))
+
+
+def _show_retention_proposal_dialog(mw: aqt.main.AnkiQt, info: object, proposals: list) -> None:
+    "Non-modal Apply/Skip prompt listing each preset's proposed change."
+    from aqt.qt import QMessageBox, Qt, qconnect
+
+    lines = [
+        f"{preset.name}: {old_dr:.2f} -> {new_dr:.2f}"
+        for preset, old_dr, new_dr, _ in proposals
+    ]
+    box = QMessageBox(mw)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle("FSRS Retention Update")
+    box.setText(
+        "Based on your review history, the following desired retention "
+        "changes are suggested:\n\n" + "\n".join(lines)
+    )
+    apply_button = box.addButton("Apply", QMessageBox.ButtonRole.AcceptRole)
+    box.addButton("Skip", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(apply_button)
+    box.setWindowModality(Qt.WindowModality.NonModal)
+    box.setModal(False)
+
+    def on_finished(_: int) -> None:
+        if box.clickedButton() == apply_button:
+            _apply_retention_changes(mw, info, proposals)
+        else:
+            _record_declined_proposals(mw, proposals)
+
+    qconnect(box.finished, on_finished)
+    box.show()
+
+
+def _record_declined_proposals(mw: aqt.main.AnkiQt, proposals: list) -> None:
+    assert mw.col is not None
+    config = _load_config(mw)
+    presets_bookkeeping = config.setdefault("presets", {})
+    now = int(time.time())
+    for preset, old_dr, _new_dr, cmrr in proposals:
+        entry = presets_bookkeeping.setdefault(str(preset.id), {})
+        entry.update(
+            lastCmrr=now, cmrrValue=cmrr, prevRetention=old_dr, lastRetention=old_dr
+        )
+    mw.col.set_config(_CONFIG_KEY, config)
+
+
+def _apply_retention_changes(mw: aqt.main.AnkiQt, info: object, proposals: list) -> None:
+    """Write the (possibly damped) desired_retention proposals back via a
+    second UpdateDeckConfigsRequest -- mode NORMAL this time, since we're
+    supplying explicit values rather than asking the backend to recompute
+    params. As in `_run_optimize`, the *last* entry in `configs` is the one
+    the backend assigns to `target_deck_id`, so the current deck's own
+    preset (changed or not) must be last."""
+    from anki.decks import UpdateDeckConfigs, UpdateDeckConfigsMode
+    from aqt.operations.deck import update_deck_configs as update_deck_configs_op
+    from aqt.utils import tooltip
+
+    assert mw.col is not None
+    current_config_id = info.current_deck.config_id
+    changed_by_id = {}
+    for preset, _old_dr, new_dr, _cmrr in proposals:
+        preset.config.desired_retention = new_dr
+        changed_by_id[preset.id] = preset
+
+    configs = [p for pid, p in changed_by_id.items() if pid != current_config_id]
+    if current_config_id in changed_by_id:
+        configs.append(changed_by_id[current_config_id])
+    else:
+        # deck's own preset wasn't (re)proposed this round -- pass it through
+        # unchanged, but it must still come last.
+        current_preset = next(
+            c.config for c in info.all_config if c.config.id == current_config_id
+        )
+        configs.append(current_preset)
+
+    request = UpdateDeckConfigs(
+        target_deck_id=mw.col.decks.get_current_id(),
+        configs=configs,
+        mode=UpdateDeckConfigsMode.UPDATE_DECK_CONFIGS_MODE_NORMAL,
+        card_state_customizer=info.card_state_customizer,
+        new_cards_ignore_review_limit=info.new_cards_ignore_review_limit,
+        apply_all_parent_limits=info.apply_all_parent_limits,
+        fsrs=True,
+        fsrs_health_check=info.fsrs_health_check,
+        # unconditional passthrough, same as _run_optimize -- must NOT carry
+        # a deck-level desired_retention override into these limits
+        limits=info.current_deck.limits,
+        fsrs_reschedule=False,
+    )
+
+    def on_success(_: object) -> None:
+        tooltip("Desired retention updated", parent=mw)
+        assert mw.col is not None
+        config = _load_config(mw)
+        presets_bookkeeping = config.setdefault("presets", {})
+        now = int(time.time())
+        for preset, old_dr, new_dr, cmrr in proposals:
+            entry = presets_bookkeeping.setdefault(str(preset.id), {})
+            entry.update(
+                lastCmrr=now, cmrrValue=cmrr, prevRetention=old_dr, lastRetention=new_dr
+            )
+        mw.col.set_config(_CONFIG_KEY, config)
+
+    update_deck_configs_op(parent=mw, input=request).success(
+        on_success
+    ).run_in_background()
