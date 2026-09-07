@@ -137,6 +137,19 @@ statistics-true-retention-all-time = All time
 # percentage cannot be calculated and is displayed as "N/A."
 statistics-true-retention-not-applicable = N/A
 
+statistics-velocity-title = Learning Velocity
+statistics-velocity-subtitle = How much you know, and how fast you are learning.
+statistics-velocity-stock = Knowledge
+statistics-velocity-velocity = Velocity
+statistics-velocity-efficiency = Efficiency
+# Tooltip for the knowledge line: the sum over all cards of the estimated
+# probability of recalling that card today.
+statistics-velocity-stock-tooltip = Estimated total cards you could recall if tested
+# Tooltip for the velocity line: day-over-day change in knowledge.
+statistics-velocity-velocity-tooltip = Change in knowledge per day
+# Tooltip for the efficiency line.
+statistics-velocity-efficiency-tooltip = Knowledge gained per hour of study (7-day average)
+
 ##
 
 statistics-range-all-time = all
