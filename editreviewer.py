@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from typing import Dict, List, Tuple
 
 from aqt import gui_hooks, mw
@@ -77,6 +78,41 @@ def _field_pairs(card) -> List[Tuple[str, str]]:
     return pairs
 
 
+
+# --------------------------------------------------------------------------- #
+# Safe-match helpers: field values must only ever be wrapped when they sit
+# in rendered body text. Matching inside <style>/<script> blocks, comments,
+# or tag markup splits the markup and leaks it as visible text (e.g. a
+# one-letter field value "l" matching the "l" in "<style>").
+# --------------------------------------------------------------------------- #
+_FORBIDDEN_BLOCK_RE = re.compile(
+    r"<(style|script)\b[^>]*>.*?</\1\s*>|<!--.*?-->",
+    re.IGNORECASE | re.DOTALL,
+)
+_TAG_RE = re.compile(r"<[^>]*>")
+
+
+def _forbidden_spans(text: str) -> List[Tuple[int, int]]:
+    """Spans of `text` that wrapping must never touch: whole <style> and
+    <script> blocks, HTML comments, and every tag's own markup."""
+    spans = [m.span() for m in _FORBIDDEN_BLOCK_RE.finditer(text)]
+    spans.extend(m.span() for m in _TAG_RE.finditer(text))
+    return spans
+
+
+def _find_in_body_text(text: str, val: str) -> int:
+    """First index of `val` in `text` that doesn't overlap a forbidden
+    span, or -1 if every occurrence is inside markup."""
+    spans = _forbidden_spans(text)
+    pos = text.find(val)
+    while pos >= 0:
+        end = pos + len(val)
+        if not any(pos < s_end and end > s_start for s_start, s_end in spans):
+            return pos
+        pos = text.find(val, pos + 1)
+    return -1
+
+
 def _wrap_fields(text: str, card, kind: str) -> str:
     """For each non-empty field, wrap its FIRST literal occurrence in the
     rendered HTML with a marker div. Idempotent: if the wrap is already
@@ -99,8 +135,15 @@ def _wrap_fields(text: str, card, kind: str) -> str:
 
     placeholders: Dict[str, Tuple[str, str]] = {}
     for idx, (name, val) in enumerate(pairs):
+        # Single-character values (a one-letter code field, "x", ...) are
+        # near-guaranteed to collide with template prose even in body text,
+        # and a mis-wrap silently corrupts the note on save -- the wrapped
+        # run of text *becomes* the field. Skip them; the full editor is
+        # the documented fallback for fields we can't safely locate.
+        if len(val) < 2:
+            continue
         marker = f"\x00BA_FIELD_{idx}\x00"
-        pos = text.find(val)
+        pos = _find_in_body_text(text, val)
         if pos < 0:
             continue
         text = text[:pos] + marker + text[pos + len(val):]
