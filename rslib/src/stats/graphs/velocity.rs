@@ -70,7 +70,8 @@ impl GraphsContext {
                 continue;
             };
             let entries: Vec<RevlogEntry> = entries.into_iter().cloned().collect();
-            let Some(output) = reviews_for_fsrs(entries, self.next_day_start, false, TimestampMillis(0))
+            let Some(output) =
+                reviews_for_fsrs(entries, self.next_day_start, false, TimestampMillis(0))
             else {
                 continue;
             };
@@ -104,9 +105,7 @@ impl GraphsContext {
             let mut prev_days_elapsed = None;
             let mut segments: Vec<Segment> = vec![];
             for entry in entries {
-                let days_elapsed = (self
-                    .next_day_start
-                    .elapsed_secs_since(entry.id.as_secs())
+                let days_elapsed = (self.next_day_start.elapsed_secs_since(entry.id.as_secs())
                     / 86_400)
                     .max(0) as u32;
                 let delta_t = prev_days_elapsed
@@ -138,8 +137,8 @@ impl GraphsContext {
                         }
                     }
                 };
-                let day = (entry.id.as_secs().elapsed_secs_since(self.next_day_start) / 86_400)
-                    as i32;
+                let day =
+                    (entry.id.as_secs().elapsed_secs_since(self.next_day_start) / 86_400) as i32;
                 let day = day.min(0);
                 if segments.last().map(|s| s.day) == Some(day) {
                     // same-day review: keep the later state
@@ -248,9 +247,10 @@ mod test {
         assert_eq!(v.resolution_days, 1);
         // covers first review day through today
         for d in -10..=0 {
-            let k = *v.knowledge.get(&d).unwrap_or_else(|| {
-                panic!("missing day {d}; got {:?}", v.knowledge)
-            });
+            let k = *v
+                .knowledge
+                .get(&d)
+                .unwrap_or_else(|| panic!("missing day {d}; got {:?}", v.knowledge));
             assert!(k > 0.0 && k <= 1.0, "day {d} = {k}");
         }
         // retrievability decays between reviews
