@@ -12,6 +12,7 @@ mod retention;
 mod retrievability;
 mod reviews;
 mod today;
+mod velocity;
 
 use crate::config::BoolKey;
 use crate::config::Weekday;
@@ -25,6 +26,11 @@ struct GraphsContext {
     next_day_start: TimestampSecs,
     days_elapsed: u32,
     local_offset_secs: i64,
+    fsrs_enabled: bool,
+    /// deck id -> config id, for looking up FSRS params during replay
+    deck_to_config: std::collections::HashMap<DeckId, DeckConfigId>,
+    /// config id -> FSRS params
+    config_params: std::collections::HashMap<DeckConfigId, Vec<f32>>,
 }
 
 impl Collection {
@@ -55,12 +61,28 @@ impl Collection {
             self.storage
                 .get_revlog_entries_for_searched_cards_after_stamp(revlog_start)?
         };
+        let fsrs_enabled = self.get_config_bool(BoolKey::Fsrs);
+        let deck_to_config = self
+            .storage
+            .get_all_decks()?
+            .iter()
+            .filter_map(|d| d.config_id().map(|cid| (d.id, cid)))
+            .collect();
+        let config_params = self
+            .storage
+            .all_deck_config()?
+            .into_iter()
+            .map(|c| (c.id, c.fsrs_params().clone()))
+            .collect();
         let ctx = GraphsContext {
             revlog,
             days_elapsed: timing.days_elapsed,
             cards: self.storage.all_searched_cards()?,
             next_day_start: timing.next_day_at,
             local_offset_secs,
+            fsrs_enabled,
+            deck_to_config,
+            config_params,
         };
         let (eases, difficulty) = ctx.eases();
         let resp = anki_proto::stats::GraphsResponse {
@@ -78,7 +100,8 @@ impl Collection {
             card_counts: Some(ctx.card_counts()),
             rollover_hour: self.rollover_for_current_scheduler()? as u32,
             retrievability: Some(ctx.retrievability()),
-            fsrs: self.get_config_bool(BoolKey::Fsrs),
+            velocity: ctx.velocity(),
+            fsrs: fsrs_enabled,
         };
         Ok(resp)
     }
