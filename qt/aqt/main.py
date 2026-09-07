@@ -48,7 +48,7 @@ from anki.utils import (
     is_win,
     split_fields,
 )
-from aqt import gui_hooks
+from aqt import auto_optimize, gui_hooks
 from aqt.addons import DownloadLogEntry, check_and_prompt_for_updates, show_log_to_user
 from aqt.debug_console import show_debug_console
 from aqt.flags import FlagManager
@@ -239,6 +239,7 @@ class AnkiQt(QMainWindow):
         self.setupSignals()
         self.setupHooks()
         self.setup_timers()
+        auto_optimize.setup(self)
         self.updateTitleBar()
         self.setup_focus()
         # screens
