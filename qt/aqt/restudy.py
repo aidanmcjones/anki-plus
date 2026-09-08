@@ -158,6 +158,16 @@ class RestudyDialog(QDialog):
         quick.addStretch()
         layout.addLayout(quick)
 
+        # Master select-all/deselect-all, top-left of the table. Its state
+        # mirrors the table (unchecked/partial/checked); a click from any
+        # state selects everything unless everything is already selected,
+        # in which case it clears. Driven from `clicked` (user gestures
+        # only), so programmatic setCheckState() can't recurse into it.
+        self.master_check = QCheckBox(tr.studying_restudy_master_select())
+        self.master_check.setTristate(False)
+        qconnect(self.master_check.clicked, self._on_master_clicked)
+        layout.addWidget(self.master_check)
+
         headers = [
             "",
             tr.studying_restudy_card(),
@@ -320,18 +330,34 @@ class RestudyDialog(QDialog):
     def _on_item_changed(self, _item: QTableWidgetItem) -> None:
         self._refresh_selected_label()
 
+    def _on_master_clicked(self, _checked: bool = False) -> None:
+        # Decide from the table's state, not the box's (Qt has already
+        # toggled the box by the time `clicked` fires).
+        select_all = len(self._selected_ids()) < len(self._view_rows)
+        self._select(lambda row: select_all)
+
     def _refresh_selected_label(self) -> None:
         if not hasattr(self, "button_box"):
             # the initial _populate runs before the label/buttons exist;
             # __init__'s _select() refreshes once the ui is complete
             return
         count = len(self._selected_ids())
+        total = len(self.data.rows)
         self.selected_label.setText(
-            tr.studying_restudy_selected(selected=count, total=len(self.data.rows))
+            tr.studying_restudy_selected(selected=count, total=total)
         )
         ok = self.button_box.button(QDialogButtonBox.StandardButton.Ok)
         assert ok is not None
         ok.setEnabled(count > 0)
+        if count == 0:
+            state = Qt.CheckState.Unchecked
+        elif count == total:
+            state = Qt.CheckState.Checked
+        else:
+            state = Qt.CheckState.PartiallyChecked
+        self.master_check.blockSignals(True)
+        self.master_check.setCheckState(state)
+        self.master_check.blockSignals(False)
 
     def _on_cell_clicked(self, row_idx: int, col_idx: int) -> None:
         if col_idx == 1:

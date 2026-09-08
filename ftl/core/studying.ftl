@@ -67,6 +67,7 @@ studying-restudy-select-all = All
 studying-restudy-select-missed = Missed recently
 studying-restudy-select-hardest = Hardest 25%
 studying-restudy-select-due-soon = Due soon
+studying-restudy-master-select = Select all
 studying-restudy-card = Card
 studying-restudy-difficulty = Difficulty
 studying-restudy-lapses = Lapses
