@@ -211,3 +211,16 @@
 .ad-logo.ad-logo--md { --ad-logo-size: 28px; }
 .ad-logo.ad-logo--lg { --ad-logo-size: 48px; }
 .ad-logo.ad-logo--xl { --ad-logo-size: 78px; }
+
+/* Anki+ variant: the DESIGN half of the lockup is replaced by a single
+   accent-blue plus. Sized against the anki cap height so the pair reads
+   as one word; the glow matches the app icon's treatment. */
+.ad-logo .ad-plus {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-weight: 800;
+  font-size: 1.18em;
+  line-height: 1;
+  margin-left: 0.06em;
+  color: var(--rf-accent, #3b82f6);
+  text-shadow: 0 0 0.28em rgba(59, 130, 246, 0.55);
+}
