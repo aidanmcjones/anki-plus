@@ -14,13 +14,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import aqt
-from anki.cards import CardId
+from anki.cards import Card, CardId
 from anki.collection import Collection
 from anki.consts import QUEUE_TYPE_REV
 from anki.decks import DeckId, FilteredDeckConfig
 from anki.scheduler import FilteredDeckForUpdate
 from anki.scheduler.base import ScheduleCardsAsNew
 from anki.utils import strip_html
+from aqt.browser.previewer import Previewer
 from aqt.operations import QueryOp
 from aqt.operations.scheduling import add_or_update_filtered_deck, forget_cards
 from aqt.qt import *
@@ -33,6 +34,7 @@ _EXCERPT_LEN = 60
 class RestudyRow:
     card_id: CardId
     excerpt: str
+    type_name: str
     difficulty: float | None
     lapses: int
     missed_recently: bool
@@ -56,22 +58,38 @@ def _gather_rows(col: Collection, deck_id: DeckId) -> RestudyData:
     today = col.sched.today
 
     rows = []
+    notetypes: dict[int, dict] = {}
     for cid in card_ids:
         card = col.get_card(cid)
         note = card.note()
-        notetype = note.note_type()
-        assert notetype is not None
+        notetype = notetypes.get(note.mid)
+        if notetype is None:
+            notetype = note.note_type()
+            assert notetype is not None
+            notetypes[note.mid] = notetype
         excerpt = strip_html(note.fields[notetype["sortf"]]).strip()
         if not excerpt:
             excerpt = strip_html(note.fields[0]).strip()
         if len(excerpt) > _EXCERPT_LEN:
             excerpt = excerpt[: _EXCERPT_LEN - 1] + "…"
-        difficulty = card.memory_state.difficulty if card.memory_state else None
+        templates = notetype["tmpls"]
+        if card.ord < len(templates):
+            type_name = templates[card.ord]["name"]
+        else:
+            # cloze: one template serves every ordinal
+            type_name = templates[0]["name"] if templates else ""
+        if card.memory_state:
+            # stored difficulty is raw 1-10; normalize to 0-1 like the
+            # browser's Difficulty column (FsrsMemoryState::difficulty())
+            difficulty = (card.memory_state.difficulty - 1.0) / 9.0
+        else:
+            difficulty = None
         due_in_days = card.due - today if card.queue == QUEUE_TYPE_REV else None
         rows.append(
             RestudyRow(
                 card_id=cid,
                 excerpt=excerpt,
+                type_name=type_name,
                 difficulty=difficulty,
                 lapses=card.lapses,
                 missed_recently=cid in missed,
@@ -137,6 +155,7 @@ class RestudyDialog(QDialog):
         headers = [
             "",
             tr.studying_restudy_card(),
+            tr.card_stats_card_template(),
             tr.studying_restudy_difficulty(),
             tr.studying_restudy_lapses(),
             tr.studying_restudy_missed(),
@@ -158,10 +177,19 @@ class RestudyDialog(QDialog):
             )
             due = str(row.due_in_days) if row.due_in_days is not None else "-"
             missed = "✓" if row.missed_recently else ""
+            excerpt_item = QTableWidgetItem(row.excerpt)
+            link_font = excerpt_item.font()
+            link_font.setUnderline(True)
+            excerpt_item.setFont(link_font)
+            excerpt_item.setForeground(
+                self.palette().color(QPalette.ColorRole.Link)
+            )
+            excerpt_item.setToolTip(tr.actions_preview())
             for col_idx, item in enumerate(
                 [
                     check,
-                    QTableWidgetItem(row.excerpt),
+                    excerpt_item,
+                    QTableWidgetItem(row.type_name),
                     QTableWidgetItem(difficulty),
                     QTableWidgetItem(str(row.lapses)),
                     QTableWidgetItem(missed),
@@ -173,6 +201,8 @@ class RestudyDialog(QDialog):
         assert header is not None
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         qconnect(self.table.itemChanged, self._on_item_changed)
+        qconnect(self.table.cellClicked, self._on_cell_clicked)
+        qconnect(self.table.cellDoubleClicked, self._on_cell_double_clicked)
         layout.addWidget(self.table)
 
         self.selected_label = QLabel()
@@ -232,6 +262,17 @@ class RestudyDialog(QDialog):
         ok = self.button_box.button(QDialogButtonBox.StandardButton.Ok)
         assert ok is not None
         ok.setEnabled(count > 0)
+
+    def _on_cell_clicked(self, row_idx: int, col_idx: int) -> None:
+        if col_idx == 1:
+            self._preview_row(row_idx)
+
+    def _on_cell_double_clicked(self, row_idx: int, _col_idx: int) -> None:
+        self._preview_row(row_idx)
+
+    def _preview_row(self, row_idx: int) -> None:
+        card = self.mw.col.get_card(self.data.rows[row_idx].card_id)
+        _SingleCardPreviewer(card=card, mw=self.mw).open()
 
     # Actions
     ##########################################################################
@@ -299,3 +340,17 @@ class RestudyDialog(QDialog):
         ):
             op.run_in_background()
             self.accept()
+
+
+class _SingleCardPreviewer(Previewer):
+    """Read-only question/answer preview of one fixed card."""
+
+    def __init__(self, card: Card, mw: aqt.AnkiQt) -> None:
+        super().__init__(parent=None, mw=mw, on_close=lambda: None)
+        self._card = card
+
+    def card(self) -> Card | None:
+        return self._card
+
+    def card_changed(self) -> bool:
+        return False
