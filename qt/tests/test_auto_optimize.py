@@ -152,4 +152,7 @@ def test_current_fsrs_params_prefers_6_then_5_then_4():
 
 def test_escape_preset_name_for_search_matches_ts_regex():
     # mirrors ts/routes/deck-options/lib.ts: name.replace(/([\\"])/g, "\\$1")
-    assert _escape_preset_name_for_search('My "Weird" Pre\\set') == 'My \\"Weird\\" Pre\\\\set'
+    assert (
+        _escape_preset_name_for_search('My "Weird" Pre\\set')
+        == 'My \\"Weird\\" Pre\\\\set'
+    )

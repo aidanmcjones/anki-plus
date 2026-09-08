@@ -352,7 +352,10 @@ def _build_simulate_request(config: object, new_cards_ignore_review_limit: bool)
     )
     # suspend_after_lapse_count is proto3-optional (a None/unset value is
     # meaningfully different from 0); only set it when leeches suspend.
-    if cfg.leech_action == deck_config_pb2.DeckConfig.Config.LeechAction.LEECH_ACTION_SUSPEND:
+    if (
+        cfg.leech_action
+        == deck_config_pb2.DeckConfig.Config.LeechAction.LEECH_ACTION_SUSPEND
+    ):
         request.suspend_after_lapse_count = cfg.leech_threshold
     return request
 
@@ -435,10 +438,14 @@ def _on_cmrr_computed(mw: aqt.main.AnkiQt, info: object, results: list) -> None:
     if config.get("autoApplyRetention", False):
         _apply_retention_changes(mw, info, proposals)
     else:
-        mw.taskman.run_on_main(lambda: _show_retention_proposal_dialog(mw, info, proposals))
+        mw.taskman.run_on_main(
+            lambda: _show_retention_proposal_dialog(mw, info, proposals)
+        )
 
 
-def _show_retention_proposal_dialog(mw: aqt.main.AnkiQt, info: object, proposals: list) -> None:
+def _show_retention_proposal_dialog(
+    mw: aqt.main.AnkiQt, info: object, proposals: list
+) -> None:
     "Non-modal Apply/Skip prompt listing each preset's proposed change."
     from aqt.qt import QMessageBox, Qt, qconnect
 
@@ -482,7 +489,9 @@ def _record_declined_proposals(mw: aqt.main.AnkiQt, proposals: list) -> None:
     mw.col.set_config(_CONFIG_KEY, config)
 
 
-def _apply_retention_changes(mw: aqt.main.AnkiQt, info: object, proposals: list) -> None:
+def _apply_retention_changes(
+    mw: aqt.main.AnkiQt, info: object, proposals: list
+) -> None:
     """Write the (possibly damped) desired_retention proposals back via a
     second UpdateDeckConfigsRequest -- mode NORMAL this time, since we're
     supplying explicit values rather than asking the backend to recompute
