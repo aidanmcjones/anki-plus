@@ -158,15 +158,32 @@ class RestudyDialog(QDialog):
         quick.addStretch()
         layout.addLayout(quick)
 
-        # Master select-all/deselect-all, top-left of the table. Its state
-        # mirrors the table (unchecked/partial/checked); a click from any
-        # state selects everything unless everything is already selected,
-        # in which case it clears. Driven from `clicked` (user gestures
-        # only), so programmatic setCheckState() can't recurse into it.
-        self.master_check = QCheckBox(tr.studying_restudy_master_select())
+        # Master select-all/deselect-all, top-left of the table. The square
+        # mirrors the table (unchecked/partial/checked) and toggles all/none;
+        # the word next to it is a menu button offering per-card-type
+        # selection. Driven from `clicked` (user gestures only), so
+        # programmatic setCheckState() can't recurse into it.
+        master_row = QHBoxLayout()
+        master_row.setSpacing(4)
+        self.master_check = QCheckBox()
         self.master_check.setTristate(False)
+        self.master_check.setToolTip(tr.studying_restudy_master_select())
         qconnect(self.master_check.clicked, self._on_master_clicked)
-        layout.addWidget(self.master_check)
+        master_row.addWidget(self.master_check)
+        self.type_button = QToolButton()
+        self.type_button.setText(tr.studying_restudy_master_select() + " \u25be")
+        self.type_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.type_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        # the text carries its own arrow; hide the style's duplicate
+        self.type_button.setStyleSheet(
+            "QToolButton { border: none; } QToolButton::menu-indicator { image: none; }"
+        )
+        self._type_menu = QMenu(self)
+        qconnect(self._type_menu.aboutToShow, self._rebuild_type_menu)
+        self.type_button.setMenu(self._type_menu)
+        master_row.addWidget(self.type_button)
+        master_row.addStretch()
+        layout.addLayout(master_row)
 
         headers = [
             "",
@@ -200,6 +217,17 @@ class RestudyDialog(QDialog):
         qconnect(self.table.itemChanged, self._on_item_changed)
         qconnect(self.table.cellClicked, self._on_cell_clicked)
         qconnect(self.table.cellDoubleClicked, self._on_cell_double_clicked)
+        # Drag-select: a press on the checkbox column starts painting that
+        # row's toggled state across every row the cursor passes, with
+        # timer-driven auto-scroll past the viewport edges.
+        self._drag_target: Qt.CheckState | None = None
+        self._drag_last_row: int | None = None
+        self._autoscroll_timer = QTimer(self)
+        self._autoscroll_timer.setInterval(60)
+        qconnect(self._autoscroll_timer.timeout, self._drag_autoscroll_tick)
+        viewport = self.table.viewport()
+        assert viewport is not None
+        viewport.installEventFilter(self)
         layout.addWidget(self.table)
 
         self.selected_label = QLabel()
@@ -358,6 +386,122 @@ class RestudyDialog(QDialog):
         self.master_check.blockSignals(True)
         self.master_check.setCheckState(state)
         self.master_check.blockSignals(False)
+
+    def _rebuild_type_menu(self) -> None:
+        "One action per distinct card type; selecting replaces the selection."
+        self._type_menu.clear()
+        counts: dict[str, int] = {}
+        for row in self.data.rows:
+            counts[row.type_name] = counts.get(row.type_name, 0) + 1
+        for name in sorted(counts, key=str.casefold):
+            action = self._type_menu.addAction(f"{name} ({counts[name]})")
+            assert action is not None
+            qconnect(
+                action.triggered,
+                lambda _=False, t=name: self._select(lambda r: r.type_name == t),
+            )
+        self._type_menu.addSeparator()
+        invert = self._type_menu.addAction(tr.studying_restudy_invert())
+        assert invert is not None
+        qconnect(invert.triggered, self._invert_selection)
+
+    def _invert_selection(self, _checked: bool = False) -> None:
+        checked = set(self._selected_ids())
+        self._select(lambda r: r.card_id not in checked)
+
+    # Drag-select
+    ##########################################################################
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if obj is self.table.viewport():
+            etype = event.type()
+            if (
+                etype == QEvent.Type.MouseButtonPress
+                and isinstance(event, QMouseEvent)
+                and event.button() == Qt.MouseButton.LeftButton
+            ):
+                y = int(event.position().y())
+                row = self.table.rowAt(y)
+                if (
+                    row >= 0
+                    and self.table.columnAt(int(event.position().x())) == _COL_CHECK
+                ):
+                    item = self.table.item(row, _COL_CHECK)
+                    assert item is not None
+                    self._drag_target = (
+                        Qt.CheckState.Unchecked
+                        if item.checkState() == Qt.CheckState.Checked
+                        else Qt.CheckState.Checked
+                    )
+                    self._drag_last_row = row
+                    item.setCheckState(self._drag_target)
+                    self._autoscroll_timer.start()
+                    # consume so Qt's own indicator handling can't re-toggle
+                    return True
+            elif etype == QEvent.Type.MouseMove and self._drag_target is not None:
+                if isinstance(event, QMouseEvent):
+                    self._drag_apply_at(int(event.position().y()))
+                return True
+            elif (
+                etype == QEvent.Type.MouseButtonRelease
+                and self._drag_target is not None
+            ):
+                self._end_drag()
+                return True
+            elif etype == QEvent.Type.Wheel and self._drag_target is not None:
+                # let the table scroll, then paint the row now under the cursor
+                QTimer.singleShot(0, self._drag_apply_under_cursor)
+                return False
+        return super().eventFilter(obj, event)
+
+    def _drag_apply_at(self, y: int) -> None:
+        "Apply the drag state to every row between the last painted row and y."
+        if self._drag_target is None:
+            return
+        viewport = self.table.viewport()
+        assert viewport is not None
+        y = max(0, min(y, viewport.height() - 1))
+        row = self.table.rowAt(y)
+        if row < 0 or self._drag_last_row is None:
+            return
+        step = 1 if row >= self._drag_last_row else -1
+        for i in range(self._drag_last_row, row + step, step):
+            item = self.table.item(i, _COL_CHECK)
+            assert item is not None
+            item.setCheckState(self._drag_target)
+        self._drag_last_row = row
+
+    def _drag_apply_under_cursor(self) -> None:
+        if self._drag_target is None:
+            return
+        viewport = self.table.viewport()
+        assert viewport is not None
+        self._drag_apply_at(viewport.mapFromGlobal(QCursor.pos()).y())
+
+    def _drag_autoscroll_tick(self) -> None:
+        "While dragging past an edge, scroll a row and keep painting."
+        if self._drag_target is None:
+            return
+        viewport = self.table.viewport()
+        assert viewport is not None
+        pos_y = viewport.mapFromGlobal(QCursor.pos()).y()
+        scrollbar = self.table.verticalScrollBar()
+        assert scrollbar is not None
+        if pos_y < 0:
+            scrollbar.setValue(scrollbar.value() - 1)
+        elif pos_y > viewport.height():
+            scrollbar.setValue(scrollbar.value() + 1)
+        self._drag_apply_at(pos_y)
+
+    def _end_drag(self) -> None:
+        self._drag_target = None
+        self._drag_last_row = None
+        self._autoscroll_timer.stop()
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        # safety: never leave a drag armed if the dialog goes away mid-drag
+        self._end_drag()
+        super().hideEvent(event)
 
     def _on_cell_clicked(self, row_idx: int, col_idx: int) -> None:
         if col_idx == 1:

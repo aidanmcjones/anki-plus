@@ -73,6 +73,7 @@ studying-restudy-difficulty = Difficulty
 studying-restudy-lapses = Lapses
 studying-restudy-missed = Missed
 studying-restudy-due-in = Due in
+studying-restudy-invert = Invert selection
 studying-restudy-created = Restudy session created
 studying-restudy-must-rename = Please rename the existing deck first.
 
