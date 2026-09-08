@@ -156,7 +156,8 @@
         + '<div class="ba-cg-clear">'
         +   '<b>Everything’s clear.</b> No other decks have cards to study right now. '
         +   'Come back tomorrow, or '
-        +   '<a href="javascript:void(0)" onclick="bridgeCommand(\'customStudy\')">try custom study</a>.'
+        +   '<a href="javascript:void(0)" onclick="bridgeCommand(\'customStudy\')">try custom study</a>, or '
+        +   '<a href="javascript:void(0)" onclick="bridgeCommand(\'restudy\')">restudy this deck</a>.'
         + '</div>';
     }
     return '<div class="ba-cg-decks-h">Keep going</div>'
@@ -167,7 +168,8 @@
     return ''
       + '<div class="ba-cg-foot">'
       +   'Want to study off-schedule? '
-      +   '<a href="javascript:void(0)" onclick="bridgeCommand(\'customStudy\')">Custom study</a>.'
+      +   '<a href="javascript:void(0)" onclick="bridgeCommand(\'customStudy\')">Custom study</a> · '
+      +   '<a href="javascript:void(0)" onclick="bridgeCommand(\'restudy\')">Restudy this deck</a>.'
       + '</div>';
   }
 

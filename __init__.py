@@ -1178,6 +1178,27 @@ def _on_js_message(handled, message, context):
                     db._rebuild(did)  # type: ignore[attr-defined]
                 elif action == "empty" and db is not None:
                     db._empty(did)  # type: ignore[attr-defined]
+                elif action == "restudy":
+                    try:
+                        from aqt import restudy
+                    except ImportError:
+                        restudy = None
+                    if restudy is not None:
+                        restudy.RestudyDialog.fetch_and_show(mw, did)
+                    else:
+                        # Stock Anki — the fork's dialog isn't installed.
+                        # Fall back to the native Options dialog (same path
+                        # as the "options" action) rather than doing nothing.
+                        try:
+                            from aqt.deckoptions import display_options_for_deck_id
+                            from anki.decks import DeckId
+                            display_options_for_deck_id(DeckId(did))
+                        except Exception:
+                            if db is not None:
+                                db._options(did)  # type: ignore[attr-defined]
+                            else:
+                                from aqt.utils import tooltip
+                                tooltip("Restudy isn't available in this version of Anki.")
                 elif action == "delete" and db is not None:
                     db._delete(did)  # type: ignore[attr-defined]
                 else:

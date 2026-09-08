@@ -49,6 +49,7 @@
     { cmd: "export",  label: "Export deck…",     icon: "export" },
     { cmd: "rebuild", label: "Rebuild (filtered)", icon: "rebuild" },
     { cmd: "empty",   label: "Empty (filtered)",   icon: "empty" },
+    { cmd: "restudy", label: "Restudy…",         icon: "rebuild" },
     { cmd: "delete",  label: "Delete deck",      icon: "delete", danger: true, sep_before: true },
   ];
 
