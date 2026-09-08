@@ -178,7 +178,7 @@ class RestudyDialog(QDialog):
         self.type_button.setStyleSheet(
             "QToolButton { border: none; } QToolButton::menu-indicator { image: none; }"
         )
-        self._type_menu = QMenu(self)
+        self._type_menu = _KeepOpenMenu(self)
         qconnect(self._type_menu.aboutToShow, self._rebuild_type_menu)
         self.type_button.setMenu(self._type_menu)
         master_row.addWidget(self.type_button)
@@ -388,22 +388,47 @@ class RestudyDialog(QDialog):
         self.master_check.blockSignals(False)
 
     def _rebuild_type_menu(self) -> None:
-        "One action per distinct card type; selecting replaces the selection."
+        """One checkable action per distinct card type; toggles combine.
+
+        Checking a type adds all of its cards to the selection; unchecking
+        removes them. An action shows as checked iff *all* of that type's
+        cards are currently selected — a partially-selected type displays
+        unchecked, so checking it completes the group.
+        """
         self._type_menu.clear()
         counts: dict[str, int] = {}
+        selected_by_type: dict[str, int] = {}
+        selected = set(self._selected_ids())
         for row in self.data.rows:
             counts[row.type_name] = counts.get(row.type_name, 0) + 1
+            if row.card_id in selected:
+                selected_by_type[row.type_name] = (
+                    selected_by_type.get(row.type_name, 0) + 1
+                )
         for name in sorted(counts, key=str.casefold):
             action = self._type_menu.addAction(f"{name} ({counts[name]})")
             assert action is not None
+            action.setCheckable(True)
+            action.setChecked(selected_by_type.get(name, 0) == counts[name])
             qconnect(
                 action.triggered,
-                lambda _=False, t=name: self._select(lambda r: r.type_name == t),
+                lambda checked=False, t=name: self._on_type_toggled(t, checked),
             )
         self._type_menu.addSeparator()
         invert = self._type_menu.addAction(tr.studying_restudy_invert())
         assert invert is not None
         qconnect(invert.triggered, self._invert_selection)
+
+    def _on_type_toggled(self, type_name: str, checked: bool) -> None:
+        "Set every card of `type_name` to `checked`; leave the rest alone."
+        selected = set(self._selected_ids())
+
+        def apply(row: RestudyRow) -> bool:
+            if row.type_name == type_name:
+                return checked
+            return row.card_id in selected
+
+        self._select(apply)
 
     def _invert_selection(self, _checked: bool = False) -> None:
         checked = set(self._selected_ids())
@@ -580,6 +605,27 @@ class RestudyDialog(QDialog):
         ):
             op.run_in_background()
             self.accept()
+
+
+class _KeepOpenMenu(QMenu):
+    """A QMenu whose *checkable* actions toggle without closing the menu.
+
+    Lets several card-type toggles be combined in one visit. Chosen over a
+    QWidgetAction full of QCheckBoxes because embedded widgets lose hover
+    highlighting and keyboard navigation on Qt6/macOS; overriding
+    mouseReleaseEvent keeps native menu look and behavior. Non-checkable
+    actions (Invert selection), Escape, and clicking outside still close
+    the menu normally, as does keyboard activation of any action (an
+    acceptable trade-off — the mouse is the primary path here).
+    """
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        action = self.actionAt(event.position().toPoint())
+        if action is not None and action.isCheckable() and action.isEnabled():
+            action.trigger()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class _SingleCardPreviewer(Previewer):
