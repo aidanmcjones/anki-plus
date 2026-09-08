@@ -1133,6 +1133,9 @@ def _on_js_message(handled, message, context):
                 _start_studying(int(tail))
             else:
                 return handled
+        elif cmd.startswith("study-state:"):
+            # Sidebar totals (Due/New/Learning) as cross-deck launch buttons.
+            _study_state(cmd.split(":", 1)[1])
         elif cmd == "prefs":
             # Same destination as ba:settings — route through the embed.
             try:
@@ -1351,6 +1354,81 @@ def _rename_deck_inline(did: int, encoded_leaf: str) -> None:
         ).run_in_background()
     except Exception:
         pass
+
+
+_STUDY_STATE_SPECS = {
+    # kind -> (deck name, cross-deck search, order attr on SearchTerm.Order)
+    # Mirrors custom study's cram kinds (rslib custom_study.rs): due/new/
+    # learning study through a rescheduling filtered deck, so answers count
+    # exactly as normal reviews would.
+    "due": ("Study: Due", "is:due -is:suspended", "DUE"),
+    "new": ("Study: New", "is:new -is:suspended", "ADDED"),
+    "learn": ("Study: Learning", "is:learn -is:suspended", "DUE"),
+}
+
+
+def _study_state(kind: str) -> None:
+    """Cross-deck one-click study for a sidebar total (Due/New/Learning).
+
+    Reuses-or-creates the filtered deck named for the queue, rebuilds it,
+    and enters review. Empty queues surface as a tooltip, not a traceback.
+    """
+    spec = _STUDY_STATE_SPECS.get(kind)
+    if spec is None:
+        return
+    name, search, order_name = spec
+    try:
+        from anki.decks import DeckId, FilteredDeckConfig
+        from aqt.operations import QueryOp
+        from aqt.operations.scheduling import add_or_update_filtered_deck
+        from aqt.utils import tooltip
+    except Exception:
+        return
+    col = getattr(mw, "col", None)
+    if col is None:
+        return
+    existing = col.decks.id_for_name(name)
+    if existing:
+        deck = col.decks.get(existing)
+        if deck and not deck["dyn"]:
+            try:
+                tooltip(f'A normal deck already uses the name "{name}".', parent=mw)
+            except Exception:
+                pass
+            return
+    target = DeckId(existing or 0)
+    order = getattr(FilteredDeckConfig.SearchTerm.Order, order_name)
+
+    def on_fetched(update) -> None:
+        update.name = name
+        config = update.config
+        config.reschedule = True
+        del config.search_terms[:]
+        config.search_terms.append(
+            FilteredDeckConfig.SearchTerm(search=search, limit=99_999, order=order)
+        )
+        update.allow_empty = False
+
+        def on_success(_changes) -> None:
+            mw.moveToState("review")
+
+        def on_failure(exc: Exception) -> None:
+            # Typically FilteredDeckError: the search returned no cards.
+            _dev_cmd_log(f"study-state {kind}: {exc!r}")
+            try:
+                tooltip("Nothing to study there right now", parent=mw)
+            except Exception:
+                pass
+
+        add_or_update_filtered_deck(parent=mw, deck=update).success(
+            on_success
+        ).failure(on_failure).run_in_background()
+
+    QueryOp(
+        parent=mw,
+        op=lambda col: col.sched.get_or_create_filtered_deck(deck_id=target),
+        success=on_fetched,
+    ).run_in_background()
 
 
 def _start_studying(did: int) -> None:

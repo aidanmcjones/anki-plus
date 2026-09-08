@@ -230,6 +230,29 @@
       +     '<dt>Learning</dt><dd data-x="learn">—</dd></div>'
       + '</dl>';
 
+    // Cross-deck totals double as launch buttons: clicking Due/New/
+    // Learning builds a cross-deck filtered deck for that queue (Python
+    // side) and jumps straight into review. Zero rows are inert.
+    var statKinds = ["due", "new", "learn"];
+    for (var si = 0; si < statKinds.length; si++) {
+      (function (kind) {
+        var row = aside.querySelector(".ba-side-stat--" + kind);
+        if (!row) return;
+        row.setAttribute("role", "button");
+        row.setAttribute("tabindex", "0");
+        var go = function () {
+          var dd = row.querySelector("dd");
+          var txt = dd ? (dd.textContent || "").trim() : "";
+          if (!txt || txt === "0" || txt === "\u2014") return;
+          send("study-state:" + kind);
+        };
+        row.addEventListener("click", go);
+        row.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); }
+        });
+      })(statKinds[si]);
+    }
+
     // Wordmark is a static mark — it deliberately links nowhere.
     var mark = aside.querySelector(".ba-side-mark");
     if (mark) {
@@ -364,6 +387,15 @@
         if (!dots[k2]) continue;
         dots[k2].classList.toggle("ba-on", !!d.last7[k2]);
       }
+    }
+    // Dim zero-count totals so the clickable rows read as inert.
+    var statKinds2 = ["due", "new", "learn"];
+    for (var si2 = 0; si2 < statKinds2.length; si2++) {
+      var row2 = document.querySelector(".ba-side-stat--" + statKinds2[si2]);
+      if (!row2) continue;
+      var dd2 = row2.querySelector("dd");
+      var txt2 = dd2 ? (dd2.textContent || "").trim() : "";
+      row2.classList.toggle("ba-side-stat--empty", !txt2 || txt2 === "0" || txt2 === "\u2014");
     }
     // In single-deck mode the hero owns Due/New/Learning, so hide the
     // sidebar copy to avoid doubling the same numbers.

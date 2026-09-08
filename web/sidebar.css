@@ -745,3 +745,20 @@ body.ba-with-side .ba-cog { display: none; }
 /* .ba-back styling lives in reviewer.css — it's only used on the reviewer
    webview, and that's where the relevant base context (paper, ink, line)
    is set up. */
+
+/* Totals as launch buttons: hover lifts the label to full ink, matching
+   the nav items' hover treatment; zero rows go faint and inert. */
+.ba-side-totals .ba-side-stat {
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+.ba-side-totals .ba-side-stat:hover dt {
+  color: var(--rf-ink);
+}
+.ba-side-totals .ba-side-stat--empty {
+  cursor: default;
+  opacity: 0.55;
+}
+.ba-side-totals .ba-side-stat--empty:hover dt {
+  color: var(--rf-ink-faint);
+}
