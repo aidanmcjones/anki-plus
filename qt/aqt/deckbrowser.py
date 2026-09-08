@@ -317,6 +317,9 @@ class DeckBrowser:
         a = m.addAction(tr.actions_export())
         assert a is not None
         qconnect(a.triggered, lambda b, did=did: self._export(DeckId(int(did))))
+        a = m.addAction(tr.studying_restudy())
+        assert a is not None
+        qconnect(a.triggered, lambda b, did=did: self._restudy(DeckId(int(did))))
         a = m.addAction(tr.actions_delete())
         assert a is not None
         qconnect(a.triggered, lambda b, did=did: self._delete(DeckId(int(did))))
@@ -325,6 +328,11 @@ class DeckBrowser:
 
     def _export(self, did: DeckId) -> None:
         self.mw.onExport(did=did)
+
+    def _restudy(self, did: DeckId) -> None:
+        import aqt.restudy
+
+        aqt.restudy.RestudyDialog.fetch_and_show(self.mw, did)
 
     def _rename(self, did: DeckId) -> None:
         def prompt(name: str) -> None:

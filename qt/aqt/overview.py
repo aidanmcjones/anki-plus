@@ -115,6 +115,8 @@ class Overview:
             openLink(f"{aqt.appShared}info/{self.sid}?v={self.sidVer}")
         elif url in {"studymore", "customStudy"}:
             self.onStudyMore()
+        elif url == "restudy":
+            self.on_restudy()
         elif url == "unbury":
             self.on_unbury()
         elif url == "description":
@@ -130,6 +132,7 @@ class Overview:
             ("e", self.empty_current_filtered_deck),
             ("c", self.onCustomStudyKey),
             ("u", self.on_unbury),
+            ("Shift+R", self.on_restudy_key),
         ]
 
     def _current_deck_is_filtered(self) -> int:
@@ -148,6 +151,17 @@ class Overview:
     def onCustomStudyKey(self) -> None:
         if not self._current_deck_is_filtered():
             self.onStudyMore()
+
+    def on_restudy(self) -> None:
+        import aqt.restudy
+
+        aqt.restudy.RestudyDialog.fetch_and_show(
+            self.mw, self.mw.col.decks.get_current_id()
+        )
+
+    def on_restudy_key(self) -> None:
+        if not self._current_deck_is_filtered():
+            self.on_restudy()
 
     def on_unbury(self) -> None:
         mode = UnburyDeck.Mode.ALL
@@ -254,6 +268,11 @@ class Overview:
 </tr>
 """
 
+        if self.mw.col.decks.current()["dyn"]:
+            restudy = ""
+        else:
+            restudy = "<br>" + but("restudy", tr.studying_restudy(), id="restudy")
+
         return f"""
 <table width=400 cellpadding=5>
 <tr><td align=center valign=top>
@@ -263,7 +282,8 @@ class Overview:
 {number_row(tr.studying_to_review(), "review-count", counts[2], buried_review)}
 </table>
 </td><td align=center>
-{but("study", tr.studying_study_now(), id="study", extra=" autofocus")}</td></tr></table>"""
+{but("study", tr.studying_study_now(), id="study", extra=" autofocus")}
+{restudy}</td></tr></table>"""
 
     _body = """
 <center>

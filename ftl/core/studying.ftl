@@ -58,6 +58,23 @@ studying-card-studied-in-minute =
 studying-question-time-elapsed = Question time elapsed
 studying-answer-time-elapsed = Answer time elapsed
 
+studying-restudy = Restudy…
+studying-restudy-title = Restudy - { $deck }
+studying-restudy-cram = Cram now (keeps schedule)
+studying-restudy-reset = Start over (reset selected)
+studying-restudy-selected = { $selected } of { $total } selected
+studying-restudy-select-all = All
+studying-restudy-select-missed = Missed recently
+studying-restudy-select-hardest = Hardest 25%
+studying-restudy-select-due-soon = Due soon
+studying-restudy-card = Card
+studying-restudy-difficulty = Difficulty
+studying-restudy-lapses = Lapses
+studying-restudy-missed = Missed
+studying-restudy-due-in = Due in
+studying-restudy-created = Restudy session created
+studying-restudy-must-rename = Please rename the existing deck first.
+
 ## OBSOLETE; you do not need to translate this
 
 studying-card-studied-in =

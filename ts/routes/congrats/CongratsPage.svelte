@@ -29,6 +29,7 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
     const customStudyMsg = tr.schedulingHowToCustomStudy({
         customStudy,
     });
+    const restudyLink = bridgeLink("restudy", tr.studyingRestudy());
 
     onMount(() => {
         if (refreshPeriodically) {
@@ -68,6 +69,9 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
                 {#if !info.isFilteredDeck}
                     <p>
                         {@html customStudyMsg}
+                    </p>
+                    <p>
+                        {@html restudyLink}
                     </p>
                 {/if}
             {/if}
