@@ -230,21 +230,9 @@
       +     '<dt>Learning</dt><dd data-x="learn">—</dd></div>'
       + '</dl>';
 
-    // Wordmark opens anki.design (in the user's default browser, via Python).
+    // Wordmark is a static mark — it deliberately links nowhere.
     var mark = aside.querySelector(".ba-side-mark");
     if (mark) {
-      mark.setAttribute("role", "link");
-      mark.setAttribute("tabindex", "0");
-      mark.addEventListener("click", function (e) {
-        e.preventDefault();
-        send("website");
-      });
-      mark.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          send("website");
-        }
-      });
 
       // Googly period — on hover, the red dot grows an eyeball that tracks
       // the cursor. A ring of ink particles bursts outward around it just

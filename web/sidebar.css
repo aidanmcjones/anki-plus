@@ -52,7 +52,7 @@ body.ba-with-side {
 .ba-side-mark.ad-logo {
   --ad-logo-size: 20px;
   --ad-logo-ink: var(--rf-ink);
-  cursor: pointer;
+  cursor: default;
   outline: none;
 }
 .ba-side-mark.ad-logo:focus-visible {
