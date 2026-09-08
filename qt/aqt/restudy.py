@@ -29,6 +29,14 @@ from aqt.utils import disable_help_button, showWarning, tooltip, tr
 
 _EXCERPT_LEN = 60
 
+_COL_CHECK = 0
+_COL_CARD = 1
+_COL_TYPE = 2
+_COL_DIFFICULTY = 3
+_COL_LAPSES = 4
+_COL_MISSED = 5
+_COL_DUE = 6
+
 
 @dataclass
 class RestudyRow:
@@ -97,9 +105,7 @@ def _gather_rows(col: Collection, deck_id: DeckId) -> RestudyData:
             )
         )
 
-    rows.sort(
-        key=lambda r: (r.difficulty is None, -(r.difficulty or 0.0), -r.lapses)
-    )
+    rows.sort(key=lambda r: (r.difficulty is None, -(r.difficulty or 0.0), -r.lapses))
     return RestudyData(deck_id=deck_id, deck_name=name, rows=rows)
 
 
@@ -166,40 +172,21 @@ class RestudyDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        for i, row in enumerate(self.data.rows):
-            check = QTableWidgetItem()
-            check.setFlags(
-                Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
-            )
-            check.setCheckState(Qt.CheckState.Unchecked)
-            difficulty = (
-                f"{row.difficulty * 100:.0f}%" if row.difficulty is not None else "-"
-            )
-            due = str(row.due_in_days) if row.due_in_days is not None else "-"
-            missed = "✓" if row.missed_recently else ""
-            excerpt_item = QTableWidgetItem(row.excerpt)
-            link_font = excerpt_item.font()
-            link_font.setUnderline(True)
-            excerpt_item.setFont(link_font)
-            excerpt_item.setForeground(
-                self.palette().color(QPalette.ColorRole.Link)
-            )
-            excerpt_item.setToolTip(tr.actions_preview())
-            for col_idx, item in enumerate(
-                [
-                    check,
-                    excerpt_item,
-                    QTableWidgetItem(row.type_name),
-                    QTableWidgetItem(difficulty),
-                    QTableWidgetItem(str(row.lapses)),
-                    QTableWidgetItem(missed),
-                    QTableWidgetItem(due),
-                ]
-            ):
-                self.table.setItem(i, col_idx, item)
+        self._view_rows: list[RestudyRow] = list(self.data.rows)
         header = self.table.horizontalHeader()
         assert header is not None
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(_COL_CARD, QHeaderView.ResizeMode.Stretch)
+        # Sorting is done manually (header.sectionClicked -> _apply_sort)
+        # rather than via setSortingEnabled(): a plain __lt__ can't keep
+        # value-less rows ("-") at the bottom for both directions, and
+        # repopulating by card id keeps check states with their cards.
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(_COL_DIFFICULTY, Qt.SortOrder.DescendingOrder)
+        self._sort_column = _COL_DIFFICULTY
+        self._sort_order = Qt.SortOrder.DescendingOrder
+        qconnect(header.sectionClicked, self._on_header_clicked)
+        self._populate(self._view_rows, checked=set())
         qconnect(self.table.itemChanged, self._on_item_changed)
         qconnect(self.table.cellClicked, self._on_cell_clicked)
         qconnect(self.table.cellDoubleClicked, self._on_cell_double_clicked)
@@ -218,12 +205,90 @@ class RestudyDialog(QDialog):
         layout.addLayout(modes)
 
         self.button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         qconnect(self.button_box.accepted, self._on_accept)
         qconnect(self.button_box.rejected, self.reject)
         layout.addWidget(self.button_box)
+
+    def _populate(self, rows: list[RestudyRow], checked: set[CardId]) -> None:
+        "Fill the table with `rows`, restoring check state by card id."
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(rows))
+        self._view_rows = rows
+        for i, row in enumerate(rows):
+            check = QTableWidgetItem()
+            check.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            check.setCheckState(
+                Qt.CheckState.Checked
+                if row.card_id in checked
+                else Qt.CheckState.Unchecked
+            )
+            difficulty = (
+                f"{row.difficulty * 100:.0f}%" if row.difficulty is not None else "-"
+            )
+            due = str(row.due_in_days) if row.due_in_days is not None else "-"
+            missed = "✓" if row.missed_recently else ""
+            excerpt_item = QTableWidgetItem(row.excerpt)
+            link_font = excerpt_item.font()
+            link_font.setUnderline(True)
+            excerpt_item.setFont(link_font)
+            excerpt_item.setForeground(self.palette().color(QPalette.ColorRole.Link))
+            excerpt_item.setToolTip(tr.actions_preview())
+            for col_idx, item in enumerate(
+                [
+                    check,
+                    excerpt_item,
+                    QTableWidgetItem(row.type_name),
+                    QTableWidgetItem(difficulty),
+                    QTableWidgetItem(str(row.lapses)),
+                    QTableWidgetItem(missed),
+                    QTableWidgetItem(due),
+                ]
+            ):
+                self.table.setItem(i, col_idx, item)
+        self.table.blockSignals(False)
+        self._refresh_selected_label()
+
+    def _sort_key(self, column: int):
+        "Raw per-row sort value for `column`; None means no value."
+        checked = set(self._selected_ids())
+        return {
+            _COL_CHECK: lambda r: r.card_id in checked,
+            _COL_CARD: lambda r: r.excerpt.casefold(),
+            _COL_TYPE: lambda r: r.type_name.casefold(),
+            _COL_DIFFICULTY: lambda r: r.difficulty,
+            _COL_LAPSES: lambda r: r.lapses,
+            _COL_MISSED: lambda r: r.missed_recently,
+            _COL_DUE: lambda r: r.due_in_days,
+        }[column]
+
+    def _on_header_clicked(self, column: int) -> None:
+        if column == self._sort_column:
+            self._sort_order = (
+                Qt.SortOrder.DescendingOrder
+                if self._sort_order == Qt.SortOrder.AscendingOrder
+                else Qt.SortOrder.AscendingOrder
+            )
+        else:
+            self._sort_column = column
+            self._sort_order = Qt.SortOrder.AscendingOrder
+        header = self.table.horizontalHeader()
+        assert header is not None
+        header.setSortIndicator(self._sort_column, self._sort_order)
+        self._apply_sort()
+
+    def _apply_sort(self) -> None:
+        key = self._sort_key(self._sort_column)
+        checked = set(self._selected_ids())
+        known = [r for r in self._view_rows if key(r) is not None]
+        missing = [r for r in self._view_rows if key(r) is None]
+        known.sort(
+            key=key,
+            reverse=self._sort_order == Qt.SortOrder.DescendingOrder,
+        )
+        # rows with no value in this column sort last in both directions
+        self._populate(known + missing, checked)
 
     def _hardest_quartile_predicate(self):
         known = sorted(
@@ -236,7 +301,7 @@ class RestudyDialog(QDialog):
         return lambda r: r.difficulty is not None and r.difficulty >= cutoff
 
     def _select(self, predicate) -> None:
-        for i, row in enumerate(self.data.rows):
+        for i, row in enumerate(self._view_rows):
             item = self.table.item(i, 0)
             assert item is not None
             item.setCheckState(
@@ -245,7 +310,7 @@ class RestudyDialog(QDialog):
 
     def _selected_ids(self) -> list[CardId]:
         ids = []
-        for i, row in enumerate(self.data.rows):
+        for i, row in enumerate(self._view_rows):
             item = self.table.item(i, 0)
             assert item is not None
             if item.checkState() == Qt.CheckState.Checked:
@@ -253,11 +318,16 @@ class RestudyDialog(QDialog):
         return ids
 
     def _on_item_changed(self, _item: QTableWidgetItem) -> None:
+        self._refresh_selected_label()
+
+    def _refresh_selected_label(self) -> None:
+        if not hasattr(self, "button_box"):
+            # the initial _populate runs before the label/buttons exist;
+            # __init__'s _select() refreshes once the ui is complete
+            return
         count = len(self._selected_ids())
         self.selected_label.setText(
-            tr.studying_restudy_selected(
-                selected=count, total=len(self.data.rows)
-            )
+            tr.studying_restudy_selected(selected=count, total=len(self.data.rows))
         )
         ok = self.button_box.button(QDialogButtonBox.StandardButton.Ok)
         assert ok is not None
@@ -271,7 +341,7 @@ class RestudyDialog(QDialog):
         self._preview_row(row_idx)
 
     def _preview_row(self, row_idx: int) -> None:
-        card = self.mw.col.get_card(self.data.rows[row_idx].card_id)
+        card = self.mw.col.get_card(self._view_rows[row_idx].card_id)
         _SingleCardPreviewer(card=card, mw=self.mw).open()
 
     # Actions
