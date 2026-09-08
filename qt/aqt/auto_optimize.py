@@ -217,8 +217,14 @@ def maybe_auto_optimize(mw: aqt.main.AnkiQt, force: bool = False) -> None:
     if mw.col is None:
         return
 
+    deck_id = mw.col.decks.get_current_id()
+    if mw.col.decks.is_filtered(deck_id):
+        # filtered decks have no preset of their own, and the backend
+        # rejects get_deck_configs_for_update() for them ("deck not normal")
+        return
+
     config = _load_config(mw)
-    info = mw.col.decks.get_deck_configs_for_update(mw.col.decks.get_current_id())
+    info = mw.col.decks.get_deck_configs_for_update(deck_id)
     review_count = mw.col.db.scalar("select count() from revlog") or 0
 
     should_run, reason = _should_run(
@@ -393,6 +399,10 @@ def _after_optimize(mw: aqt.main.AnkiQt, info: object) -> None:
 
     assert mw.col is not None
     deck_id = mw.col.decks.get_current_id()
+    if mw.col.decks.is_filtered(deck_id):
+        # the user may have switched to a filtered deck while the optimize
+        # op ran in the background; get_deck_configs_for_update() would fail
+        return
     # info passed in is from before this optimize run; re-fetch so the
     # freshly-optimized params are what gets simulated.
     fresh_info = mw.col.decks.get_deck_configs_for_update(deck_id)
