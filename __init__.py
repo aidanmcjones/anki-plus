@@ -55,6 +55,13 @@ try:
     from aqt.qt import QTimer
 except Exception:
     QTimer = None
+# The Browse tab's rendered-card pane declares itself as the stdHtml
+# context of its webview, so `on_webview_will_set_content` can give it the
+# exact same stylesheet stack the reviewer gets.
+try:
+    from .browse_preview import PreviewPane as _PreviewCtx
+except Exception:
+    _PreviewCtx = None
 
 ADDON_DIR = os.path.basename(os.path.dirname(__file__))
 WEB = f"/_addons/{ADDON_DIR}/web"
@@ -224,6 +231,7 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
         or _is(context, _BottomCtx)
         or _is(context, _ReviewerBottomCtx)
         or _is(context, _DeckBrowserBottomCtx)
+        or _is(context, _PreviewCtx)
         or is_editor
     )
     if not themed:
@@ -279,11 +287,14 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
     if theme_pref in ("light", "dark"):
         extras += f"d.dataset.rfTheme='{theme_pref}';"
     extras += f"d.dataset.rfDensity='{density}';"
-    if isinstance(context, Reviewer):
+    if isinstance(context, Reviewer) or _is(context, _PreviewCtx):
         # "native" hands the card's typography/colours back to the note
         # type; reviewer.css gates every content-affecting rule on it.
+        # The Browse preview honours it too — the whole point of that pane
+        # is that it shows what studying will show.
         if not cfg.get("reviewer_card_styling", True):
             extras += "d.dataset.rfCardstyle='native';"
+    if isinstance(context, Reviewer):
         if cfg.get("reviewer_answer_buttons", "intervals") == "native":
             extras += "d.dataset.rfEase='native';"
     extras += "})();</script>"
@@ -422,20 +433,45 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
         web_content.css.append(f"{WEB}/reviewer.css")
         if cfg.get("show_progress", True):
             web_content.js.append(f"{WEB}/reviewer.js")
+    # Browse tab's rendered-card pane. Same stack as the reviewer — that's
+    # the whole promise of the pane: the card looks the way it will look
+    # when you study it. browse-preview.css only rescales for the narrower
+    # column and adds the Question/Answer switch.
+    if _is(context, _PreviewCtx):
+        web_content.css.append(f"{WEB}/theme.css")
+        web_content.css.append(f"{WEB}/reviewer.css")
+        web_content.css.append(f"{WEB}/browse-preview.css")
+        web_content.js.append(f"{WEB}/browse-preview.js")
+        web_content.head += (
+            '<meta name="ba-theme" content="'
+            + (theme_pref if theme_pref in ("light", "dark") else "")
+            + '">'
+        )
     if is_editor:
-        # Only style the editor in ADD_CARDS mode — the same Editor is used
-        # by Browser and Edit-Current; we don't want to overwrite their
-        # chrome here. Anki's CSP blocks inline <script> in the editor page,
-        # so the mode AND theme are communicated via a meta tag in the head
-        # that addcard.js reads (avoiding inline-script CSP). Inline <style>
-        # IS allowed and runs synchronously before first paint, so we use it
+        # The same Editor class serves Add, Browse and Edit-Current. Add
+        # and Browse both get the restyle (they're the two places you
+        # actually live in); Edit-Current is left stock so the reviewer's
+        # own in-place editing path is untouched.
+        #
+        # Anki's CSP blocks inline <script> in the editor page, so the mode
+        # AND theme are communicated via a meta tag in the head that
+        # addcard.js reads (avoiding inline-script CSP). Inline <style> IS
+        # allowed and runs synchronously before first paint, so we use it
         # to suppress the open-time FOUC: the body starts at opacity 0 on a
         # paper-colored canvas, then addcard.js fades it back in once the
         # toolbar/field/tags settle. Without this, the user sees Anki's
         # default editor briefly, then ours, then JS reshuffling tags and
         # the gear into place — reads as a stack of flashes.
         em = getattr(context, "editorMode", None)
+        editor_mode = ""
         if em == EditorMode.ADD_CARDS and cfg.get("restyle_addcard", True):
+            editor_mode = "add"
+        elif (
+            em == getattr(EditorMode, "BROWSER", None)
+            and cfg.get("restyle_browse_editor", True)
+        ):
+            editor_mode = "browse"
+        if editor_mode:
             theme_safe = theme_pref if theme_pref in ("light", "dark") else ""
             # Resolve the actual paper color once, in Python — even when
             # theme_pref is "system" — so the inline <style> can emit a
@@ -463,10 +499,15 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
                 "body{opacity:0;transition:opacity 220ms ease}"
                 "html[data-ba-ready] body{opacity:1}"
                 "</style>"
-                f'<meta name="ba-editor-mode" content="add">'
+                f'<meta name="ba-editor-mode" content="{editor_mode}">'
                 f'<meta name="ba-theme" content="{theme_safe}">'
             )
+            # addcard.css is the shared editor sheet (its rules key off
+            # `html[data-ba-editor]`, i.e. either mode); browse-editor.css
+            # carries only the deltas the Browse pane needs.
             web_content.css.append(f"{WEB}/addcard.css")
+            if editor_mode == "browse":
+                web_content.css.append(f"{WEB}/browse-editor.css")
             web_content.js.append(f"{WEB}/addcard.js")
 
 
@@ -2660,6 +2701,21 @@ gui_hooks.reviewer_did_show_answer.append(on_show_answer)
 gui_hooks.reviewer_will_end.append(on_reviewer_will_end)
 try:
     gui_hooks.reviewer_will_answer_card.append(on_reviewer_will_answer_card)
+except Exception:
+    pass
+
+# Browser ("Browse" tab) — Qt-side chrome restyle, trimmed sidebar, and the
+# rendered-card preview pane. Every piece is config-gated inside
+# browse_style / browse_preview, so a failure here can only ever cost us
+# Anki's stock browser look, never the browser itself.
+try:
+    from . import browse_style as _browse_style
+
+    gui_hooks.browser_will_show.append(_browse_style.apply)
+    gui_hooks.browser_will_build_tree.append(
+        _browse_style.on_browser_will_build_tree
+    )
+    gui_hooks.theme_did_change.append(_browse_style.on_theme_did_change)
 except Exception:
     pass
 

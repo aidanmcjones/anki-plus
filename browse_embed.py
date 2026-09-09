@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from aqt import mw
+from aqt import gui_hooks, mw
 from aqt.qt import (
     QApplication,
     QColor,
@@ -42,6 +42,7 @@ from aqt.qt import (
     Qt,
     QTimer,
     QVBoxLayout,
+    QWidget,
 )
 
 
@@ -65,6 +66,13 @@ CENTRAL_MIN = 420  # search + card table + editor pane need this much
 EDITOR_MIN = 320   # narrowest the field area stays legible
 EDITOR_PREF = 460  # default share on first open
 TABLE_MIN = 360    # card table + search bar need at least this much
+
+# Editor side, split vertically: [rendered card | fields]. The rendered
+# card is the primary view — you browse to *find a card*, and a card is a
+# rendered thing — so it takes the larger share by default.
+PREVIEW_SHARE = 0.60
+PREVIEW_MIN = 180
+FIELDS_MIN = 170
 
 
 def _clamp_splitter(splitter: "QSplitter", central: Any) -> None:
@@ -144,6 +152,101 @@ def _apply_initial_splitter_sizes(splitter: "QSplitter", central: Any) -> None:
     QTimer.singleShot(0, _set)
 
 
+def _install_preview(br: Any) -> None:
+    """Turn the Browser's editor side into [rendered card | fields].
+
+    Anki's `verticalLayoutWidget` holds a QVBoxLayout whose only content is
+    `horizontalLayout2` → `fieldsArea`. We lift `fieldsArea` into a holder,
+    put both into a vertical QSplitter, and hand that back to the layout.
+    Going through the layout (rather than reparenting `verticalLayoutWidget`
+    itself) keeps every Browser code path that pokes at
+    `form.splitter.widget(1)` or `form.fieldsArea` working untouched.
+    """
+    from . import browse_preview
+
+    if not browse_preview.enabled():
+        return
+
+    form = br.form
+    vl = form.verticalLayout
+    fields = form.fieldsArea
+    parent = form.verticalLayoutWidget
+
+    pane = browse_preview.PreviewPane(br, parent=parent)
+    pane.setMinimumHeight(PREVIEW_MIN)
+
+    holder = QWidget(parent)
+    holder.setObjectName("ba-browse-fields-holder")
+    hl = QVBoxLayout(holder)
+    hl.setContentsMargins(0, 0, 0, 0)
+    hl.setSpacing(0)
+    hl.addWidget(fields, 1)
+    holder.setMinimumHeight(FIELDS_MIN)
+
+    vsplit = QSplitter(Qt.Orientation.Vertical, parent)
+    vsplit.setObjectName("ba-browse-vsplit")
+    vsplit.setChildrenCollapsible(False)
+    vsplit.setHandleWidth(6)
+    vsplit.addWidget(pane)
+    vsplit.addWidget(holder)
+    vsplit.setStretchFactor(0, 3)
+    vsplit.setStretchFactor(1, 2)
+
+    # Drain whatever the .ui put in the layout (the now-empty
+    # horizontalLayout2) and install the splitter in its place.
+    while vl.count():
+        item = vl.takeAt(0)
+        if item is None:
+            break
+        child = item.layout()
+        if child is not None:
+            child.setParent(None)
+    vl.addWidget(vsplit, 1)
+
+    def _size() -> None:
+        try:
+            avail = vsplit.height() - vsplit.handleWidth()
+            if avail <= 0:
+                return
+            top = max(PREVIEW_MIN, int(avail * PREVIEW_SHARE))
+            vsplit.setSizes([top, max(FIELDS_MIN, avail - top)])
+        except Exception:
+            pass
+
+    QTimer.singleShot(0, _size)
+
+    def _on_row(browser: Any, _pane=pane, _br=br) -> None:
+        if browser is not _br:
+            return
+        try:
+            _pane.schedule()
+        except Exception:
+            pass
+
+    gui_hooks.browser_did_change_row.append(_on_row)
+
+    _state["preview"] = pane
+    _state["preview_hook"] = _on_row
+    # First paint: the webview needs a beat to finish loading reviewer.js
+    # before `_showAnswer` means anything.
+    QTimer.singleShot(350, pane.render)
+
+
+def _teardown_preview() -> None:
+    hook = _state.pop("preview_hook", None)
+    if hook is not None:
+        try:
+            gui_hooks.browser_did_change_row.remove(hook)
+        except Exception:
+            pass
+    pane = _state.pop("preview", None)
+    if pane is not None:
+        try:
+            pane.cleanup()
+        except Exception:
+            pass
+
+
 def _palette_styles() -> str:
     """QSS for the overlay frame. The Browser's own internals carry their
     Qt-native styles — we just paint the wrapper paper-colored so the gap
@@ -154,6 +257,46 @@ def _palette_styles() -> str:
         "QFrame#ba-browse-embed { background: " + palette["paper"] + "; "
         "border-left: 1px solid " + palette["line"] + "; }"
     )
+
+
+def refresh_palette() -> None:
+    """Re-tint the embed's own chrome after a theme flip.
+
+    The overlay frame, the outer splitter's handles and the main window's
+    central widget are all painted from the palette captured when the
+    embed opened. Anki's `theme_did_change` repaints its own widgets but
+    knows nothing about ours, so without this a light/dark flip leaves a
+    dark seam between the sidebar rail and the table."""
+    overlay = _state.get("overlay")
+    if overlay is None:
+        return
+    from . import addcard as _addcard
+
+    palette, _ = _addcard._resolve_palette()
+    paper = QColor(palette["paper"])
+    try:
+        pal = overlay.palette()
+        pal.setColor(QPalette.ColorRole.Window, paper)
+        overlay.setPalette(pal)
+        overlay.setStyleSheet(_palette_styles())
+    except Exception:
+        pass
+    sp = _state.get("splitter")
+    if sp is not None:
+        try:
+            sp.setStyleSheet(
+                "QSplitter::handle { background: " + palette["line"] + "; }"
+                "QSplitter::handle:hover { background: " + palette["line2"] + "; }"
+            )
+        except Exception:
+            pass
+    try:
+        cw = mw.form.centralwidget
+        cw_pal = cw.palette()
+        cw_pal.setColor(QPalette.ColorRole.Window, paper)
+        cw.setPalette(cw_pal)
+    except Exception:
+        pass
 
 
 class _EmbedFilter(QObject):
@@ -208,6 +351,11 @@ def close_inline() -> None:
     flt = _state.get("filter")
     if overlay is None and br is None and flt is None:
         return
+
+    # Drop the preview pane's webview before anything else: a webview that
+    # outlives its window keeps answering theme_did_change and touches a
+    # deleted page (the crash class upstream fixed in FindDuplicates).
+    _teardown_preview()
 
     # Clear state FIRST so anything that re-enters via a close callback
     # returns immediately.
@@ -386,6 +534,16 @@ def open_inline(parent_mw: Any = None) -> None:
                 _apply_inner_split(inner)
         except Exception:
             pass
+
+        # Rendered-card pane above the fields. Deliberately after the
+        # setVisible pinning above: _install_preview reparents fieldsArea
+        # into a holder, and the pin has to already be on the widget so
+        # the reparent carries it along.
+        try:
+            _install_preview(br)
+        except Exception as e:
+            print(f"[anki-design.browse_embed] preview pane failed: {e}",
+                  flush=True)
 
         # Browser attaches its sidebar tree (decks / tags / saved searches)
         # as a QDockWidget directly to the QMainWindow, NOT inside
