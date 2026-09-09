@@ -5,6 +5,10 @@ where they stand, by rewriting their positions — no new deck, nothing
 moved. It's also on the deck list's gear menu (`web/deckopts.js`), where
 it shuffles that deck instead of the one being studied.
 
+**Search Google for "…"** appears on the webview's own right-click menu
+whenever text is selected on a card, in the reviewer or the Browse
+preview pane.
+
 **Cue…** lists every tag actually present in the deck you're studying and
 turns any of them into an immediate study queue — the thing you reach for
 when a lecture, a chapter or a card type suddenly needs drilling. Cueing
@@ -349,6 +353,80 @@ def _flatten(node: Dict[str, Any], prefix: str) -> List[str]:
         else:
             out.append(name)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Look up selected text
+# --------------------------------------------------------------------------- #
+# Google's URL is fine with long queries but the menu label is not, and
+# neither is anyone's patience: show enough to recognise what you picked.
+LOOKUP_LABEL_CHARS = 40
+LOOKUP_QUERY_CHARS = 300
+
+
+def lookup_enabled() -> bool:
+    return bool(_config().get("reviewer_text_lookup", True))
+
+
+def search_google(text: str) -> None:
+    from urllib.parse import quote_plus
+
+    from aqt.qt import QDesktopServices, QUrl
+
+    query = " ".join(text.split())[:LOOKUP_QUERY_CHARS]
+    if not query:
+        return
+    QDesktopServices.openUrl(
+        QUrl("https://www.google.com/search?q=" + quote_plus(query))
+    )
+
+
+def _card_webview(webview: Any) -> bool:
+    """True for the webviews that show a rendered card.
+
+    The reviewer draws into `mw.web` (kind MAIN), which is also the deck
+    list and the overview — hence the state check. PREVIEWER covers both
+    Anki's own preview window and the Browse tab's pane.
+    """
+    try:
+        from aqt.webview import AnkiWebViewKind
+
+        kind = getattr(webview, "_kind", None)
+        if kind == AnkiWebViewKind.PREVIEWER:
+            return True
+        if kind == AnkiWebViewKind.MAIN:
+            return getattr(mw, "state", "") == "review"
+    except Exception:
+        pass
+    return False
+
+
+def on_webview_will_show_context_menu(webview: Any, menu: QMenu) -> None:
+    """Right-clicking a selection on a card offers to look it up.
+
+    "Allow me to highlight text in a card so if I want I can go look
+    something up on Google." The highlighting half is CSS (theme.css used
+    to set `user-select: none` on `body`, which reached the card); this is
+    the other half — the two-click path from "that word is unfamiliar" to
+    a search, without leaving the card or retyping it.
+    """
+    if not lookup_enabled() or not _card_webview(webview):
+        return
+    try:
+        if not webview.hasSelection():
+            return
+        text = " ".join((webview.selectedText() or "").split())
+        if not text:
+            return
+        label = text
+        if len(label) > LOOKUP_LABEL_CHARS:
+            label = label[: LOOKUP_LABEL_CHARS - 1].rstrip() + "…"
+        if menu.actions():
+            menu.addSeparator()
+        act = menu.addAction(f'Search Google for “{label}”')
+        act.triggered.connect(lambda _checked=False, t=text: search_google(t))
+    except Exception as exc:
+        _log(f"lookup menu: {exc!r}")
 
 
 def on_will_show_context_menu(reviewer: Any, menu: QMenu) -> None:

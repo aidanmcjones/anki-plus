@@ -2953,6 +2953,10 @@ try:
     gui_hooks.reviewer_will_show_context_menu.append(
         _reviewer_menu.on_will_show_context_menu
     )
+    # Right-click on a selection inside a card → look it up.
+    gui_hooks.webview_will_show_context_menu.append(
+        _reviewer_menu.on_webview_will_show_context_menu
+    )
 except Exception:
     pass
 

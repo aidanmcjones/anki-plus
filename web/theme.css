@@ -160,7 +160,25 @@ body {
   margin: 0 !important;
   font-family: var(--rf-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Chrome isn't selectable — dragging across a deck row, a count or the
+   reviewer header should move the mouse, not paint a text selection.
+   Card *content* is: you read it, and sometimes you want to pull a term
+   out of it and go look it up.
+
+   This used to be `-webkit-user-select: none` on bare `body`. theme.css
+   also loads on the reviewer and on the Browse preview pane, so that one
+   line made every card's text unselectable — a regression against stock
+   Anki, which leaves the reviewer selectable. Scoped to the chrome now. */
+.ba-home, .ba-over,
+.ba-rv-head, .ba-rv-counts, .ba-rv-ease, .ba-back, #reforge-progress {
   -webkit-user-select: none;
+  user-select: none;
+}
+#qa, #qa * {
+  -webkit-user-select: text;
+  user-select: text;
 }
 /* Border-box everywhere inside our scopes so width:100% + padding never
    overflows the parent. Fixes the narrow-display card overflow. */

@@ -68,6 +68,11 @@ in this file are the raw form the settings page writes.
   reviews do, and re-cueing refreshes that deck instead of making
   another. Suspended cards are left out of both. `false` leaves Anki's
   More menu untouched and drops Randomize from the gear menu.
+- **reviewer_text_lookup** — text on a card is selectable (as it is in
+  stock Anki), and right-clicking a selection offers **Search Google
+  for "…"**, which opens your default browser. Works in the reviewer and
+  in the Browse tab's preview pane. `false` removes the menu item;
+  selecting text still works.
 
 ## Windows
 - **cmdk** — the ⌘K / Ctrl+K command palette.

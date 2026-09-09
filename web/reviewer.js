@@ -161,6 +161,13 @@
       // before the hook has fired.
       if (window.__baReviewerState === "answer") return;
       if (qa.querySelector(".ba-rv-answer")) return;
+      // Card text is selectable, so a click can be the end of a drag.
+      // Finishing a highlight must not also flip the card out from under
+      // the thing you just selected.
+      try {
+        var sel = window.getSelection();
+        if (sel && !sel.isCollapsed && String(sel).trim()) return;
+      } catch (_) {}
       var t = e.target;
       while (t && t !== qa) {
         var tag = (t.tagName || "").toLowerCase();
