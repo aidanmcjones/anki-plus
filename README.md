@@ -31,6 +31,11 @@ No network calls, no bundled binaries — keeps AnkiWeb review trivial.
 | `web/heatmap.css` / `.js` | heatmap styling; scroll-to-newest + tooltip |
 | `web/toolbar.css` | top toolbar redesign (flat full-width header) |
 | `web/reviewer.css` / `.js` | progress bar |
+| `browse_embed.py` | Browse as a tab inside the main window |
+| `browse_style.py` | Browse Qt chrome (table, sidebar tree, inputs) + the sidebar trim |
+| `browse_preview.py` / `web/browse-preview.*` | the rendered-card pane in the Browse tab |
+| `web/addcard.css` / `.js` | shared note-editor restyle (Add + Browse) |
+| `web/browse-editor.css` | Browse-pane deltas on top of `addcard.css` |
 | `config.json` / `config.md` | user-facing settings + their help text (every feature has a switch) |
 | `colors.py` | hex helpers shared by the web injection and the Qt palettes |
 | `manifest.json` | name, version, `conflicts` with rival add-ons |
@@ -51,6 +56,9 @@ behaviour. Highlights:
   buttons, click-to-reveal, press feedback, in-place editing, progress bar.
 - **Windows** — command palette, inline Add / Browse / Stats / Preferences,
   the redesigned Add window, the finished-deck page, quiet sync.
+- **Browse** — the restyled browser chrome, the trimmed sidebar (Decks +
+  Tags only), the rendered-card preview pane, and the restyled editor
+  pane. Each has its own switch.
 - **Appearance** — theme, accent, background (Paper / White / custom and
   Ink / Black / custom), density, fonts.
 

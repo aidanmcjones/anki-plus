@@ -3,6 +3,31 @@
 All notable changes to Anki Design are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver-ish.
 
+## [Unreleased]
+### Added
+- **The Browse tab now looks like the rest of the app.** The card table,
+  column headers, sidebar tree, search bar, splitters and scrollbars are
+  painted from the same palette as the deck list — paper background,
+  hairline rules, flat uppercase column labels, a quiet accent wash for
+  the selected row, and no Qt button gradients anywhere. Switch off with
+  **browse_restyle**.
+- **A rendered card preview in the Browse tab.** The right-hand pane is
+  now a vertical split: the selected card drawn exactly as the reviewer
+  draws it (note-type CSS, cloze holes, images, MathJax, your reviewer
+  typography settings) on top, the fields underneath. Click the card, or
+  the Question / Answer switch, to flip sides; it follows the row
+  selection as you arrow through the table. Switch off with
+  **browse_render_preview**.
+- **A trimmed Browse sidebar.** Decks and Tags — the two real ways a
+  collection is grouped — and nothing else. Saved Searches, Today, Flags,
+  Card State and Note Types are hidden; every one of them was a search
+  you can still type (`is:due`, `flag:1`, `added:1`, `note:Basic`).
+  Section headings are set as headings, not as rows. Switch off with
+  **browse_sidebar_minimal**.
+- The Browse editor pane gets the Add window's editor styling (shared
+  stylesheet, with pane-specific spacing). Switch off with
+  **restyle_browse_editor**.
+
 ## [0.3.0] — 2026-09-02
 ### Fixed
 - Sub-decks now open the way you left them. The deck list reads Anki's own

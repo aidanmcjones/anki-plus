@@ -59,5 +59,27 @@ in this file are the raw form the settings page writes.
 - **congrats_redesign** — the redesigned finished-deck page.
 - **silent_sync** — sync progress in the sidebar instead of a dialog.
 
+## Browse
+- **browse_restyle** — paint the Browser's Qt chrome (card table, column
+  headers, sidebar tree, search bar, splitters, scrollbars) in the Anki
+  Design palette. `false` leaves Anki's own browser styling alone.
+- **browse_sidebar_minimal** — show only **Decks** and **Tags** in the
+  Browse sidebar. `false` restores Anki's full tree (Saved Searches,
+  Today, Flags, Card State, Note Types). Nothing is lost with it on: the
+  hidden rows are all searches you can type — `is:due`, `flag:1`,
+  `added:1`, `note:Basic`, `deck:current` — and the menu actions that
+  create saved searches keep working.
+- **browse_render_preview** — split the Browse editor pane vertically and
+  render the selected card on top, exactly as the reviewer renders it
+  (note type CSS, cloze, images, and your Reviewer settings). Click the
+  card, or the Question / Answer switch, to flip sides. `false` gives the
+  fields the whole pane back, as in stock Anki. Needs `embed_browse`: the
+  pane is built when Browse opens as a tab. With Browse in its own window
+  you still have Anki's own preview on `Ctrl+Shift+P`.
+- **restyle_browse_editor** — apply the Add window's editor styling to
+  the Browse fields pane. `false` keeps Anki's stock editor there.
+
 Changes take effect the next time the relevant screen is drawn (return to
-the deck list / start a review). Restarting Anki is never required.
+the deck list / start a review). The four **Browse** options above are
+read when the Browse tab opens, so close and reopen it after changing
+them. Restarting Anki is never required.
