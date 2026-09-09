@@ -27,6 +27,7 @@
   "show_progress": true,
   "reviewer_menu_extras": true,
   "reviewer_text_lookup": true,
+  "deck_deadlines": true,
   "cmdk": true,
   "embed_add": true,
   "embed_browse": true,

@@ -34,6 +34,8 @@
            + '1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>',
     export:  '<path d="M12 16V4"/><path d="M6 10l6-6 6 6"/><path d="M4 20h16"/>',
     rebuild: '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/>',
+    calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/>'
+           + '<path d="M3 10h18"/><path d="M8 3v4"/><path d="M16 3v4"/>',
     // Two crossing arrows — the usual shuffle glyph.
     shuffle: '<path d="M16 3h5v5"/><path d="M4 20L21 3"/>'
            + '<path d="M21 16v5h-5"/><path d="M15 15l6 6"/>'
@@ -55,6 +57,7 @@
     { cmd: "empty",   label: "Empty (filtered)",   icon: "empty" },
     { cmd: "restudy", label: "Restudy…",         icon: "rebuild" },
     { cmd: "randomize", label: "Randomize",      icon: "shuffle" },
+    { cmd: "deadline", label: "Memorize by…",    icon: "calendar" },
     { cmd: "delete",  label: "Delete deck",      icon: "delete", danger: true, sep_before: true },
   ];
 
@@ -89,6 +92,17 @@
     }
   }
 
+  // "Memorize by…" carries the date and the countdown once one is set, so
+  // the deadline is visible without opening the dialog. Python publishes
+  // the per-deck labels as window.__baDeadlines (see deadlines.py).
+  function labelFor(it, did) {
+    if (it.cmd !== "deadline") return it.label;
+    try {
+      var m = window.__baDeadlines || {};
+      return m[String(did)] || it.label;
+    } catch (e) { return it.label; }
+  }
+
   function build(did) {
     var menu = document.createElement("div");
     menu.className = "ad-menu";
@@ -100,7 +114,7 @@
       html += '<button type="button" class="' + cls + '" role="menuitem" '
             + 'data-cmd="' + it.cmd + '">'
             +   icon(ICONS[it.icon] || "")
-            +   '<span class="ad-menu-l">' + it.label + '</span>'
+            +   '<span class="ad-menu-l">' + labelFor(it, did) + '</span>'
             + '</button>';
     });
     menu.innerHTML = html;

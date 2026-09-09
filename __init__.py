@@ -391,6 +391,17 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             )
         except Exception:
             pass
+        # Per-deck deadline labels, so the gear menu can render
+        # "Memorize by Sep 15 — 6d" without a round-trip per deck.
+        try:
+            import json as _json
+            from . import deadlines as _dl
+            web_content.head += (
+                "<script>window.__baDeadlines = "
+                + _json.dumps(_dl.menu_payload()) + ";</script>"
+            )
+        except Exception:
+            pass
     # Floating Settings cog — only when the sidebar is OFF on the homepage.
     no_side = not cfg.get("sidebar_nav", True)
     if no_side and isinstance(context, (DeckBrowser, Overview)):
@@ -1275,6 +1286,10 @@ def _on_js_message(handled, message, context):
                     # one being studied.
                     from . import reviewer_menu as _rm
                     _rm.randomize_deck(did)
+                elif action == "deadline":
+                    from . import deadlines as _dl
+                    if _dl.enabled():
+                        _dl.show_dialog(did)
                 elif action == "delete" and db is not None:
                     db._delete(did)  # type: ignore[attr-defined]
                 else:
@@ -2957,6 +2972,24 @@ try:
     gui_hooks.webview_will_show_context_menu.append(
         _reviewer_menu.on_webview_will_show_context_menu
     )
+except Exception:
+    pass
+
+# Per-deck memorization deadlines: recompute every deadlined deck's interval
+# ceiling once a day. Profile open covers the normal case (Anki restarted
+# overnight); the reviewer entry covers the app being left running across a
+# rollover, which is how most people use it. `refresh_all` no-ops when it has
+# already run for Anki's current day, so the second hook is nearly free.
+try:
+    from . import deadlines as _deadlines
+
+    gui_hooks.profile_did_open.append(lambda: _deadlines.refresh_all())
+
+    def _deadlines_on_state(new_state: str, old_state: str) -> None:
+        if new_state == "review":
+            _deadlines.refresh_all()
+
+    gui_hooks.state_did_change.append(_deadlines_on_state)
 except Exception:
     pass
 

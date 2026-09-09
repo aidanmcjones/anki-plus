@@ -74,6 +74,22 @@ in this file are the raw form the settings page writes.
   in the Browse tab's preview pane. `false` removes the menu item;
   selecting text still works.
 
+## Deck deadlines
+- **deck_deadlines** — **Memorize by…** on a deck's gear menu: pick a date
+  and every interval in that deck is capped at the days remaining, so no
+  answer — Easy included — can schedule a card past the deadline. The menu
+  item then shows the date and the countdown ("Memorize by Sep 15 — 6d").
+  Anki caps intervals per *preset*, and presets are shared between decks,
+  so a deadlined deck is moved onto its own copy of its preset
+  (`<preset> — deadline`) and the decks that shared the original are left
+  alone; clearing the deadline moves it back. The cap is recalculated
+  once a day, so it shrinks as the date approaches, and the deck is
+  restored when the date passes. The dialog also checks whether the new
+  cards can be *seen* in time — "212 new cards in 6 days needs 36/day —
+  this deck's limit is 20" — and offers to raise the limit in one click.
+  `false` removes the menu item and stops enforcing any deadline already
+  set.
+
 ## Windows
 - **cmdk** — the ⌘K / Ctrl+K command palette.
 - **embed_add**, **embed_browse**, **embed_stats**, **embed_settings** — open
