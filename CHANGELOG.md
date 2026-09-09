@@ -4,6 +4,19 @@ All notable changes to Anki Design are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver-ish.
 
 ## [Unreleased]
+### Changed
+- **The reviewer's card area fills the window.** It used to be capped at
+  a reading measure (Settings → Reviewer → Card width — 780px at Medium).
+  That's a good rule for prose and a bad one for everything else: a
+  seven-column table, a wide diagram or a screenshot got squeezed into
+  that column in the middle of a wide window and then, because the card
+  area scrolls, was cut off on *both* sides. Cards of every shape now use
+  the full window minus the page gutter and grow as you resize it. Images
+  scale to the available width, preformatted text wraps, and wide tables
+  shrink to fit rather than scrolling. Settings → Reviewer → Card width
+  no longer sizes the card area. The Browse preview pane follows the same
+  rules, fitted to the pane instead of the window.
+
 ### Added
 - **The Browse tab now looks like the rest of the app.** The card table,
   column headers, sidebar tree, search bar, splitters and scrollbars are

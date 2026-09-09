@@ -107,6 +107,23 @@ html[data-ba-preview] #qa video {
   max-width: 100%;
   height: auto;
 }
+
+/* Wide tables. In the reviewer a table card drops the reading measure and
+ * spreads across the window (see reviewer.css); here there is no window to
+ * spread into — the pane is ~460px — so the table has to wrap inside it
+ * instead. `width: 100%` plus per-cell `overflow-wrap` lets the auto
+ * layout shrink columns to fit. This is the one place the pane knowingly
+ * departs from "renders exactly like study": the alternative is a
+ * horizontal scrollbar on every chart card. */
 html[data-ba-preview] #qa table {
-  max-width: 100%;
+  width: 100%;
+  /* Not 100% — see the matching note in reviewer.css: a collapsed outer
+     border paints half of itself outside the layout box, which is worth
+     exactly one pixel of scrollable overflow and a hairline scrollbar
+     under every chart card. */
+  max-width: calc(100% - 2px);
+}
+html[data-ba-preview] #qa th,
+html[data-ba-preview] #qa td {
+  overflow-wrap: anywhere;
 }

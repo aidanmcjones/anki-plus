@@ -109,7 +109,9 @@ body.card { max-width: none !important; }
    reviewer-card-width / reviewer-font-size settings the user picked in
    the Settings tab. */
 html:not([data-rf-cardstyle="native"]) :not(body).card {
-  max-width: var(--rf-card-max-width, 720px);
+  /* No cap — see the #qa block below. A wrapper div must not reintroduce
+     the measure that #qa just dropped. */
+  max-width: none;
   margin: 0 auto;
   font-size: var(--rf-card-font-size, 28px);
   line-height: 1.55;
@@ -477,12 +479,30 @@ html:not([data-rf-cardstyle="native"]) :not(body).card {
    block scroller; Anki's note-type CSS owns the visual layout of the
    content itself (text-align, .cloze color/weight, etc). The body's
    `text-align: center` carries over for templates that expect it. */
+/* The content area is FLUID: the full window minus the page gutter, at
+   every window size, for every card. No measure, no max-width, nothing
+   that can clip or restrict what a note type puts on screen.
+
+   This is a deliberate reversal. The area used to be capped at
+   `--rf-card-max-width` (the Settings → Reviewer → Card width value, 780px
+   at "Medium") on the reading-measure argument that long lines are hard
+   to read. That argument is about prose; it silently mangles everything
+   else. A seven-column table, a wide diagram, a screenshot — each got
+   squeezed into a 780px column in the middle of a 1600px window and
+   then, because `overflow-y: auto` makes the browser compute `overflow-x`
+   to `auto` too, scrolled *inside* that column and was cut off on both
+   sides. The user's call, and it is the right one: the card fills the
+   window and grows with it.
+
+   NB: `--rf-card-max-width` no longer constrains the card area, so
+   Settings → Reviewer → Card width has no effect on it any more. Retiring
+   or repurposing that setting is a Python/settings change, not a CSS one. */
 #qa {
   grid-row: 2;
   display: block;
-  padding: 48px 32px 32px;
+  padding: 48px var(--rf-pad-page, 32px) var(--rf-pad-page-bottom, 32px);
   width: 100%;
-  max-width: var(--rf-card-max-width, 680px);
+  max-width: none;
   margin: 0 auto;
   box-sizing: border-box;
   min-height: 0;
@@ -492,6 +512,53 @@ html:not([data-rf-cardstyle="native"]) #qa {
   font-size: var(--rf-card-font-size, 28px);
   line-height: 1.5;
   letter-spacing: -0.005em;
+}
+
+/* ---------- Nothing may exceed the content area ----------
+ * The container is now as wide as the window, and these rules are what
+ * stand between a wide element and a horizontal scrollbar. They cap, they
+ * never crop: an element that already fits is laid out exactly as its
+ * note type asked.
+ *
+ * Media first. Note types generally carry `max-width: 100%` themselves;
+ * this makes sure the add-on layer agrees with them rather than fighting
+ * them, and `height: auto` keeps the aspect ratio when a template pins an
+ * explicit pixel height that no longer matches the capped width. */
+html:not([data-rf-cardstyle="native"]) #qa img,
+html:not([data-rf-cardstyle="native"]) #qa video,
+html:not([data-rf-cardstyle="native"]) #qa svg,
+html:not([data-rf-cardstyle="native"]) #qa canvas,
+html:not([data-rf-cardstyle="native"]) #qa iframe {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Preformatted text is the other classic overflow source: it doesn't wrap
+   at all by default, so one long line pushes a scrollbar across the whole
+   card. Wrap it instead. */
+html:not([data-rf-cardstyle="native"]) #qa pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+html:not([data-rf-cardstyle="native"]) #qa table {
+  /* Not plain 100%: with `border-collapse: collapse` the outer border
+     straddles the table's edge, so half of it paints *outside* the layout
+     box. At 100% that leaves ~1px of scrollable overflow and a hairline
+     horizontal scrollbar on an otherwise perfectly-fitting table. Two
+     pixels of slack absorb the straddle on both sides. */
+  max-width: calc(100% - 2px);
+}
+/* `max-width` alone cannot push a table below its min-content width — the
+   sum of the longest unbreakable word in each column — so a seven-column
+   chart still overflows a ~1000px window and scrolls. `anywhere` (not
+   `break-word`, which is ignored for intrinsic sizing) lets the columns
+   shrink past their longest word, which is what actually lets the table
+   fit. It only ever takes effect when the alternative is a scrollbar:
+   a table that fits is laid out exactly as before. */
+html:not([data-rf-cardstyle="native"]) #qa table th,
+html:not([data-rf-cardstyle="native"]) #qa table td {
+  overflow-wrap: anywhere;
 }
 
 /* The card content itself is rendered as-is (note-type CSS wins). We just

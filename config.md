@@ -39,6 +39,10 @@ in this file are the raw form the settings page writes.
 
 ## Reviewer
 - **reviewer_card_width** — `"narrow"`, `"medium"`, `"wide"`, or `"full"`.
+  **This no longer sizes the card area.** Card content now always fills
+  the window and grows with it, because a fixed measure clipped anything
+  that wasn't prose — tables, diagrams, screenshots. The value still
+  sizes the answer-button strip.
 - **reviewer_font_size** — `"small"`, `"medium"`, `"large"`, or `"x-large"`.
 - **reviewer_card_styling** — apply Anki Design typography and colours to
   the card body. `false` keeps your note type's own CSS untouched.
