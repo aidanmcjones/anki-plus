@@ -90,6 +90,18 @@ in this file are the raw form the settings page writes.
   `false` removes the menu item and stops enforcing any deadline already
   set.
 
+  A date in the **past** is allowed, and is how you record that a deck was
+  learned on time — the gear row then reads "Memorized by Sep 8 —
+  passed ✓". The interval cap comes off, and the dialog asks what the deck
+  should do from there; the choice is remembered per deck:
+  - **Maintain long-term** (default) — reviews carry on as normal. Cards
+    coming due after the deadline are memory upkeep, not a missed target;
+    that is how spaced repetition holds something you already know.
+  - **Pause reviews** — the deck stops presenting anything, by setting its
+    per-day review and new limits to 0. Reversible, and no card is
+    suspended or otherwise altered: switch back to Maintain, or clear the
+    deadline, to resume.
+
 ## Windows
 - **cmdk** — the ⌘K / Ctrl+K command palette.
 - **embed_add**, **embed_browse**, **embed_stats**, **embed_settings** — open

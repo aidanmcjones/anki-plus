@@ -60,6 +60,9 @@ from aqt import mw
 ADDON = __name__.split(".")[0]
 
 CLONE_SUFFIX = " — deadline"
+# What a deck does once its deadline is behind it.
+MODE_MAINTAIN = "maintain"   # cap comes off, FSRS upkeep carries on
+MODE_PAUSE = "pause"         # deck stops presenting anything, reversibly
 DEFAULT_MAX_IVL = 36500
 STATE_KEY = "deck_deadlines"
 LAST_CHECK_KEY = "deck_deadlines_last_check"
@@ -131,6 +134,13 @@ def get(did: int) -> Optional[datetime.date]:
     return parse(str(entry.get("date", "")))
 
 
+def get_mode(did: int) -> str:
+    entry = _state().get(str(did))
+    if isinstance(entry, dict) and entry.get("mode") in (MODE_MAINTAIN, MODE_PAUSE):
+        return str(entry["mode"])
+    return MODE_MAINTAIN
+
+
 def label_for(did: int) -> str:
     """Gear-menu label: the date plus how long is left."""
     deadline = get(did)
@@ -139,7 +149,11 @@ def label_for(did: int) -> str:
     left = days_left(deadline)
     stamp = deadline.strftime("%b %-d") if hasattr(deadline, "strftime") else str(deadline)
     if left < 0:
-        return f"Memorize by {stamp} — passed"
+        # Past tense on purpose: the deck was memorized by that date, and
+        # the row should read as an achievement rather than a miss.
+        if get_mode(did) == MODE_PAUSE:
+            return f"Memorized by {stamp} — paused"
+        return f"Memorized by {stamp} — passed ✓"
     if left == 0:
         return f"Memorize by {stamp} — today"
     return f"Memorize by {stamp} — {left}d"
@@ -201,6 +215,10 @@ def _ensure_own_preset(col: Any, did: int, entry: Dict[str, Any]) -> Dict[str, A
         return conf
     entry.setdefault("orig_conf", conf_id)
     entry.setdefault("orig_max_ivl", int(conf.get("rev", {}).get("maxIvl", DEFAULT_MAX_IVL)))
+    # Captured here, before anything is changed, so "Pause reviews" has
+    # real numbers to put back rather than a guess at Anki's defaults.
+    entry.setdefault("orig_new_per_day", int(conf.get("new", {}).get("perDay", 20)))
+    entry.setdefault("orig_rev_per_day", int(conf.get("rev", {}).get("perDay", 200)))
     if not _decks_using(col, conf_id, exclude=did):
         entry["cloned_conf"] = 0
         return conf
@@ -265,23 +283,104 @@ def set_new_per_day(did: int, value: int) -> None:
         _save_state(state)
     else:
         conf = col.decks.config_dict_for_deck_id(did)
-    conf.setdefault("new", {})["perDay"] = max(1, int(value))
+    limit = max(1, int(value))
+    conf.setdefault("new", {})["perDay"] = limit
     col.decks.update_config(conf)
+    # Remember the raise as the deck's real limit, so coming back from
+    # "Pause reviews" restores what the user chose and not what the
+    # preset happened to say before they raised it.
+    if isinstance(entry, dict):
+        state = _state()
+        cur = dict(state.get(str(did)) or {})
+        cur["orig_new_per_day"] = limit
+        state[str(did)] = cur
+        _save_state(state)
 
 
 # --------------------------------------------------------------------------- #
 # Set / clear / refresh
 # --------------------------------------------------------------------------- #
-def set_deadline(did: int, deadline: datetime.date) -> None:
+def _set_limits(col: Any, conf: Dict[str, Any], entry: Dict[str, Any],
+                paused: bool) -> None:
+    """Stop or resume a deck without touching a single card.
+
+    Zeroing the preset's per-day limits is how you pause a deck in Anki:
+    the cards keep their due dates, their intervals and their history, and
+    nothing needs unsuspending afterwards — the deck simply stops
+    presenting anything. Suspending 400 cards to achieve the same thing
+    would be destructive and would lose the distinction between "parked by
+    me" and "parked by a deadline"."""
+    new = conf.setdefault("new", {})
+    rev = conf.setdefault("rev", {})
+    if paused:
+        new["perDay"] = 0
+        rev["perDay"] = 0
+    else:
+        new["perDay"] = int(entry.get("orig_new_per_day") or 20)
+        rev["perDay"] = int(entry.get("orig_rev_per_day") or 200)
+    col.decks.update_config(conf)
+
+
+def _apply(col: Any, did: int, entry: Dict[str, Any]) -> Dict[str, Any]:
+    """The single place that maps (deadline, mode) onto preset settings.
+
+    Called by set_deadline, set_mode and the daily refresh, so a deck's
+    state can never depend on which of those last ran.
+    """
+    deadline = parse(str(entry.get("date", "")))
+    if deadline is None:
+        return entry
+    left = days_left(deadline)
+    conf = _ensure_own_preset(col, did, entry)
+    if left >= 0:
+        # Still ahead: cap intervals at the days remaining, normal limits.
+        _set_max_interval(col, conf, max(1, left))
+        _set_limits(col, conf, entry, paused=False)
+        entry.pop("notified_passed", None)
+        return entry
+    # Passed. The cap has done its job and comes off either way — a card
+    # answered after the deadline is memory upkeep, not a failure to hit
+    # the date.
+    _set_max_interval(col, conf, int(entry.get("orig_max_ivl") or DEFAULT_MAX_IVL))
+    _set_limits(col, conf, entry, paused=(entry.get("mode") == MODE_PAUSE))
+    return entry
+
+
+def set_deadline(did: int, deadline: datetime.date,
+                 mode: Optional[str] = None) -> None:
     col = getattr(mw, "col", None)
     if col is None:
         return
     state = _state()
     entry = dict(state.get(str(did)) or {})
     entry["date"] = deadline.isoformat()
-    conf = _ensure_own_preset(col, did, entry)
-    _set_max_interval(col, conf, max(1, days_left(deadline)))
+    if mode in (MODE_MAINTAIN, MODE_PAUSE):
+        entry["mode"] = mode
+    entry.setdefault("mode", MODE_MAINTAIN)
+    entry = _apply(col, did, entry)
     state[str(did)] = entry
+    _save_state(state)
+
+
+def set_mode(did: int, mode: str) -> None:
+    """Switch a passed deadline between maintenance and paused."""
+    col = getattr(mw, "col", None)
+    if col is None or mode not in (MODE_MAINTAIN, MODE_PAUSE):
+        return
+    state = _state()
+    entry = dict(state.get(str(did)) or {})
+    if not entry.get("date"):
+        return
+    entry["mode"] = mode
+    entry = _apply(col, did, entry)
+    state[str(did)] = entry
+    _save_state(state)
+
+
+def _drop_entry(did: int) -> None:
+    """Forget a deadline without trying to restore a deck that's gone."""
+    state = _state()
+    state.pop(str(did), None)
     _save_state(state)
 
 
@@ -300,12 +399,21 @@ def clear_deadline(did: int, notify: bool = False) -> None:
         orig_conf = int(entry.get("orig_conf") or 0)
         cloned = int(entry.get("cloned_conf") or 0)
         if cloned and orig_conf:
+            # Put the limits back on the clone first: another deck could
+            # be pointed at it later, and leaving a zeroed preset lying
+            # around is a trap.
+            conf = col.decks.config_dict_for_deck_id(did)
+            _set_max_interval(
+                col, conf, int(entry.get("orig_max_ivl") or DEFAULT_MAX_IVL)
+            )
+            _set_limits(col, conf, entry, paused=False)
             col.decks.set_config_id_for_deck_dict(col.decks.get(did), orig_conf)
         else:
             conf = col.decks.config_dict_for_deck_id(did)
             _set_max_interval(
                 col, conf, int(entry.get("orig_max_ivl") or DEFAULT_MAX_IVL)
             )
+            _set_limits(col, conf, entry, paused=False)
     except Exception as exc:
         _log(f"clear deadline {did}: {exc!r}")
     if notify:
@@ -330,20 +438,36 @@ def refresh_all(force: bool = False) -> int:
         deadline = get(did)
         if deadline is None:
             continue
-        if not col.decks.get(did):
-            clear_deadline(did)
-            continue
-        left = days_left(deadline)
-        if left < 0:
-            clear_deadline(did, notify=True)
+        # `default=False` matters: `decks.get(did)` hands back the *default
+        # deck* for an unknown id rather than None, so without it a state
+        # entry for a deleted deck sails past this guard and then trips the
+        # assert inside `config_dict_for_deck_id`. Deleted decks are normal
+        # — the deck a deadline was set on can be renamed away or removed.
+        if not col.decks.get(did, default=False):
+            _drop_entry(did)
             continue
         state = _state()
         entry = dict(state.get(did_s) or {})
-        conf = _ensure_own_preset(col, did, entry)
-        _set_max_interval(col, conf, max(1, left))
+        left = days_left(deadline)
+        entry = _apply(col, did, entry)
+        if left < 0 and not entry.get("notified_passed"):
+            # Announce the crossing once, in the language of whichever
+            # mode the deck is in. A passed deadline is now a state the
+            # deck keeps, not something we quietly delete.
+            entry["notified_passed"] = True
+            mode = entry.get("mode", MODE_MAINTAIN)
+            if mode == MODE_PAUSE:
+                _tooltip(f"“{_deck_name(did)}” reached its deadline — reviews paused")
+            else:
+                _tooltip(
+                    f"“{_deck_name(did)}” reached its deadline — "
+                    "interval cap lifted, upkeep continues"
+                )
         state[did_s] = entry
         _save_state(state)
         touched += 1
+        if left < 0:
+            continue
         pace = pacing(did)
         if pace and pace["short"]:
             _tooltip(
@@ -428,7 +552,9 @@ def show_dialog(did: int) -> None:
     cal.setVerticalHeaderFormat(
         QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader
     )
-    cal.setMinimumDate(QDate.currentDate())
+    # No minimum date. A deadline in the past is a legitimate thing to
+    # record — "this set needed to be known by Tuesday, and it was" — and
+    # refusing it was the bug this revision fixes.
     current = get(did)
     if current:
         cal.setSelectedDate(QDate(current.year, current.month, current.day))
@@ -439,16 +565,61 @@ def show_dialog(did: int) -> None:
     note.setWordWrap(True)
     root.addWidget(note)
 
+    # Shown only for a date that has already passed: what should the deck
+    # do now that it is meant to be known?
+    from aqt.qt import QButtonGroup, QRadioButton, QWidget
+
+    past_box = QWidget()
+    past_col = QVBoxLayout(past_box)
+    past_col.setContentsMargins(0, 2, 0, 0)
+    past_col.setSpacing(4)
+    past_head = QLabel("That date has passed. From here:")
+    past_head.setProperty("role", "sub")
+    past_col.addWidget(past_head)
+    rb_maintain = QRadioButton("Maintain long-term — keep reviewing to hold it")
+    rb_pause = QRadioButton("Pause reviews — stop showing this deck for now")
+    group = QButtonGroup(past_box)
+    group.addButton(rb_maintain)
+    group.addButton(rb_pause)
+    past_col.addWidget(rb_maintain)
+    past_col.addWidget(rb_pause)
+    past_why = QLabel(
+        "Cards still coming due after the deadline are memory upkeep, not a "
+        "missed target — that's how spaced repetition holds something you "
+        "already know. Pausing is reversible and suspends nothing."
+    )
+    past_why.setProperty("role", "note")
+    past_why.setWordWrap(True)
+    past_col.addWidget(past_why)
+    root.addWidget(past_box)
+    (rb_pause if get_mode(did) == MODE_PAUSE else rb_maintain).setChecked(True)
+    past_box.hide()
+
     raise_btn = QPushButton("Raise limit")
     raise_btn.setProperty("role", "quiet")
     raise_btn.hide()
     pace_state: Dict[str, int] = {}
 
-    def refresh_note() -> None:
+    def chosen_date() -> datetime.date:
         sel = cal.selectedDate()
-        chosen = datetime.date(sel.year(), sel.month(), sel.day())
-        left = max(1, (chosen - _today()).days)
+        return datetime.date(sel.year(), sel.month(), sel.day())
+
+    def refresh_note() -> None:
+        chosen = chosen_date()
+        delta = (chosen - _today()).days
         col = mw.col
+        if delta < 0:
+            past_box.show()
+            raise_btn.hide()
+            ago = -delta
+            note.setText(
+                f"{ago} day{'s' if ago != 1 else ''} ago. No interval cap is "
+                "applied for a date that has already passed."
+            )
+            save.setText("Save")
+            return
+        past_box.hide()
+        left = max(1, delta)
         try:
             from anki.collection import SearchNode
 
@@ -477,9 +648,7 @@ def show_dialog(did: int) -> None:
                 )
             raise_btn.hide()
         note.setText("  ".join(lines))
-
-    cal.selectionChanged.connect(refresh_note)
-    refresh_note()
+        save.setText("Set deadline")
 
     row = QHBoxLayout()
     row.setSpacing(8)
@@ -504,9 +673,19 @@ def show_dialog(did: int) -> None:
 
     def on_save() -> None:
         sel = cal.selectedDate()
-        set_deadline(did, datetime.date(sel.year(), sel.month(), sel.day()))
+        chosen = datetime.date(sel.year(), sel.month(), sel.day())
+        past = (chosen - _today()).days < 0
+        mode = (MODE_PAUSE if rb_pause.isChecked() else MODE_MAINTAIN) if past else None
+        set_deadline(did, chosen, mode=mode)
         dlg.accept()
-        _tooltip(f"“{name}” must be known by {sel.toString('MMM d')}")
+        stamp = sel.toString("MMM d")
+        if past:
+            if mode == MODE_PAUSE:
+                _tooltip(f"“{name}” memorized by {stamp} — reviews paused")
+            else:
+                _tooltip(f"“{name}” memorized by {stamp} — upkeep continues")
+        else:
+            _tooltip(f"“{name}” must be known by {stamp}")
         _refresh_deck_browser()
 
     def on_clear() -> None:
@@ -520,6 +699,12 @@ def show_dialog(did: int) -> None:
     cancel.clicked.connect(dlg.reject)
     clear_btn.clicked.connect(on_clear)
     clear_btn.setEnabled(current is not None)
+
+    # Wired after the buttons exist — refresh_note retitles Save and can
+    # only run once there is a Save to retitle.
+    cal.selectionChanged.connect(refresh_note)
+    rb_maintain.toggled.connect(lambda _on: None)
+    refresh_note()
 
     dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
     dlg.resize(420, 480)
