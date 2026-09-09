@@ -1,7 +1,8 @@
-// Anki Design — Add Card editor webview script.
+// Anki Design — note-editor webview script (Add Cards + Browse).
 //
-// Tags <html> so addcard.css can scope its overrides to the editor when it's
-// being shown in the AddCards window (not Browser, not Edit-Current). Anki's
+// Tags <html data-ba-editor="add|browse"> so addcard.css can scope its
+// overrides to the editors we own (never Edit-Current). The mode comes
+// from the <meta name="ba-editor-mode"> Python injects, because Anki's
 // CSP blocks inline scripts on the editor page, so this work happens in a
 // loaded JS file rather than a <script> in the page head.
 //
@@ -12,8 +13,11 @@
 // editor ready.
 (function () {
   "use strict";
+  var MODE = "add";
   try {
-    document.documentElement.dataset.baEditor = "add";
+    var m = document.querySelector('meta[name="ba-editor-mode"]');
+    if (m && m.content) MODE = m.content;
+    document.documentElement.dataset.baEditor = MODE;
     var theme = document.querySelector('meta[name="ba-theme"]');
     if (theme && theme.content) {
       document.documentElement.dataset.rfTheme = theme.content;
@@ -136,9 +140,13 @@
     document.documentElement.dataset.baReady = "1";
     // Tell Python the editor body is ready to be revealed — this drops
     // the open-time curtain that addcard_embed.open_inline put up to
-    // hide the webview's load-time white flash. Wrapped in try since
-    // pycmd may not be available in every embedding context.
-    try { pycmd("ba:embed-ready"); } catch (_) {}
+    // hide the webview's load-time white flash. Browse has its own
+    // curtain logic (keyed off the webview's loadFinished), so the cmd
+    // is only meaningful in Add. Wrapped in try since pycmd may not be
+    // available in every embedding context.
+    if (MODE === "add") {
+      try { pycmd("ba:embed-ready"); } catch (_) {}
+    }
   }
   function settleAndReveal() {
     var ok = true;

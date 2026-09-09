@@ -1,7 +1,13 @@
-/* Anki Design — Add Card editor webview overlay.
+/* Anki Design — note-editor webview overlay (shared: Add + Browse).
  *
- * Restyles the Svelte note editor *only* when running inside the AddCards
- * window (data-ba-editor="add"). Anki's own editor.css uses Bootstrap-ish
+ * Restyles the Svelte note editor wherever we own it — the AddCards window
+ * (`html[data-ba-editor="add"]`) and the Browse tab's editor pane
+ * (`"browse"`). Every rule here keys off the bare `[data-ba-editor]`
+ * attribute, so it applies to both; mode-specific deltas live in
+ * browse-editor.css. Edit-Current never gets the attribute, so Anki's own
+ * editor chrome is left alone there.
+ *
+ * Anki's own editor.css uses Bootstrap-ish
  * tokens; we override the visible surface to match the editorial chrome.
  *
  * Svelte components carry hashed class suffixes (.editor-toolbar.svelte-1jmvn33);
@@ -10,7 +16,7 @@
  */
 
 /* ---------- Design tokens ---------- */
-html[data-ba-editor="add"] {
+html[data-ba-editor] {
   --ba-paper: #f6f3ec;
   --ba-panel: #fbf9f3;
   --ba-field: #ffffff;
@@ -27,7 +33,7 @@ html[data-ba-editor="add"] {
 }
 
 @media (prefers-color-scheme: dark) {
-  html[data-ba-editor="add"]:not([data-rf-theme="light"]) {
+  html[data-ba-editor]:not([data-rf-theme="light"]) {
     --ba-paper: #0b0c0f;
     --ba-panel: #15171c;
     --ba-field: #15171c;
@@ -39,7 +45,7 @@ html[data-ba-editor="add"] {
     --ba-hover: rgba(236, 234, 226, 0.05);
   }
 }
-html[data-ba-editor="add"][data-rf-theme="dark"] {
+html[data-ba-editor][data-rf-theme="dark"] {
   --ba-paper: #0b0c0f;
   --ba-panel: #15171c;
   --ba-field: #15171c;
@@ -60,7 +66,7 @@ html[data-ba-editor="add"][data-rf-theme="dark"] {
    variables keeps the field readable regardless of which mode Anki is
    in. CSS variables inherit across shadow DOM boundaries, so this
    reaches inside the Svelte rich-text-input / plain-text-input. */
-html[data-ba-editor="add"] {
+html[data-ba-editor] {
   --fg: var(--ba-ink);
   --fg-subtle: var(--ba-ink-faint);
   --fg-disabled: var(--ba-ink-faint);
@@ -77,19 +83,19 @@ html[data-ba-editor="add"] {
   --border-strong: var(--ba-ink-faint);
 }
 
-html[data-ba-editor="add"], html[data-ba-editor="add"] body {
+html[data-ba-editor], html[data-ba-editor] body {
   background: var(--ba-paper) !important;
   color: var(--ba-ink) !important;
   font-family: var(--ba-sans) !important;
 }
 
-html[data-ba-editor="add"] .note-editor {
+html[data-ba-editor] .note-editor {
   background: var(--ba-paper) !important;
   color: var(--ba-ink) !important;
 }
 
-html[data-ba-editor="add"] .mathjax-overlay:empty,
-html[data-ba-editor="add"] .image-overlay:empty {
+html[data-ba-editor] .mathjax-overlay:empty,
+html[data-ba-editor] .image-overlay:empty {
   display: none !important;
 }
 
@@ -103,14 +109,14 @@ html[data-ba-editor="add"] .image-overlay:empty {
  *      block on .button-toolbar below for the spec-level reason this is
  *      `overflow-x: clip` rather than `overflow-x: auto`.
  */
-html[data-ba-editor="add"] .editor-toolbar {
+html[data-ba-editor] .editor-toolbar {
   background: var(--ba-panel) !important;
   border-bottom: 1px solid var(--ba-line) !important;
   padding: 0 !important;
   overflow: visible !important;
   box-shadow: none !important;
 }
-html[data-ba-editor="add"] .button-toolbar.btn-toolbar {
+html[data-ba-editor] .button-toolbar.btn-toolbar {
   gap: 2px !important;
   --buttons-size: 1.85rem !important;
   --buttons-wrap: nowrap !important;
@@ -132,23 +138,23 @@ html[data-ba-editor="add"] .button-toolbar.btn-toolbar {
   scrollbar-width: thin;
   -ms-overflow-style: none;
 }
-html[data-ba-editor="add"] .button-toolbar.btn-toolbar::-webkit-scrollbar {
+html[data-ba-editor] .button-toolbar.btn-toolbar::-webkit-scrollbar {
   height: 6px;
 }
-html[data-ba-editor="add"] .button-toolbar.btn-toolbar::-webkit-scrollbar-thumb {
+html[data-ba-editor] .button-toolbar.btn-toolbar::-webkit-scrollbar-thumb {
   background: var(--ba-line-strong);
   border-radius: 3px;
 }
-html[data-ba-editor="add"] .button-toolbar.btn-toolbar::-webkit-scrollbar-thumb:hover {
+html[data-ba-editor] .button-toolbar.btn-toolbar::-webkit-scrollbar-thumb:hover {
   background: var(--ba-ink-faint);
 }
-html[data-ba-editor="add"] .button-toolbar.btn-toolbar::-webkit-scrollbar-track {
+html[data-ba-editor] .button-toolbar.btn-toolbar::-webkit-scrollbar-track {
   background: transparent;
 }
-html[data-ba-editor="add"] .button-group,
-html[data-ba-editor="add"] .button-group.btn-group,
-html[data-ba-editor="add"] .button-group-item,
-html[data-ba-editor="add"] .dynamically-slottable {
+html[data-ba-editor] .button-group,
+html[data-ba-editor] .button-group.btn-group,
+html[data-ba-editor] .button-group-item,
+html[data-ba-editor] .dynamically-slottable {
   background: transparent !important;
   border: 0 !important;
   border-radius: 6px !important;
@@ -157,7 +163,7 @@ html[data-ba-editor="add"] .dynamically-slottable {
   box-shadow: none !important;
   flex-shrink: 0 !important;
 }
-html[data-ba-editor="add"] .dynamically-slottable {
+html[data-ba-editor] .dynamically-slottable {
   display: flex !important;
   align-items: center !important;
   flex-wrap: nowrap !important;
@@ -166,7 +172,7 @@ html[data-ba-editor="add"] .dynamically-slottable {
 /* Every toolbar control is a 30×30 square. Icon SVG is centered at 16px
    so the hover box always fully encloses the icon — no more "icon hanging
    out the top of its hover halo". */
-html[data-ba-editor="add"] .icon-button {
+html[data-ba-editor] .icon-button {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
@@ -187,7 +193,7 @@ html[data-ba-editor="add"] .icon-button {
 }
 /* Label buttons (Fields, Cards, color value, etc.) — sit on the same 30px
    row baseline as icon buttons but auto-width for their text. */
-html[data-ba-editor="add"] .label-button {
+html[data-ba-editor] .label-button {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
@@ -205,20 +211,20 @@ html[data-ba-editor="add"] .label-button {
   box-shadow: none !important;
   line-height: 1 !important;
 }
-html[data-ba-editor="add"] .icon-button:hover,
-html[data-ba-editor="add"] .label-button:hover {
+html[data-ba-editor] .icon-button:hover,
+html[data-ba-editor] .label-button:hover {
   background: var(--ba-hover) !important;
   color: var(--ba-ink) !important;
 }
-html[data-ba-editor="add"] .icon-button[aria-pressed="true"],
-html[data-ba-editor="add"] .icon-button.active {
+html[data-ba-editor] .icon-button[aria-pressed="true"],
+html[data-ba-editor] .icon-button.active {
   background: color-mix(in srgb, var(--ba-accent) 14%, transparent) !important;
   color: var(--ba-accent) !important;
 }
 /* Uniform SVG size — defeats the original Anki sizing scheme that left
    superscript/lists/align noticeably smaller than B/I/U. */
-html[data-ba-editor="add"] .icon-button svg,
-html[data-ba-editor="add"] .label-button svg {
+html[data-ba-editor] .icon-button svg,
+html[data-ba-editor] .label-button svg {
   fill: currentColor !important;
   width: 16px !important;
   height: 16px !important;
@@ -232,16 +238,16 @@ html[data-ba-editor="add"] .label-button svg {
    - pull them flush against the preceding button-group-item so they
      visually read as "the dropdown side of that swatch", not a separate
      button. The selector uses :has() which the Qt6 WebEngine supports. */
-html[data-ba-editor="add"] .icon-button:has(svg#mdi-chevron-down) {
+html[data-ba-editor] .icon-button:has(svg#mdi-chevron-down) {
   width: 22px !important;
   min-width: 22px !important;
   padding: 0 !important;
 }
-html[data-ba-editor="add"] .icon-button:has(svg#mdi-chevron-down) svg {
+html[data-ba-editor] .icon-button:has(svg#mdi-chevron-down) svg {
   width: 12px !important;
   height: 12px !important;
 }
-html[data-ba-editor="add"]
+html[data-ba-editor]
   .button-group-item:has(.icon-button > * svg#mdi-chevron-down) {
   margin-left: -2px !important;
 }
@@ -256,7 +262,7 @@ html[data-ba-editor="add"]
    Easier: rely on the data-tooltip attribute (Anki sets it) and font-size
    hack. Cleanest reliable approach is a JS shim that swaps the text at
    load time — done in addcard.js. CSS here just normalizes the styling. */
-html[data-ba-editor="add"] #notetype .label-button {
+html[data-ba-editor] #notetype .label-button {
   font-style: normal !important;
   font-family: var(--ba-sans) !important;
   color: var(--ba-ink-faint) !important;
@@ -264,13 +270,13 @@ html[data-ba-editor="add"] #notetype .label-button {
   font-weight: 500 !important;
   letter-spacing: 0.1px !important;
 }
-html[data-ba-editor="add"] #notetype .label-button:hover {
+html[data-ba-editor] #notetype .label-button:hover {
   color: var(--ba-ink) !important;
   background: var(--ba-hover) !important;
 }
 /* Gear: push to the very end via flex order. */
-html[data-ba-editor="add"] .item#settings { order: 99 !important; }
-html[data-ba-editor="add"] .item#notetype { order: -1 !important; }
+html[data-ba-editor] .item#settings { order: 99 !important; }
+html[data-ba-editor] .item#notetype { order: -1 !important; }
 /* Dropdown panels (Popper-based "floating" elements). Anki's stylesheet
    already puts them at z-index 890 — high enough to clear the sidebar
    (z-index 50) and the editor's own canvas-elevated chrome (z-index 60).
@@ -280,9 +286,9 @@ html[data-ba-editor="add"] .item#notetype { order: -1 !important; }
    IMPORTANT: don't add a background/border unconditionally — when the panel
    is closed it's still in the DOM and our styles would draw a visible
    "circle" around every chevron-button in the toolbar. */
-html[data-ba-editor="add"] .floating[data-show],
-html[data-ba-editor="add"] .floating[style*="display: block"],
-html[data-ba-editor="add"] .floating[style*="display:flex"] {
+html[data-ba-editor] .floating[data-show],
+html[data-ba-editor] .floating[style*="display: block"],
+html[data-ba-editor] .floating[style*="display:flex"] {
   background: var(--ba-panel) !important;
   border: 1px solid var(--ba-line-strong) !important;
   border-radius: 10px !important;
@@ -291,7 +297,7 @@ html[data-ba-editor="add"] .floating[style*="display:flex"] {
 }
 
 /* ---------- Fields ---------- */
-html[data-ba-editor="add"] .fields {
+html[data-ba-editor] .fields {
   background: var(--ba-paper) !important;
   padding: 18px 28px 4px 28px !important;
 }
@@ -300,7 +306,7 @@ html[data-ba-editor="add"] .fields {
    `moveTagsIntoFields`) so it sits immediately below BACK without
    needing to fight Anki's nested flex-grow chain — which collapsed
    the field-input columns when killed at the top. */
-html[data-ba-editor="add"] .field-container {
+html[data-ba-editor] .field-container {
   background: transparent !important;
   border: 0 !important;
   margin-bottom: 14px !important;
@@ -310,12 +316,12 @@ html[data-ba-editor="add"] .field-container {
 /* Field label — small uppercase sans, like a section subhead. Quiet at
    rest, accent on focus. Sans-serif at this small size reads better than
    italic-serif (which felt unreadable). */
-html[data-ba-editor="add"] .label-container {
+html[data-ba-editor] .label-container {
   padding: 0 4px 5px 4px !important;
   border: 0 !important;
   background: transparent !important;
 }
-html[data-ba-editor="add"] .label-container .label-name {
+html[data-ba-editor] .label-container .label-name {
   font-family: var(--ba-sans) !important;
   font-style: normal !important;
   font-size: 9.5pt !important;
@@ -325,40 +331,40 @@ html[data-ba-editor="add"] .label-container .label-name {
   color: var(--ba-ink-faint) !important;
   transition: color 160ms ease;
 }
-html[data-ba-editor="add"] .field-container:focus-within .label-name {
+html[data-ba-editor] .field-container:focus-within .label-name {
   color: var(--ba-accent) !important;
 }
 /* Hide the chevron — fields aren't collapsible in the add window. */
-html[data-ba-editor="add"] .collapse-badge {
+html[data-ba-editor] .collapse-badge {
   display: none !important;
 }
 
 /* Field state icons (sticky pin, HTML edit) — hover only. */
-html[data-ba-editor="add"] .field-state {
+html[data-ba-editor] .field-state {
   opacity: 0;
   transition: opacity 180ms ease;
   pointer-events: none;
 }
-html[data-ba-editor="add"] .field-container:hover .field-state {
+html[data-ba-editor] .field-container:hover .field-state {
   opacity: 0.55;
   pointer-events: auto;
 }
-html[data-ba-editor="add"] .field-container:hover .field-state:hover,
-html[data-ba-editor="add"] .field-state:focus-within {
+html[data-ba-editor] .field-container:hover .field-state:hover,
+html[data-ba-editor] .field-state:focus-within {
   opacity: 1;
 }
-html[data-ba-editor="add"] .field-state svg,
-html[data-ba-editor="add"] .field-state .badge svg {
+html[data-ba-editor] .field-state svg,
+html[data-ba-editor] .field-state .badge svg {
   width: 12px !important;
   height: 12px !important;
   fill: var(--ba-ink-faint) !important;
 }
-html[data-ba-editor="add"] .field-state .badge {
+html[data-ba-editor] .field-state .badge {
   background: transparent !important;
   border: 0 !important;
   padding: 4px !important;
 }
-html[data-ba-editor="add"] .field-state .badge:hover {
+html[data-ba-editor] .field-state .badge:hover {
   background: var(--ba-hover) !important;
   border-radius: 6px !important;
 }
@@ -370,29 +376,29 @@ html[data-ba-editor="add"] .field-state .badge:hover {
    which stack into a visible double-border. Strip them all and paint a
    single border on .editor-field (the outermost wrapper). Focus inside
    the rich-text-editable propagates :focus-within all the way up. */
-html[data-ba-editor="add"] .editor-field,
-html[data-ba-editor="add"] .editing-area,
-html[data-ba-editor="add"] .rich-text-input,
-html[data-ba-editor="add"] .rich-text-relative,
-html[data-ba-editor="add"] .rich-text-editable,
-html[data-ba-editor="add"] .plain-text-input {
+html[data-ba-editor] .editor-field,
+html[data-ba-editor] .editing-area,
+html[data-ba-editor] .rich-text-input,
+html[data-ba-editor] .rich-text-relative,
+html[data-ba-editor] .rich-text-editable,
+html[data-ba-editor] .plain-text-input {
   background: transparent !important;
   border: 0 !important;
   box-shadow: none !important;
   outline: none !important;
 }
-html[data-ba-editor="add"] .editor-field {
+html[data-ba-editor] .editor-field {
   background: var(--ba-field) !important;
   border: 1px solid var(--ba-line) !important;
   border-radius: var(--ba-radius) !important;
   overflow: hidden !important;
   transition: border-color 160ms ease, background 160ms ease;
 }
-html[data-ba-editor="add"] .editor-field:focus-within {
+html[data-ba-editor] .editor-field:focus-within {
   border-color: var(--ba-accent) !important;
 }
-html[data-ba-editor="add"] .rich-text-editable,
-html[data-ba-editor="add"] .plain-text-input {
+html[data-ba-editor] .rich-text-editable,
+html[data-ba-editor] .plain-text-input {
   padding: 10px 14px !important;
   min-height: 22px !important;
   font-family: var(--ba-serif) !important;
@@ -403,7 +409,7 @@ html[data-ba-editor="add"] .plain-text-input {
   border: 0 !important;
   outline: none !important;
 }
-html[data-ba-editor="add"] .rich-text-editable.empty::before {
+html[data-ba-editor] .rich-text-editable.empty::before {
   font-family: var(--ba-sans) !important;
   font-style: normal !important;
   font-size: 11.5pt !important;
@@ -411,13 +417,13 @@ html[data-ba-editor="add"] .rich-text-editable.empty::before {
   opacity: 0.85;
   pointer-events: none;
 }
-html[data-ba-editor="add"] .field-container[data-index="0"] .rich-text-editable.empty::before {
+html[data-ba-editor] .field-container[data-index="0"] .rich-text-editable.empty::before {
   content: "Front of the card";
 }
-html[data-ba-editor="add"] .field-container[data-index="1"] .rich-text-editable.empty::before {
+html[data-ba-editor] .field-container[data-index="1"] .rich-text-editable.empty::before {
   content: "Back of the card";
 }
-html[data-ba-editor="add"] .field-container:not([data-index="0"]):not([data-index="1"]) .rich-text-editable.empty::before {
+html[data-ba-editor] .field-container:not([data-index="0"]):not([data-index="1"]) .rich-text-editable.empty::before {
   content: "Optional";
 }
 
@@ -437,8 +443,8 @@ html[data-ba-editor="add"] .field-container:not([data-index="0"]):not([data-inde
  * is "Collapse field" / "Expand field". The tag label uses title="Collapse"
  * / "Expand". We scope by title, which is the only stable discriminator.
  */
-html[data-ba-editor="add"] .collapse-label[title="Collapse"],
-html[data-ba-editor="add"] .collapse-label[title="Expand"] {
+html[data-ba-editor] .collapse-label[title="Collapse"],
+html[data-ba-editor] .collapse-label[title="Expand"] {
   display: flex !important;
   align-items: center !important;
   justify-content: flex-start !important;
@@ -463,8 +469,8 @@ html[data-ba-editor="add"] .collapse-label[title="Expand"] {
   cursor: default !important;
   pointer-events: none !important;  /* can't be clicked to collapse */
 }
-html[data-ba-editor="add"] .collapse-label[title="Collapse"]::before,
-html[data-ba-editor="add"] .collapse-label[title="Expand"]::before {
+html[data-ba-editor] .collapse-label[title="Collapse"]::before,
+html[data-ba-editor] .collapse-label[title="Expand"]::before {
   content: "TAGS";
   font-size: 9.5pt;
   font-weight: 600;
@@ -479,10 +485,10 @@ html[data-ba-editor="add"] .collapse-label[title="Expand"]::before {
    a background and a shadow during the "measuring" phase that read as a
    ghostly outlined box around the tag area (the "weird border" the user
    kept seeing). Nuke everything to be transparent. */
-html[data-ba-editor="add"] .collapsible:has(.tag-editor),
-html[data-ba-editor="add"] .collapsible:has(.tag-editor).measuring,
-html[data-ba-editor="add"] .collapsible:has(.tag-editor).full-hide,
-html[data-ba-editor="add"] .collapsible:has(.tag-editor).hidden {
+html[data-ba-editor] .collapsible:has(.tag-editor),
+html[data-ba-editor] .collapsible:has(.tag-editor).measuring,
+html[data-ba-editor] .collapsible:has(.tag-editor).full-hide,
+html[data-ba-editor] .collapsible:has(.tag-editor).hidden {
   display: block !important;
   height: auto !important;
   max-height: none !important;
@@ -502,16 +508,16 @@ html[data-ba-editor="add"] .collapsible:has(.tag-editor).hidden {
 /* Tag editor row — render exactly like a field input box, aligned to
    the same 28px left/right gutter as .fields. Strip default chrome so
    nothing draws a phantom outline. */
-html[data-ba-editor="add"] .tag-editor,
-html[data-ba-editor="add"] .tag-spacer,
-html[data-ba-editor="add"] .tag-editor svelte-css-wrapper {
+html[data-ba-editor] .tag-editor,
+html[data-ba-editor] .tag-spacer,
+html[data-ba-editor] .tag-editor svelte-css-wrapper {
   background: transparent !important;
   border: 0 !important;
   border-radius: 0 !important;
   box-shadow: none !important;
   outline: none !important;
 }
-html[data-ba-editor="add"] .tag-editor {
+html[data-ba-editor] .tag-editor {
   padding: 0 28px 18px 28px !important;
   margin: 0 !important;
   display: flex !important;
@@ -522,8 +528,8 @@ html[data-ba-editor="add"] .tag-editor {
 /* Hide the leading "tag-options-button" cluster — that's the tag icon plus
    the tag-plus button bundled inelegantly. Tags are added via typing into
    the field; no extra icon needed. */
-html[data-ba-editor="add"] .tag-options-button,
-html[data-ba-editor="add"] .tag-add-button {
+html[data-ba-editor] .tag-options-button,
+html[data-ba-editor] .tag-add-button {
   display: none !important;
 }
 
@@ -534,7 +540,7 @@ html[data-ba-editor="add"] .tag-add-button {
    just a flat surface with the placeholder text aligned to the same
    gutter as the field contents above. Chips, when present, sit inline.
    No visible chrome. */
-html[data-ba-editor="add"] .tag-spacer {
+html[data-ba-editor] .tag-spacer {
   flex: 1;
   min-height: 28px !important;
   padding: 4px 0 !important;
@@ -554,7 +560,7 @@ html[data-ba-editor="add"] .tag-spacer {
 }
 /* Placeholder shown only when there are no tags AND not focused. Quiet
    ink-faint so the row doesn't shout when empty. */
-html[data-ba-editor="add"] .tag-editor:not(:focus-within):not(:has(.tag)) .tag-spacer::before {
+html[data-ba-editor] .tag-editor:not(:focus-within):not(:has(.tag)) .tag-spacer::before {
   content: "Add tags";
   font-family: var(--ba-sans);
   font-size: 11pt;
@@ -563,7 +569,7 @@ html[data-ba-editor="add"] .tag-editor:not(:focus-within):not(:has(.tag)) .tag-s
   pointer-events: none;
 }
 /* Tag chips. */
-html[data-ba-editor="add"] .tag {
+html[data-ba-editor] .tag {
   background: color-mix(in srgb, var(--ba-accent) 14%, transparent) !important;
   color: var(--ba-accent) !important;
   border-radius: 999px !important;
@@ -575,8 +581,8 @@ html[data-ba-editor="add"] .tag {
 }
 
 /* CodeMirror (plain-text mode). */
-html[data-ba-editor="add"] .code-mirror,
-html[data-ba-editor="add"] .CodeMirror {
+html[data-ba-editor] .code-mirror,
+html[data-ba-editor] .CodeMirror {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace !important;
   font-size: 11.5pt !important;
   background: var(--ba-field) !important;
@@ -584,17 +590,17 @@ html[data-ba-editor="add"] .CodeMirror {
 }
 
 /* Scrollbars. */
-html[data-ba-editor="add"] ::-webkit-scrollbar {
+html[data-ba-editor] ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
-html[data-ba-editor="add"] ::-webkit-scrollbar-thumb {
+html[data-ba-editor] ::-webkit-scrollbar-thumb {
   background: var(--ba-line-strong);
   border-radius: 5px;
 }
-html[data-ba-editor="add"] ::-webkit-scrollbar-thumb:hover {
+html[data-ba-editor] ::-webkit-scrollbar-thumb:hover {
   background: var(--ba-ink-faint);
 }
-html[data-ba-editor="add"] ::-webkit-scrollbar-track {
+html[data-ba-editor] ::-webkit-scrollbar-track {
   background: transparent;
 }

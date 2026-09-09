@@ -1,0 +1,55 @@
+/* Anki Design — Browse tab editor-pane deltas.
+ *
+ * addcard.css does the work (it applies to any `html[data-ba-editor]`);
+ * this file only adjusts for the fact that the Browse editor is a *pane*
+ * rather than a window: it's narrower, it sits directly under the
+ * rendered-card preview, and it isn't the primary thing on screen.
+ *
+ * Loaded after addcard.css, so plain specificity ties are broken in our
+ * favour by source order; `!important` is used only where addcard.css
+ * already used it (Anki's own editor.css is full of !important and this
+ * whole layer has to out-shout it).
+ */
+
+/* Tighter gutters: 28px of side padding reads generous in a 700px Add
+   window and cramped-and-wasteful in a 460px pane. */
+html[data-ba-editor="browse"] .fields {
+  padding: 14px 20px 4px 20px !important;
+}
+html[data-ba-editor="browse"] .fields > .collapse-label,
+html[data-ba-editor="browse"] .fields > .collapsible {
+  padding-left: 24px !important;
+  padding-right: 24px !important;
+}
+html[data-ba-editor="browse"] .field-container {
+  margin-bottom: 11px !important;
+}
+
+/* The toolbar is a strip of tools for a pane you glance at, not the
+   surface you compose in — pull it in and let it sit quieter. */
+html[data-ba-editor="browse"] .editor-toolbar,
+html[data-ba-editor="browse"] .button-toolbar {
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+}
+
+/* No top rule: the pane's own hairline (the vertical splitter above,
+   drawn in Qt) already separates it from the rendered card. A second
+   line here reads as a double border. */
+html[data-ba-editor="browse"] body {
+  border-top: 0 !important;
+}
+
+/* Field labels one notch smaller — there are usually more of them
+   visible here than in Add, and they're reference, not instruction. */
+html[data-ba-editor="browse"] .label-container .label-name {
+  font-size: 8.8pt !important;
+  letter-spacing: 1.05px !important;
+}
+
+/* Rich-text inputs: slightly tighter leading so more of the note fits
+   before the pane scrolls. */
+html[data-ba-editor="browse"] .rich-text-editable,
+html[data-ba-editor="browse"] .plain-text-input {
+  line-height: 1.45 !important;
+}
