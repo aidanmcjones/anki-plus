@@ -18,6 +18,15 @@ All notable changes to Anki Design are documented here. Format loosely follows
   rules, fitted to the pane instead of the window.
 
 ### Added
+- **Randomize Set** and **Cue…** in the reviewer's More menu. Randomize
+  shuffles everything you'd study today in the current deck into one
+  random queue. Cue lists the tags actually present in that deck —
+  nested tags as submenus, and picking a parent cues its children with
+  it — and turns any of them into an immediate study queue. Both build a
+  rescheduling filtered deck, so answers count as normal reviews;
+  starting one now also returns the cards from the previous queue
+  instead of leaving them stranded where nothing else can reach them.
+  Switch off with **reviewer_menu_extras**.
 - **The Browse tab now looks like the rest of the app.** The card table,
   column headers, sidebar tree, search bar, splitters and scrollbars are
   painted from the same palette as the deck list — paper background,

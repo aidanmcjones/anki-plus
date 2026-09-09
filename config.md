@@ -52,6 +52,15 @@ in this file are the raw form the settings page writes.
 - **click_to_reveal** — clicking the card shows the answer.
 - **press_feedback** — the bloom animation when grading.
 - **inline_edit** — `E` edits fields in place; `false` opens Anki's editor.
+- **reviewer_menu_extras** — two extra items in the reviewer's **More**
+  menu. **Randomize Set** shuffles everything you'd study today in the
+  current deck into one random queue; **Cue…** lists the tags actually
+  present in that deck and turns any of them into an immediate study
+  queue (picking a parent tag cues its children with it). Both build a
+  rescheduling filtered deck — `Study: Mix`, or `Study: <tag>` — so your
+  answers count exactly as normal reviews do, and re-running one
+  refreshes that deck instead of making another. Suspended and buried
+  cards are left out. `false` leaves Anki's More menu untouched.
 
 ## Windows
 - **cmdk** — the ⌘K / Ctrl+K command palette.

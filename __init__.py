@@ -1409,15 +1409,71 @@ _STUDY_STATE_SPECS = {
 
 
 def _study_state(kind: str) -> None:
-    """Cross-deck one-click study for a sidebar total (Due/New/Learning).
-
-    Reuses-or-creates the filtered deck named for the queue, rebuilds it,
-    and enters review. Empty queues surface as a tooltip, not a traceback.
-    """
+    """Cross-deck one-click study for a sidebar total (Due/New/Learning)."""
     spec = _STUDY_STATE_SPECS.get(kind)
     if spec is None:
         return
     name, search, order_name = spec
+    build_study_deck(name, search, order_name, log_tag=f"study-state {kind}")
+
+
+STUDY_DECK_PREFIX = "Study: "
+
+
+def _release_study_decks(col: Any, keep: int = 0) -> int:
+    """Send the cards in our other study queues home before building a new
+    one.
+
+    A card can only live in one filtered deck at a time, and Anki's search
+    silently skips cards that are already in one. Without this, "Randomize
+    Set" followed by "Cue: Type::Chart" fails with `FilteredDeckError` —
+    every card it wants is sitting in `Study: Mix` — and the user is told
+    there are no cards with that tag, which is both wrong and baffling.
+
+    These queues are transient by design, so keeping exactly one alive is
+    also the honest model: you are studying one thing at a time, and a
+    stale queue otherwise hides its cards from every later one. Only decks
+    we named (`Study: …`, and dynamic) are touched.
+    """
+    released = 0
+    try:
+        for entry in col.decks.all_names_and_ids():
+            if entry.id == keep or not entry.name.startswith(STUDY_DECK_PREFIX):
+                continue
+            deck = col.decks.get(entry.id)
+            if not deck or not deck.get("dyn"):
+                continue
+            try:
+                col.sched.empty_filtered_deck(entry.id)
+                released += 1
+            except Exception as exc:
+                _dev_cmd_log(f"release {entry.name}: {exc!r}")
+    except Exception as exc:
+        _dev_cmd_log(f"release study decks: {exc!r}")
+    return released
+
+
+def build_study_deck(
+    name: str,
+    search: str,
+    order_name: str = "DUE",
+    log_tag: str = "study-deck",
+    empty_message: str = "Nothing to study there right now",
+) -> None:
+    """Build (or rebuild) a rescheduling filtered deck and enter review.
+
+    The one place in the add-on that creates study queues: the sidebar's
+    Due/New/Learning totals, and the reviewer's Randomize / Cue menu items
+    (see reviewer_menu.py). `reschedule = True` throughout, mirroring
+    custom study's cram kinds in rslib's custom_study.rs, so answers count
+    exactly as normal reviews would rather than being thrown away.
+
+    Reuses the deck of the same name if it already exists, so repeated use
+    refreshes one queue instead of littering the deck list. An empty
+    result surfaces as a tooltip, not a traceback.
+
+    Any *other* queue we own is emptied first — see `_release_study_decks`.
+    """
     try:
         from anki.decks import DeckId, FilteredDeckConfig
         from aqt.operations import QueryOp
@@ -1439,6 +1495,7 @@ def _study_state(kind: str) -> None:
             return
     target = DeckId(existing or 0)
     order = getattr(FilteredDeckConfig.SearchTerm.Order, order_name)
+    _release_study_decks(col, keep=existing or 0)
 
     def on_fetched(update) -> None:
         update.name = name
@@ -1455,9 +1512,9 @@ def _study_state(kind: str) -> None:
 
         def on_failure(exc: Exception) -> None:
             # Typically FilteredDeckError: the search returned no cards.
-            _dev_cmd_log(f"study-state {kind}: {exc!r}")
+            _dev_cmd_log(f"{log_tag}: {exc!r}")
             try:
-                tooltip("Nothing to study there right now", parent=mw)
+                tooltip(empty_message, parent=mw)
             except Exception:
                 pass
 
@@ -2716,6 +2773,16 @@ try:
         _browse_style.on_browser_will_build_tree
     )
     gui_hooks.theme_did_change.append(_browse_style.on_theme_did_change)
+except Exception:
+    pass
+
+# Reviewer "More" menu: Randomize Set + the Cue… tag submenu.
+try:
+    from . import reviewer_menu as _reviewer_menu
+
+    gui_hooks.reviewer_will_show_context_menu.append(
+        _reviewer_menu.on_will_show_context_menu
+    )
 except Exception:
     pass
 

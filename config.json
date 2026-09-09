@@ -24,6 +24,7 @@
   "press_feedback": true,
   "inline_edit": true,
   "show_progress": true,
+  "reviewer_menu_extras": true,
   "cmdk": true,
   "embed_add": true,
   "embed_browse": true,
