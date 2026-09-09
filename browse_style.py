@@ -28,6 +28,7 @@ Design notes
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional
 
 from aqt import gui_hooks, mw
@@ -326,7 +327,11 @@ QTreeView {{
     padding: 4px 4px 4px 0;
     font-family: {_addcard.SANS};
     font-size: 10.5pt;
-    show-decoration-selected: 1;
+    /* 0, not 1: the selection is a contained pill around the label, so it
+       must stop at the item and never bleed left into the chevron gutter
+       (which is where Qt's own bright highlight showed up, boxing the
+       expand arrow in accent blue). */
+    show-decoration-selected: 0;
 }}
 QTreeView::item {{
     border: 0;
@@ -344,17 +349,113 @@ QTreeView::item:selected:!active {{
     background: {sel_bg};
     color: {sel_fg};
 }}
-QTreeView::branch {{ background: transparent; }}
+{_branch_qss(p)}
 {_scrollbars(p)}
 """
 
 
 def _chevron(name: str = "chevron-down.svg") -> str:
-    import os
-
     return os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "web", name
     ).replace(os.sep, "/")
+
+
+# The stroke colour baked into the shipped web/chevron-*.svg files. We
+# swap it for a palette colour when tinting; if the assets are ever
+# re-drawn, this is the one string that has to keep matching.
+_CHEVRON_STROKE = "#7a7468"
+_icon_cache: Dict[tuple, str] = {}
+
+
+def _tinted_chevron(name: str, color: str) -> str:
+    """`web/<name>` re-stroked in `color`, written to a temp file, path
+    returned for QSS `url()`.
+
+    Qt's stylesheet engine can't recolour an SVG — no `currentColor`, no
+    filters, no palette binding — so a themed chevron means one file per
+    (direction × theme × hover) combination. Rather than check eight
+    near-identical assets into `web/`, we keep the single shipped shape as
+    the source of truth and tint it at runtime. That also means the
+    chevrons follow a custom accent or background override, not just
+    light/dark.
+
+    Falls back to the untinted asset if anything goes wrong — a slightly
+    off-tone chevron beats no chevron, which is the bug this fixes."""
+    key = (name, color)
+    cached = _icon_cache.get(key)
+    if cached and os.path.exists(cached):
+        return cached
+    src = _chevron(name)
+    try:
+        import tempfile
+
+        with open(src, "r", encoding="utf-8") as fh:
+            svg = fh.read()
+        svg = svg.replace(_CHEVRON_STROKE, color)
+        out_dir = os.path.join(tempfile.gettempdir(), "anki-design-icons")
+        os.makedirs(out_dir, exist_ok=True)
+        stem = name.rsplit(".", 1)[0]
+        out = os.path.join(
+            out_dir, f"{stem}-{color.lstrip('#').replace(',', '').replace('(', '')}.svg"
+        )
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write(svg)
+        _icon_cache[key] = out.replace(os.sep, "/")
+        return _icon_cache[key]
+    except Exception:
+        return src
+
+
+def _branch_qss(p: Dict[str, str]) -> str:
+    """Expand/collapse chevrons for the sidebar tree.
+
+    Styling *anything* on `QTreeView::branch` makes Qt hand branch
+    painting over to the stylesheet, which then draws nothing unless an
+    `image` is supplied — so the innocuous-looking
+    `QTreeView::branch { background: transparent }` that killed the box
+    hover also silently removed every expand arrow. The rules below put
+    them back in the deck list's idiom: a hairline chevron, right when
+    closed and down when open, ink-faint at rest and ink-dim under the
+    cursor, with no box behind it.
+
+    Qt splits "has children" across two selectors depending on whether the
+    row also has siblings, and both have to be spelled out."""
+    rest_r = _tinted_chevron("chevron-right.svg", p["ink_faint"])
+    rest_d = _tinted_chevron("chevron-down.svg", p["ink_faint"])
+    hot_r = _tinted_chevron("chevron-right.svg", p["ink_dim"])
+    hot_d = _tinted_chevron("chevron-down.svg", p["ink_dim"])
+    return f"""
+QTreeView::branch {{
+    background: transparent;
+    border-image: none;
+    image: none;
+}}
+/* Background only — never `image`, or these would out-rank nothing but
+   would still need re-stating below. Keeps the gutter clear of the
+   selection and hover fills. */
+QTreeView::branch:selected, QTreeView::branch:hover,
+QTreeView::branch:selected:active, QTreeView::branch:selected:!active {{
+    background: transparent;
+}}
+QTreeView::branch:has-children:!has-siblings:closed,
+QTreeView::branch:closed:has-children:has-siblings {{
+    border-image: none;
+    image: url({rest_r});
+}}
+QTreeView::branch:open:has-children:!has-siblings,
+QTreeView::branch:open:has-children:has-siblings {{
+    border-image: none;
+    image: url({rest_d});
+}}
+QTreeView::branch:has-children:!has-siblings:closed:hover,
+QTreeView::branch:closed:has-children:has-siblings:hover {{
+    image: url({hot_r});
+}}
+QTreeView::branch:open:has-children:!has-siblings:hover,
+QTreeView::branch:open:has-children:has-siblings:hover {{
+    image: url({hot_d});
+}}
+"""
 
 
 # --------------------------------------------------------------------------- #
@@ -530,7 +631,9 @@ def _patch_sidebar_style(browser: Any, p: Dict[str, str], is_dark: bool,
 
     _setup_style()
     try:
-        sidebar.setIndentation(14)
+        # 18px leaves a 3px gutter either side of the 12px chevron; at
+        # Anki's 15 the arrow crowds the label it belongs to.
+        sidebar.setIndentation(18)
         sidebar.setAnimated(True)
         sidebar.setRootIsDecorated(True)
     except Exception:
