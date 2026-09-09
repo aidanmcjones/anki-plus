@@ -22,6 +22,7 @@
   "reviewer_answer_buttons": "intervals",
   "click_to_reveal": true,
   "press_feedback": true,
+  "reviewer_hide_answer": true,
   "inline_edit": true,
   "show_progress": true,
   "reviewer_menu_extras": true,

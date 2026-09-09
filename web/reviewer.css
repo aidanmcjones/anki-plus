@@ -405,6 +405,59 @@ html:not([data-rf-cardstyle="native"]) :not(body).card {
 .ba-rv-ease-4 { --ba-key: var(--rf-easy); }
 .ba-rv-ease-key[data-default] { font-weight: 700; opacity: 1; }
 
+/* "Hide Answer" — the bottom-left corner the ease selector's centered
+   layout leaves empty. "Let me try that card again": backs out to the
+   question side of the same card, ungraded. Quiet, flat, small — same
+   typography/opacity/hover language as the ease keys above, but neutral
+   (ink-faint, not ease-colored) since it isn't a rating.
+
+   Fixed positioning, not grid-row:3 — the ease selector is centered via
+   `justify-content: center` on the full-width row, so a plain sibling
+   there would fight it for column space. Pinning to the viewport corner
+   keeps this independent of that row's layout and of card height. Shown
+   only while the answer is on screen, toggled in lockstep with the ease
+   selector by window.__baSetEase (web/reviewer.js). */
+.ba-rv-hide-answer {
+  position: fixed;
+  left: calc(20px * var(--rf-chrome-scale, 1));
+  bottom: calc(20px * var(--rf-chrome-scale, 1));
+  z-index: 50;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  cursor: pointer;
+  padding: calc(9px * var(--rf-chrome-scale, 1))
+           calc(14px * var(--rf-chrome-scale, 1));
+  margin: 0;
+  border-radius: 8px;
+  font-family: var(--rf-sans);
+  font-weight: 500;
+  font-size: calc(12px * var(--rf-chrome-scale, 1));
+  line-height: 1;
+  letter-spacing: 0;
+  color: var(--rf-ink-faint);
+  background: transparent;
+  opacity: 0.65;
+  transition: background-color 160ms ease, opacity 160ms ease, color 160ms ease;
+}
+.ba-rv-hide-answer:hover,
+.ba-rv-hide-answer:focus,
+.ba-rv-hide-answer:focus-visible,
+.ba-rv-hide-answer:active {
+  background: var(--rf-row-hover);
+  opacity: 1;
+  color: var(--rf-ink-dim);
+  outline: none;
+  box-shadow: none;
+  border: 0;
+  text-decoration: none;
+}
+.ba-rv-hide-answer[hidden] { display: none !important; }
+/* No rating mid-edit — same rule the ease selector follows. */
+body.ba-editing .ba-rv-hide-answer { display: none !important; }
+
 /* Press-feedback FX — fires when the user grades a card (keyboard 1–4 or
    click). Two layers, both position: fixed on document.body outside #qa
    so they survive Anki's card swap underneath:

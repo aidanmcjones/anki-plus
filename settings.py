@@ -1077,6 +1077,12 @@ class AnkiDesignSettingsPage(QWidget):
             "A soft bloom from the key you graded with.",
         ))
         v.addWidget(feature_row(
+            "reviewer_hide_answer", "Hide Answer button", True,
+            "A quiet button (and H) in the bottom-left corner while the "
+            "answer's showing — back out to the question, ungraded, to "
+            "try recalling it again.",
+        ))
+        v.addWidget(feature_row(
             "inline_edit", "Edit cards in place", True,
             "E edits the fields right on the card. Off opens Anki's edit "
             "window.",

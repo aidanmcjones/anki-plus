@@ -51,6 +51,10 @@ in this file are the raw form the settings page writes.
 - **show_progress** — progress strip across the top of the reviewer.
 - **click_to_reveal** — clicking the card shows the answer.
 - **press_feedback** — the bloom animation when grading.
+- **reviewer_hide_answer** — a quiet "Hide Answer" button in the bottom-left
+  corner while the answer is showing (also `H`). Returns to the question
+  side of the *same* card — nothing is graded and nothing is scheduled — so
+  you can try recalling it again. `false` removes the button and the key.
 - **inline_edit** — `E` edits fields in place; `false` opens Anki's editor.
 - **reviewer_menu_extras** — **Randomize Set** and **Cue…** in the
   reviewer's **More** menu, and **Randomize** on each deck's gear menu.

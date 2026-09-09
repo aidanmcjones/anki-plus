@@ -416,7 +416,15 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
                 ease_html = _reviewer_ease_html()
             except Exception:
                 ease_html = ""
-        web_content.body = head_html + web_content.body + ease_html
+        hide_answer_html = ""
+        if cfg.get("reviewer_hide_answer", True):
+            try:
+                hide_answer_html = _reviewer_hide_answer_html()
+            except Exception:
+                hide_answer_html = ""
+        web_content.body = (
+            head_html + web_content.body + ease_html + hide_answer_html
+        )
     if _is(context, _ToolbarCtx):
         web_content.css.append(f"{WEB}/toolbar.css")
     # Reviewer's bottom bar (Show Answer, Edit, More, answer buttons) lives
@@ -1139,6 +1147,23 @@ def _on_js_message(handled, message, context):
         elif cmd == "undo":
             try:
                 mw.undo()
+            except Exception:
+                return handled
+        elif cmd == "hide-answer":
+            # Bottom-left "Hide Answer" button / H key: back the same card
+            # out to its question side without grading it — no scheduling
+            # call is made, so this can't cost the user a review. A no-op
+            # unless we're actually on the answer side (covers a stray
+            # click/keystroke racing a card change).
+            try:
+                if not _config().get("reviewer_hide_answer", True):
+                    return handled
+                rv = getattr(mw, "reviewer", None)
+                if rv is None or getattr(rv, "card", None) is None:
+                    return handled
+                if getattr(rv, "state", "") != "answer":
+                    return handled
+                rv._showQuestion()
             except Exception:
                 return handled
         elif cmd == "flag-cycle":
@@ -2628,6 +2653,21 @@ def _reviewer_ease_html() -> str:
     )
 
 
+def _reviewer_hide_answer_html() -> str:
+    """Bottom-left "Hide Answer" control — pinned in the corner the ease
+    selector's centered layout leaves empty. Only meaningful once the
+    answer is showing ("let me try that card again"), so it starts
+    `hidden` like the ease selector and is flipped by the same
+    __baSetEase call (see web/reviewer.js), driven by the same
+    Python-side isAnswer signal from _push_progress."""
+    return (
+        '<button class="ba-rv-hide-answer" type="button" hidden'
+        ' onclick="pycmd(\'ba:hide-answer\')"'
+        ' title="Hide answer, try again (H)"'
+        ' aria-label="Hide answer">Hide Answer</button>'
+    )
+
+
 def _current_card_type() -> str:
     """A short label for the current card's note type (e.g., "Basic",
     "Cloze"). Empty when no card. Trimmed to fit the header."""
@@ -2762,12 +2802,78 @@ def _push_progress() -> None:
         pass
 
 
+# --------------------------------------------------------------------------- #
+# "Hide Answer" — H key
+#
+# Same action as the bottom-left button: back the current card out to its
+# question side, ungraded. Registered as an *additional* review-state
+# shortcut (not a rewrite, unlike editreviewer's "e") — checked against
+# aqt/reviewer.py's Reviewer._shortcutKeys(): "h" isn't one of Anki's
+# defaults (e/space/return/m/r/F5/Ctrl+<flag>/*/=/-/!/@/the answer keys/
+# u/5/6/7/Shift+A), so this adds rather than collides. Left *enabled* only
+# while the answer is on screen — toggled from on_show_question/
+# on_show_answer below, mirroring editreviewer.set_edit_active's use of
+# `mw.stateShortcuts`.
+# --------------------------------------------------------------------------- #
+def _hide_answer_shortcut() -> None:
+    if not _config().get("reviewer_hide_answer", True):
+        return
+    rv = getattr(mw, "reviewer", None)
+    if rv is None or getattr(rv, "card", None) is None:
+        return
+    if getattr(rv, "state", "") != "answer":
+        return
+    try:
+        rv._showQuestion()
+    except Exception:
+        pass
+
+
+def _on_reviewer_state_shortcuts_will_change(state: str, shortcuts: list) -> None:
+    if state != "review":
+        return
+    try:
+        for item in shortcuts:
+            if not isinstance(item, tuple) or len(item) != 2:
+                continue
+            key, _fn = item
+            if isinstance(key, str) and key.lower() == "h":
+                return  # already bound (another add-on?) — don't clobber it
+        shortcuts.append(("h", _hide_answer_shortcut))
+    except Exception:
+        pass
+
+
+def _hide_answer_qshortcut():
+    """The QShortcut Anki built for our "H" tuple above, if it exists yet
+    (it's created once per entry into the review state)."""
+    try:
+        from aqt.qt import QKeySequence
+        for sc in getattr(mw, "stateShortcuts", []) or []:
+            if sc.key() == QKeySequence("h"):
+                return sc
+    except Exception:
+        pass
+    return None
+
+
+def _set_hide_answer_shortcut_enabled(on: bool) -> None:
+    sc = _hide_answer_qshortcut()
+    if sc is not None:
+        try:
+            sc.setEnabled(bool(on))
+        except Exception:
+            pass
+
+
 def on_show_question(card) -> None:
     _push_progress()
+    _set_hide_answer_shortcut_enabled(False)
 
 
 def on_show_answer(card) -> None:
     _push_progress()
+    _set_hide_answer_shortcut_enabled(True)
 
 
 def on_reviewer_will_end() -> None:
@@ -2816,6 +2922,12 @@ gui_hooks.reviewer_did_show_answer.append(on_show_answer)
 gui_hooks.reviewer_will_end.append(on_reviewer_will_end)
 try:
     gui_hooks.reviewer_will_answer_card.append(on_reviewer_will_answer_card)
+except Exception:
+    pass
+try:
+    gui_hooks.state_shortcuts_will_change.append(
+        _on_reviewer_state_shortcuts_will_change
+    )
 except Exception:
     pass
 

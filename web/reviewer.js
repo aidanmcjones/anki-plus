@@ -69,6 +69,24 @@
     parent.appendChild(wrap);
   }
 
+  // Long question content (a big image, a table) can leave the answer
+  // below the fold in #qa's scrollable area — the user would have to
+  // manually scroll to find it. Rather than trim/hide the question, just
+  // scroll #qa to the bottom once, right when the answer appears, so it's
+  // immediately visible with nothing removed above it. Two rAFs: the
+  // first lets the just-unhidden ease/hide-answer controls and the
+  // `.ba-rv-answer` fade-in reflow, so scrollHeight is settled before we
+  // read it.
+  function scrollAnswerIntoView() {
+    var qa = document.getElementById("qa");
+    if (!qa) return;
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        try { qa.scrollTop = qa.scrollHeight; } catch (_) {}
+      });
+    });
+  }
+
   // Receive {ease: interval_string} + defaultEase from Python and write
   // the interval strings into the ease chips, hiding chips with no
   // matching ease (i.e., 2/3-button new cards). The `isAnswer` flag comes
@@ -76,7 +94,20 @@
   // signal for whether to show the ease container — DOM heuristics
   // (hr#answer) miss Image Occlusion and any non-FrontSide template.
   window.__baSetEase = function (intervals, defaultEase, isAnswer) {
+    var wasAnswer = window.__baReviewerState === "answer";
     window.__baReviewerState = isAnswer ? "answer" : "question";
+    // Bottom-left "Hide Answer" control rides the same signal as the ease
+    // selector below — both only make sense once the answer is on screen.
+    // Checked first (and separately) since the ease selector itself is
+    // absent in "native" answer-buttons mode, and we don't want that to
+    // skip this too.
+    var hideAnswer = document.querySelector(".ba-rv-hide-answer");
+    if (hideAnswer) hideAnswer.hidden = !isAnswer;
+    // Only on the question→answer transition — _push_progress (and thus
+    // this call) can fire again while already on the answer side (flag
+    // cycling, count updates), and re-snapping scroll then would yank the
+    // view out from under someone reading back up the card.
+    if (isAnswer && !wasAnswer) scrollAnswerIntoView();
     var ease = document.querySelector(".ba-rv-ease");
     if (!ease) return;
     ease.hidden = !isAnswer;
