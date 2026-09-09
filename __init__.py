@@ -19,7 +19,7 @@ import math
 import os
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from aqt import gui_hooks, mw
 from aqt.deckbrowser import DeckBrowser, DeckBrowserContent
@@ -1421,36 +1421,77 @@ STUDY_DECK_PREFIX = "Study: "
 
 
 def _release_study_decks(col: Any, keep: int = 0) -> int:
-    """Send the cards in our other study queues home before building a new
-    one.
+    """Send cards home from the filtered decks that would otherwise hide
+    them from the queue we're about to build.
 
-    A card can only live in one filtered deck at a time, and Anki's search
-    silently skips cards that are already in one. Without this, "Randomize
-    Set" followed by "Cue: Type::Chart" fails with `FilteredDeckError` —
-    every card it wants is sitting in `Study: Mix` — and the user is told
-    there are no cards with that tag, which is both wrong and baffling.
+    rslib appends `-deck:filtered` to every filtered-deck search
+    (`move_cards_matching_term`), so a card already sitting in ANY
+    filtered deck is invisible to a new one. Get this wrong and the build
+    doesn't half-work, it fails outright with `FilteredDeckError` and the
+    user is told there is nothing to study — while still looking at the
+    deck they were already in, which reads exactly like "the button did
+    nothing".
 
-    These queues are transient by design, so keeping exactly one alive is
-    also the honest model: you are studying one thing at a time, and a
-    stale queue otherwise hides its cards from every later one. Only decks
-    we named (`Study: …`, and dynamic) are touched.
+    Two kinds of deck are released, both non-destructively (this is
+    Anki's own "Empty" button: cards go home with their scheduling
+    intact):
+
+      * our own transient queues (`Study: …`), because keeping one alive
+        at a time is the honest model — a stale queue otherwise hides its
+        cards from every later one;
+      * the filtered deck currently being studied, whoever built it. If
+        you're inside a cram deck and press "Randomize Set", re-gathering
+        what you're looking at is unambiguously what you asked for.
+
+    Filtered decks you are *not* studying are left alone — silently
+    emptying someone's hand-built cram deck would be rude. If cards are
+    stuck in one of those, `_blocking_filtered_decks` names it in the
+    failure message instead.
     """
     released = 0
+    targets: List[Tuple[int, str]] = []
+    try:
+        current = int(col.decks.get_current_id())
+    except Exception:
+        current = 0
     try:
         for entry in col.decks.all_names_and_ids():
-            if entry.id == keep or not entry.name.startswith(STUDY_DECK_PREFIX):
+            if entry.id == keep:
                 continue
-            deck = col.decks.get(entry.id)
-            if not deck or not deck.get("dyn"):
-                continue
-            try:
-                col.sched.empty_filtered_deck(entry.id)
-                released += 1
-            except Exception as exc:
-                _dev_cmd_log(f"release {entry.name}: {exc!r}")
+            ours = entry.name.startswith(STUDY_DECK_PREFIX)
+            if ours or entry.id == current:
+                targets.append((entry.id, entry.name))
     except Exception as exc:
         _dev_cmd_log(f"release study decks: {exc!r}")
+        return 0
+    for did, name in targets:
+        try:
+            deck = col.decks.get(did)
+            if not deck or not deck.get("dyn"):
+                continue
+            col.sched.empty_filtered_deck(did)
+            released += 1
+        except Exception as exc:
+            _dev_cmd_log(f"release {name}: {exc!r}")
     return released
+
+
+def _blocking_filtered_decks(col: Any, search: str) -> List[str]:
+    """Filtered decks still holding cards our search wanted.
+
+    Only called when a build came back empty, so the per-card lookup is
+    affordable and buys a message that says what to do rather than
+    "nothing to study".
+    """
+    names = set()
+    try:
+        for cid in col.find_cards(search):
+            card = col.get_card(cid)
+            if getattr(card, "odid", 0):
+                names.add(col.decks.name(card.did))
+    except Exception:
+        return []
+    return sorted(names)
 
 
 def build_study_deck(
@@ -1511,10 +1552,20 @@ def build_study_deck(
             mw.moveToState("review")
 
         def on_failure(exc: Exception) -> None:
-            # Typically FilteredDeckError: the search returned no cards.
+            # Typically FilteredDeckError: the search gathered no cards.
             _dev_cmd_log(f"{log_tag}: {exc!r}")
+            msg = empty_message
+            blocked = _blocking_filtered_decks(col, search)
+            if blocked:
+                # The cards exist — they're just locked inside a filtered
+                # deck we chose not to empty on the user's behalf. Say so.
+                msg = (
+                    "Those cards are in the filtered deck "
+                    + ", ".join(f'"{n}"' for n in blocked[:3])
+                    + " — empty it first."
+                )
             try:
-                tooltip(empty_message, parent=mw)
+                tooltip(msg, parent=mw, period=5000)
             except Exception:
                 pass
 

@@ -23,10 +23,13 @@ All notable changes to Anki Design are documented here. Format loosely follows
   random queue. Cue lists the tags actually present in that deck —
   nested tags as submenus, and picking a parent cues its children with
   it — and turns any of them into an immediate study queue. Both build a
-  rescheduling filtered deck, so answers count as normal reviews;
-  starting one now also returns the cards from the previous queue
-  instead of leaving them stranded where nothing else can reach them.
-  Switch off with **reviewer_menu_extras**.
+  rescheduling filtered deck, so answers count as normal reviews. Either
+  one first sends home the cards in the previous queue, and in the
+  filtered deck you're currently studying — a card can only be in one
+  filtered deck at a time, and cards stuck in another are invisible to a
+  new one. Cards locked in a filtered deck you're *not* studying are left
+  where they are, and the failure names that deck instead of claiming
+  there's nothing to study. Switch off with **reviewer_menu_extras**.
 - **The Browse tab now looks like the rest of the app.** The card table,
   column headers, sidebar tree, search bar, splitters and scrollbars are
   painted from the same palette as the deck list — paper background,
