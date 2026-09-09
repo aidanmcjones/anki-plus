@@ -93,21 +93,44 @@ _TAG_RE = re.compile(r"<[^>]*>")
 
 
 def _forbidden_spans(text: str) -> List[Tuple[int, int]]:
-    """Spans of `text` that wrapping must never touch: whole <style> and
-    <script> blocks, HTML comments, and every tag's own markup."""
-    spans = [m.span() for m in _FORBIDDEN_BLOCK_RE.finditer(text)]
-    spans.extend(m.span() for m in _TAG_RE.finditer(text))
-    return spans
+    """Whole <style>/<script> blocks and HTML comments. A field value has
+    no business being matched anywhere inside one of these."""
+    return [m.span() for m in _FORBIDDEN_BLOCK_RE.finditer(text)]
+
+
+def _tag_spans(text: str) -> List[Tuple[int, int]]:
+    """Every tag's own markup, e.g. the `<b class="x">` itself."""
+    return [m.span() for m in _TAG_RE.finditer(text)]
 
 
 def _find_in_body_text(text: str, val: str) -> int:
-    """First index of `val` in `text` that doesn't overlap a forbidden
-    span, or -1 if every occurrence is inside markup."""
-    spans = _forbidden_spans(text)
+    """First index of `val` in `text` that is safe to wrap, or -1.
+
+    "Safe" used to mean "overlaps no tag at all", which quietly excluded
+    every field containing formatting — a Back field of
+    `<p>Bacteria and Archaea…</p>` spans a `<p>` and a `</p>`, so it was
+    rejected and never became editable. That is why inline editing worked
+    on the Front (usually plain text) and not on the Back: not a missing
+    feature, a matcher that was too strict.
+
+    What actually matters is that the wrap doesn't *split* markup. A match
+    may contain whole tags; it may not begin or end in the middle of one,
+    because `<div …>` + val + `</div>` around half a tag leaks the other
+    half as visible text. So: reject a match that overlaps a
+    style/script/comment block at all, and reject one whose start or end
+    boundary falls strictly inside a tag.
+    """
+    blocks = _forbidden_spans(text)
+    tags = _tag_spans(text)
     pos = text.find(val)
     while pos >= 0:
         end = pos + len(val)
-        if not any(pos < s_end and end > s_start for s_start, s_end in spans):
+        in_block = any(pos < b_end and end > b_start for b_start, b_end in blocks)
+        splits_tag = any(
+            t_start < pos < t_end or t_start < end < t_end
+            for t_start, t_end in tags
+        )
+        if not in_block and not splits_tag:
             return pos
         pos = text.find(val, pos + 1)
     return -1
