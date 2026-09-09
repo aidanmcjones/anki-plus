@@ -1,0 +1,112 @@
+/* Anki Design — Browse tab card-preview pane.
+ *
+ * Loads *after* our own reviewer.css, on the same reviewer page, so the
+ * card renders with exactly the study typography, divider, cloze colours
+ * and note-type CSS. This file only makes the two adjustments a pane
+ * needs that a full-screen reviewer doesn't:
+ *
+ *   1. a reading size that suits a ~460px column instead of a 780px one;
+ *   2. a hairline side switch pinned to the bottom.
+ *
+ * Nothing here touches card content — the note type still owns it.
+ */
+
+/* Study is 28px in a 780px column; the pane is roughly half as wide, so
+   the same measure lands around 19px. Cards whose note type sets an
+   explicit size keep it, exactly as they do in the reviewer.
+
+   Declared on <body> as well as <html>: __init__.py emits the reviewer
+   geometry vars on `:root,.night-mode,body`, and a value set on <body>
+   beats an inherited one from <html> no matter how specific the html
+   selector is — inheritance walks up from #qa and stops at the first
+   ancestor that declares the property. */
+html[data-ba-preview],
+html[data-ba-preview] body {
+  --rf-card-font-size: 19px;
+  --rf-card-max-width: 100%;
+}
+
+html[data-ba-preview] #qa {
+  padding: 26px 24px 20px;
+}
+
+/* The pane is a panel inside a page, not a page — a hairline on the top
+   edge ties it to the table above without drawing a box. */
+html[data-ba-preview] body {
+  border-top: 0;
+}
+
+/* ---------------- Side switch ---------------- */
+#ba-pv-bar {
+  grid-row: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--rf-line, rgba(127, 127, 127, 0.14));
+  background: var(--rf-paper, transparent);
+  font: 500 11px/1 var(--rf-sans, system-ui, sans-serif);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  user-select: none;
+}
+#ba-pv-bar[hidden] { display: none !important; }
+
+#ba-pv-bar button {
+  all: unset;
+  cursor: pointer;
+  color: var(--rf-ink-faint, #8a8a8a);
+  padding: 3px 2px;
+  border-bottom: 1px solid transparent;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+/* Typographic hover — an underline, never a row box. */
+#ba-pv-bar button:hover {
+  color: var(--rf-ink-dim, #6a6557);
+  border-bottom-color: var(--rf-line-2, rgba(127, 127, 127, 0.3));
+}
+#ba-pv-bar button.is-on {
+  color: var(--rf-ink, #1f1d18);
+  border-bottom-color: var(--rf-accent, #6c8cff);
+}
+#ba-pv-bar .ba-pv-sep {
+  width: 1px;
+  height: 10px;
+  background: var(--rf-line, rgba(127, 127, 127, 0.18));
+}
+
+/* ---------------- Empty state ----------------
+ * No card, or several rows selected. Quiet, centred, same voice as the
+ * finished-deck page. */
+.ba-pv-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40vh;
+  text-align: center;
+  cursor: default;
+}
+.ba-pv-empty-title {
+  font: 500 15px/1.3 var(--rf-sans, system-ui, sans-serif);
+  color: var(--rf-ink-dim, #6a6557);
+  letter-spacing: 0.01em;
+}
+.ba-pv-empty-sub {
+  font: 400 12.5px/1.5 var(--rf-sans, system-ui, sans-serif);
+  color: var(--rf-ink-faint, #a39d8b);
+  max-width: 30ch;
+}
+
+/* Images and tables inside a narrow pane: never let a card push a
+ * horizontal scrollbar onto the page — scroll the element instead. */
+html[data-ba-preview] #qa img,
+html[data-ba-preview] #qa video {
+  max-width: 100%;
+  height: auto;
+}
+html[data-ba-preview] #qa table {
+  max-width: 100%;
+}
