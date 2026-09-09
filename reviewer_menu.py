@@ -1,17 +1,18 @@
 """Anki Design — two additions to the reviewer's "More" menu.
 
-**Randomize Set** rebuilds the deck you're studying as one shuffled queue,
-so the next card is drawn at random from everything you'd study today
-rather than in Anki's new/learning/review order.
+**Randomize Set** shuffles the new cards of the deck you're studying
+where they stand, by rewriting their positions — no new deck, nothing
+moved. It's also on the deck list's gear menu (`web/deckopts.js`), where
+it shuffles that deck instead of the one being studied.
 
 **Cue…** lists every tag actually present in the deck you're studying and
 turns any of them into an immediate study queue — the thing you reach for
-when a lecture, a chapter or a card type suddenly needs drilling.
-
-Both go through `build_study_deck()` in `__init__.py`, the same
+when a lecture, a chapter or a card type suddenly needs drilling. Cueing
+a *subset* genuinely needs a filtered deck (there is nowhere else for a
+temporary selection to live), so that one still goes through
+`build_study_deck()` in `__init__.py`, the same
 rescheduling-filtered-deck path the sidebar's Due / New / Learning totals
-use, so answers count exactly as normal reviews do and repeated use
-refreshes one queue instead of littering the deck list.
+use, and answers count exactly as normal reviews do.
 
 Why the deck names replace `::` with ` / `
 ------------------------------------------
@@ -33,7 +34,6 @@ from aqt.qt import QMenu
 
 ADDON = __name__.split(".")[0]
 
-MIX_DECK = "Study: Mix"
 # One flat level of nesting is where a tag menu stops helping and starts
 # being a maze; deeper paths are flattened into their parent's submenu
 # with the remaining path shown inline.
@@ -150,24 +150,100 @@ def _tag_tree(tags: List[str]) -> Dict[str, Any]:
 # Actions
 # --------------------------------------------------------------------------- #
 def randomize(reviewer: Any) -> None:
-    """Shuffle everything you'd study today in this deck into one queue."""
+    """Shuffle the deck you're studying, in place."""
     src = _source_deck(reviewer)
-    col = getattr(mw, "col", None)
-    if src is None or col is None:
+    if src is None:
         _tooltip("No deck to randomize from here")
         return
-    _did, name = src
-    search = (
-        f"{_deck_search(col, name)} (is:due OR is:new) "
-        "-is:suspended -is:buried"
-    )
-    _build(
-        MIX_DECK,
-        search,
-        "RANDOM",
-        log_tag="randomize",
-        empty="Nothing left to study in this deck",
-    )
+    randomize_deck(src[0], from_reviewer=True)
+
+
+def randomize_deck(did: int, from_reviewer: bool = False) -> None:
+    """Shuffle a deck's new cards where they stand.
+
+    Anki already keeps an order for new cards — the position in the `due`
+    column — and the scheduler's default gather priority reads new cards
+    straight off it (`Deck` → `LowestPosition` → `ORDER BY due ASC`). So
+    "randomize this deck" needs nothing more than rewriting those
+    positions: `reposition_new_cards(..., randomize=True)`, the same
+    backend call as the Browser's Reposition dialog, run through a
+    CollectionOp so Ctrl+Z puts the old order back.
+
+    This replaces an earlier version that built a filtered "Study: Mix"
+    deck. That worked, but it moved every card out of the deck to do it —
+    a lot of machinery, and a lot of surprise, for "shuffle these". The
+    user's instinct was right: it is very simple.
+
+    `shift_existing=False`: we rewrite this deck's positions from 0
+    anyway, and nothing outside the deck needs to move out of the way.
+    """
+    col = getattr(mw, "col", None)
+    if col is None:
+        return
+    try:
+        name = col.decks.name(did)
+    except Exception:
+        _tooltip("That deck no longer exists")
+        return
+    try:
+        # Only new cards carry a position. Suspended ones are left alone:
+        # they aren't in the queue, and shuffling them would be an
+        # invisible change to something parked deliberately.
+        cids = col.find_cards(f"{_deck_search(col, name)} is:new -is:suspended")
+    except Exception:
+        cids = []
+    if not cids:
+        _tooltip(f"No new cards to shuffle in “{name}”")
+        return
+
+    def on_done(out: Any) -> None:
+        count = getattr(out, "count", 0) or len(cids)
+        _tooltip(f"Shuffled {count} cards in “{name}”")
+        if from_reviewer:
+            _refresh_queue()
+
+    try:
+        from aqt.operations.scheduling import reposition_new_cards
+
+        reposition_new_cards(
+            parent=mw,
+            card_ids=cids,
+            starting_from=0,
+            step_size=1,
+            randomize=True,
+            shift_existing=False,
+        ).success(on_done).run_in_background()
+    except Exception as exc:
+        _log(f"randomize {name}: {exc!r}")
+        _tooltip("Couldn't shuffle that deck")
+
+
+def _refresh_queue() -> None:
+    """Rebuild the study queue so the *next* card reflects the shuffle.
+
+    Without this the reviewer keeps the card it already fetched and the
+    queue it already built, so shuffling mid-session appears to do
+    nothing until you leave and come back. `mw.reset()` is the supported
+    way to say "the queues are stale" — it fires `operation_did_execute`,
+    which is what makes the reviewer rebuild.
+
+    `nextCard()` on top of that is deliberate. Anki keeps the card you're
+    looking at across a reset, which is right for almost every operation
+    and wrong for this one: you pressed Randomize *because* you were tired
+    of the card in front of you, and leaving it there is exactly the "the
+    button did nothing" impression this feature has already been bitten
+    by. The card is unanswered, so it just goes back in the shuffled
+    queue.
+    """
+    try:
+        if getattr(mw, "state", "") != "review":
+            return
+        mw.reset()
+        rv = getattr(mw, "reviewer", None)
+        if rv is not None:
+            rv.nextCard()
+    except Exception as exc:
+        _log(f"refresh queue: {exc!r}")
 
 
 def cue_tag(reviewer: Any, tag: str) -> None:
@@ -207,6 +283,15 @@ def _build(name: str, search: str, order: str, log_tag: str, empty: str) -> None
     build_study_deck(
         name, search, order, log_tag=log_tag, empty_message=empty
     )
+
+
+def _log(msg: str) -> None:
+    try:
+        from . import _dev_cmd_log
+
+        _dev_cmd_log(msg)
+    except Exception:
+        pass
 
 
 def _tooltip(msg: str) -> None:
@@ -276,9 +361,7 @@ def on_will_show_context_menu(reviewer: Any, menu: QMenu) -> None:
     try:
         menu.addSeparator()
         act = menu.addAction("Randomize Set")
-        act.setToolTip(
-            "Shuffle everything due in this deck into one random queue"
-        )
+        act.setToolTip("Shuffle this deck's new cards into a random order")
         act.triggered.connect(
             lambda _checked=False: randomize(reviewer)
         )

@@ -1243,6 +1243,13 @@ def _on_js_message(handled, message, context):
                             else:
                                 from aqt.utils import tooltip
                                 tooltip("Restudy isn't available in this version of Anki.")
+                elif action == "randomize":
+                    # In-place shuffle of this deck's new-card positions —
+                    # the same thing the reviewer's More menu does, aimed
+                    # at the deck whose gear was clicked rather than the
+                    # one being studied.
+                    from . import reviewer_menu as _rm
+                    _rm.randomize_deck(did)
                 elif action == "delete" and db is not None:
                     db._delete(did)  # type: ignore[attr-defined]
                 else:

@@ -18,18 +18,24 @@ All notable changes to Anki Design are documented here. Format loosely follows
   rules, fitted to the pane instead of the window.
 
 ### Added
-- **Randomize Set** and **Cue…** in the reviewer's More menu. Randomize
-  shuffles everything you'd study today in the current deck into one
-  random queue. Cue lists the tags actually present in that deck —
-  nested tags as submenus, and picking a parent cues its children with
-  it — and turns any of them into an immediate study queue. Both build a
-  rescheduling filtered deck, so answers count as normal reviews. Either
-  one first sends home the cards in the previous queue, and in the
-  filtered deck you're currently studying — a card can only be in one
-  filtered deck at a time, and cards stuck in another are invisible to a
-  new one. Cards locked in a filtered deck you're *not* studying are left
-  where they are, and the failure names that deck instead of claiming
-  there's nothing to study. Switch off with **reviewer_menu_extras**.
+- **Randomize** — shuffles a deck's new cards into a random order, in
+  place. It's on the deck's gear menu, and in the reviewer's More menu as
+  **Randomize Set**, where it shuffles the deck you're studying and draws
+  a fresh card straight away. Nothing changes decks and nothing new is
+  created: it rewrites the same card positions the Browser's Reposition
+  dialog does, so Ctrl+Z puts the old order back.
+- **Cue…** in the reviewer's More menu lists the tags actually present in
+  the deck you're studying — nested tags as submenus, and picking a
+  parent cues its children with it — and turns any of them into an
+  immediate study queue. Cueing a subset needs somewhere for the
+  selection to live, so this one does build a rescheduling filtered deck;
+  answers still count as normal reviews. It first sends home the cards in
+  the previous queue and in the filtered deck you're currently studying —
+  a card can only be in one filtered deck at a time, and cards stuck in
+  another are invisible to a new one. Cards locked in a filtered deck
+  you're *not* studying are left alone, and the message names that deck
+  instead of claiming there's nothing to study. Switch both off with
+  **reviewer_menu_extras**.
 - **The Browse tab now looks like the rest of the app.** The card table,
   column headers, sidebar tree, search bar, splitters and scrollbars are
   painted from the same palette as the deck list — paper background,

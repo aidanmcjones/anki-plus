@@ -34,6 +34,10 @@
            + '1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>',
     export:  '<path d="M12 16V4"/><path d="M6 10l6-6 6 6"/><path d="M4 20h16"/>',
     rebuild: '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/>',
+    // Two crossing arrows — the usual shuffle glyph.
+    shuffle: '<path d="M16 3h5v5"/><path d="M4 20L21 3"/>'
+           + '<path d="M21 16v5h-5"/><path d="M15 15l6 6"/>'
+           + '<path d="M4 4l5 5"/>',
     empty:   '<path d="M3 6h18"/><path d="M8 6V4h8v2"/>'
            + '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>',
     delete:  '<path d="M3 6h18"/><path d="M8 6V4h8v2"/>'
@@ -50,6 +54,7 @@
     { cmd: "rebuild", label: "Rebuild (filtered)", icon: "rebuild" },
     { cmd: "empty",   label: "Empty (filtered)",   icon: "empty" },
     { cmd: "restudy", label: "Restudy…",         icon: "rebuild" },
+    { cmd: "randomize", label: "Randomize",      icon: "shuffle" },
     { cmd: "delete",  label: "Delete deck",      icon: "delete", danger: true, sep_before: true },
   ];
 
