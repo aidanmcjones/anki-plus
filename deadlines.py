@@ -159,6 +159,35 @@ def label_for(did: int) -> str:
     return f"Memorize by {stamp} — {left}d"
 
 
+def paused_deck_ids() -> List[int]:
+    """Decks whose deadline has passed and that chose "pause reviews".
+
+    A pause is expressed as `perDay = 0` on the deck's preset, which is how
+    Anki itself parks a deck — but per-day limits are a *deck queue* concept
+    and a filtered deck ignores them entirely. So anything that gathers
+    across the whole collection (the sidebar's Due/New/Learning queues) has
+    to subtract these decks by hand, or the one feature that promises "stop
+    showing me this deck" gets overruled by the one that promises "show me
+    everything due".
+    """
+    if not enabled():
+        return []
+    out: List[int] = []
+    for key, entry in _state().items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("mode") != MODE_PAUSE:
+            continue
+        deadline = parse(str(entry.get("date", "")))
+        if deadline is None or days_left(deadline) >= 0:
+            continue
+        try:
+            out.append(int(key))
+        except Exception:
+            continue
+    return out
+
+
 def menu_payload() -> Dict[str, str]:
     """`{did: label}` for the deck list, so the gear menu can show the
     countdown without a round-trip per deck."""

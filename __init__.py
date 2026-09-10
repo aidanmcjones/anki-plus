@@ -895,6 +895,19 @@ def _mark_toolbar_state(state: Optional[str] = None) -> None:
 
 def on_state_did_change(new_state: str, old_state: str) -> None:
     cfg = _config()
+    if new_state != "review":
+        # Backstop for any route out of a queue that doesn't tear the
+        # reviewer down (`reviewer_will_end` handles the common one, and
+        # earlier — before the new state paints). Normally there is nothing
+        # left to release, so the refresh below never runs.
+        if release_study_queues():
+            try:
+                if new_state == "deckBrowser":
+                    mw.deckBrowser.refresh()
+                elif new_state == "overview":
+                    mw.overview.refresh()
+            except Exception:
+                pass
     hide_decks = cfg.get("hide_bottom_on_decks", True)
     hide_over = cfg.get("hide_bottom_on_overview", True)
     if new_state == "deckBrowser":
@@ -1478,16 +1491,200 @@ _STUDY_STATE_SPECS = {
 }
 
 
+def _queue_totals() -> Dict[str, int]:
+    """The three numbers the sidebar shows — new / learn / due for today.
+
+    Same summation the sidebar's standing uses: the top level of
+    `deck_due_tree()`, whose counts the v3 scheduler has *already* clipped
+    to each deck's daily limits. That clipping is the point. `is:new`
+    matches every unseen card in the collection (233 in the demo); the
+    sidebar says 65, because 65 is what today's limits will actually let
+    you see. Clicking "65" and being handed 233 is the button lying about
+    what it does, so the count doubles as the queue's limit.
+    """
+    out = {"new": 0, "learn": 0, "due": 0}
+    try:
+        tree = mw.col.sched.deck_due_tree()
+        for c in getattr(tree, "children", []):
+            out["new"] += int(getattr(c, "new_count", 0) or 0)
+            out["learn"] += int(getattr(c, "learn_count", 0) or 0)
+            out["due"] += int(getattr(c, "review_count", 0) or 0)
+    except Exception:
+        pass
+    return out
+
+
+def _paused_exclusions(col: Any) -> str:
+    """`-deck:"…"` for every deck a passed deadline has paused.
+
+    See `deadlines.paused_deck_ids`: a pause is a per-day limit of 0, and
+    filtered decks don't read per-day limits, so without this the sidebar's
+    Due total would happily drag a paused deck's backlog back in front of
+    the user.
+    """
+    try:
+        from anki.collection import SearchNode
+
+        from . import deadlines as _deadlines
+    except Exception:
+        return ""
+    terms: List[str] = []
+    for did in _deadlines.paused_deck_ids():
+        try:
+            name = col.decks.name(did)
+        except Exception:
+            continue
+        if not name:
+            continue
+        try:
+            terms.append("-" + col.build_search_string(SearchNode(deck=name)))
+        except Exception:
+            continue
+    return (" " + " ".join(terms)) if terms else ""
+
+
 def _study_state(kind: str) -> None:
-    """Cross-deck one-click study for a sidebar total (Due/New/Learning)."""
+    """Cross-deck one-click study for a sidebar total (Due/New/Learning).
+
+    Rebuilt from scratch on every click, so what you get is the collection
+    as it stands right now — not whatever the last click left behind.
+    """
     spec = _STUDY_STATE_SPECS.get(kind)
     if spec is None:
         return
     name, search, order_name = spec
-    build_study_deck(name, search, order_name, log_tag=f"study-state {kind}")
+    col = getattr(mw, "col", None)
+    if col is not None:
+        search += _paused_exclusions(col)
+    build_study_deck(
+        name,
+        search,
+        order_name,
+        log_tag=f"study-state {kind}",
+        limit=_queue_totals().get(kind, 0),
+    )
 
 
 STUDY_DECK_PREFIX = "Study: "
+
+# True while a queue is mid-build. `build_study_deck` finishes by calling
+# `mw.moveToState("review")`, and moving to review *from* review runs the old
+# reviewer's cleanup — which fires `reviewer_will_end`, the very hook that
+# empties our queues. Without this flag a Randomize/Cue launched from inside
+# the reviewer would hand back the cards it had just gathered.
+_study_building = {"v": False}
+
+
+def _study_decks_in_use(col: Any) -> List[Tuple[int, str]]:
+    """`(id, name)` of every transient queue we own that still holds cards.
+
+    The card-count probe matters: `empty_filtered_deck` is a transaction and
+    an undo step, and this runs on every exit from the reviewer. Emptying an
+    already-empty queue would push "Empty" onto the undo stack after every
+    single session.
+    """
+    out: List[Tuple[int, str]] = []
+    try:
+        entries = list(col.decks.all_names_and_ids())
+    except Exception:
+        return out
+    for entry in entries:
+        if not entry.name.startswith(STUDY_DECK_PREFIX):
+            continue
+        try:
+            deck = col.decks.get(entry.id)
+            if not deck or not deck.get("dyn"):
+                continue
+            if not col.db.scalar("select 1 from cards where did = ? limit 1", entry.id):
+                continue
+        except Exception:
+            continue
+        out.append((int(entry.id), entry.name))
+    return out
+
+
+def release_study_queues() -> int:
+    """Send every `Study: …` queue's cards home. The at-rest invariant.
+
+    These queues are *transient*: a click on a sidebar total (or Randomize /
+    Cue) gathers a fresh one and drops you into it, and the moment you leave
+    that session the cards go back to the decks they actually live in. That
+    is the whole point — a filtered deck can only hold a card once, so a
+    queue left standing quietly steals cards from every other view of the
+    collection: the deck list under-counts, the Browser shows the cards
+    filed under "Study: Due", and the next queue you build can't even see
+    them (rslib appends `-deck:filtered` to every gather).
+
+    Emptying is Anki's own "Empty" button — cards return home with their
+    scheduling untouched — so this is free to run as often as we like.
+    """
+    if _study_building["v"]:
+        return 0
+    col = getattr(mw, "col", None)
+    if col is None:
+        return 0
+    released = 0
+    for did, name in _study_decks_in_use(col):
+        try:
+            col.sched.empty_filtered_deck(did)
+            released += 1
+        except Exception as exc:
+            _dev_cmd_log(f"release {name}: {exc!r}")
+    if released:
+        _dev_cmd_log(f"released {released} study queue(s)")
+    return released
+
+
+def _patch_browser_sidebar_hides_spent_queues() -> None:
+    """Keep spent `Study: …` queues out of the Browser's deck tree.
+
+    Same reasoning as the deck list (see homedeck.js): between sessions
+    these queues hold nothing, so a row for one is a deck that isn't
+    anywhere. Worse here than on the deck list, because in the Browser a
+    deck row is a *search*, and clicking it would return nothing at all.
+
+    Patched on the class rather than the instance: the sidebar is built
+    inside `Browser.__init__`, before `browse_embed` gets its hands on the
+    object, and a standalone Browser deserves the same treatment.
+    """
+    try:
+        from aqt.browser.sidebar.item import SidebarItemType
+        from aqt.browser.sidebar.tree import SidebarTreeView
+    except Exception:
+        return
+    if getattr(SidebarTreeView, "_ad_hides_spent_queues", False):
+        return
+    orig = SidebarTreeView._deck_tree
+
+    def _deck_tree(self, root) -> None:  # type: ignore[no-untyped-def]
+        orig(self, root)
+        try:
+            col = self.col
+            live = {did for did, _ in _study_decks_in_use(col)}
+
+            def keep(item) -> bool:
+                if item.item_type is not SidebarItemType.DECK:
+                    return True
+                if not item.full_name.startswith(STUDY_DECK_PREFIX):
+                    return True
+                if int(item.id) in live:
+                    return True
+                deck = col.decks.get(int(item.id))
+                # A *normal* deck someone named "Study: …" is theirs, not
+                # ours. Only the filtered ones are queues.
+                return not (deck and deck.get("dyn"))
+
+            for section in root.children:
+                if section.item_type is SidebarItemType.DECK_ROOT:
+                    section.children = [c for c in section.children if keep(c)]
+        except Exception:
+            pass
+
+    SidebarTreeView._deck_tree = _deck_tree  # type: ignore[assignment]
+    SidebarTreeView._ad_hides_spent_queues = True  # type: ignore[attr-defined]
+
+
+_patch_browser_sidebar_hides_spent_queues()
 
 
 def _release_study_decks(col: Any, keep: int = 0) -> int:
@@ -1506,9 +1703,10 @@ def _release_study_decks(col: Any, keep: int = 0) -> int:
     Anki's own "Empty" button: cards go home with their scheduling
     intact):
 
-      * our own transient queues (`Study: …`), because keeping one alive
-        at a time is the honest model — a stale queue otherwise hides its
-        cards from every later one;
+      * our own transient queues (`Study: …`). At rest there shouldn't be
+        any left to release — `release_study_queues` empties them when you
+        leave the reviewer — but a crash mid-session, or a queue built by
+        an older version of this add-on, can leave one standing;
       * the filtered deck currently being studied, whoever built it. If
         you're inside a cram deck and press "Randomize Set", re-gathering
         what you're looking at is unambiguously what you asked for.
@@ -1570,6 +1768,7 @@ def build_study_deck(
     order_name: str = "DUE",
     log_tag: str = "study-deck",
     empty_message: str = "Nothing to study there right now",
+    limit: int = 0,
 ) -> None:
     """Build (or rebuild) a rescheduling filtered deck and enter review.
 
@@ -1583,7 +1782,13 @@ def build_study_deck(
     refreshes one queue instead of littering the deck list. An empty
     result surfaces as a tooltip, not a traceback.
 
-    Any *other* queue we own is emptied first — see `_release_study_decks`.
+    Any *other* queue we own is emptied first — see `_release_study_decks` —
+    and the queue this builds is emptied again the moment you leave the
+    reviewer (`release_study_queues`). Between clicks, nothing lives here.
+
+    `limit` caps the gather. 0 means "everything the search matches", which
+    is right for Cue (drill this tag, all of it) and wrong for the sidebar
+    totals, which have a number printed on them — see `_queue_totals`.
     """
     try:
         from anki.decks import DeckId, FilteredDeckConfig
@@ -1614,12 +1819,22 @@ def build_study_deck(
         config.reschedule = True
         del config.search_terms[:]
         config.search_terms.append(
-            FilteredDeckConfig.SearchTerm(search=search, limit=99_999, order=order)
+            FilteredDeckConfig.SearchTerm(
+                search=search, limit=int(limit) or 99_999, order=order
+            )
         )
         update.allow_empty = False
 
         def on_success(_changes) -> None:
-            mw.moveToState("review")
+            # Moving to review *from* review tears the old reviewer down,
+            # which fires `reviewer_will_end` — our at-rest release. Hold it
+            # off for the length of the transition or we'd immediately give
+            # back the cards we just gathered.
+            _study_building["v"] = True
+            try:
+                mw.moveToState("review")
+            finally:
+                _study_building["v"] = False
 
         def on_failure(exc: Exception) -> None:
             # Typically FilteredDeckError: the search gathered no cards.
@@ -2301,6 +2516,12 @@ def _full_deck_tree_payload() -> list:
                 "review": r,
                 "current": did == current_did,
                 "filtered": is_filtered(did),
+                # One of our transient `Study: …` queues. At rest these are
+                # always empty (see `release_study_queues`), and an empty
+                # queue is a row about nothing — the deck list drops it.
+                "transient": bool(
+                    path.startswith(STUDY_DECK_PREFIX) and is_filtered(did)
+                ),
                 # Anki's persisted collapse flag (the one its own deck list
                 # honours and syncs). Only meaningful on parents.
                 "collapsed": bool(getattr(node, "collapsed", False)) and bool(kids),
@@ -3061,6 +3282,12 @@ def on_show_answer(card) -> None:
 
 def on_reviewer_will_end() -> None:
     _session["total"] = 0
+    # Leaving the reviewer ends the transient queue with it — see
+    # `release_study_queues`. Synchronously, on purpose: this hook runs
+    # during `moveToState`, *before* the incoming state renders, so the deck
+    # list we're about to draw counts the cards in the decks they've just
+    # gone home to. Deferring by a tick would paint the stale zeroes first.
+    release_study_queues()
 
 
 def on_reviewer_will_answer_card(proceed_ease, reviewer, card):
@@ -3103,6 +3330,10 @@ gui_hooks.state_did_change.append(on_state_did_change)
 gui_hooks.reviewer_did_show_question.append(on_show_question)
 gui_hooks.reviewer_did_show_answer.append(on_show_answer)
 gui_hooks.reviewer_will_end.append(on_reviewer_will_end)
+# A queue can only outlive its session if Anki didn't get to shut down
+# cleanly. Sweep on open, before the deck list is drawn, so a crash mid-review
+# doesn't leave a chunk of the collection filed under "Study: Due" forever.
+gui_hooks.profile_did_open.append(release_study_queues)
 try:
     gui_hooks.reviewer_will_answer_card.append(on_reviewer_will_answer_card)
 except Exception:

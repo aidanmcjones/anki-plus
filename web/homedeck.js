@@ -61,9 +61,21 @@
     return div;
   }
 
+  // Our transient study queues (`Study: Due`, a cued tag, …) only hold cards
+  // while you're actually in them — leave the reviewer and their cards go
+  // home. So on the deck list they sit at a permanent 0/0/0: a row about
+  // nothing. Drop it. One that still holds cards stays, because then it
+  // really is where those cards are.
+  function dropSpentQueues(data) {
+    return data.filter(function (d) {
+      if (!d.transient) return true;
+      return (d.new || 0) + (d.learn || 0) + (d.review || 0) > 0;
+    });
+  }
+
   function paint() {
     if (!dl()) return;
-    var data = window.__baDeckTree || [];
+    var data = dropSpentQueues(window.__baDeckTree || []);
     var single = !!document.querySelector('.ba-home.ba-single');
     if (single) {
       data = data

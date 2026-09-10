@@ -5,6 +5,20 @@ All notable changes to Anki Design are documented here. Format loosely follows
 
 ## [Unreleased]
 ### Changed
+- **The Due / New / Learning queues are transient.** Clicking one of the
+  sidebar totals gathers that queue *from scratch* at that moment and drops
+  you into it; leaving the reviewer sends every card straight back to the
+  deck it lives in. Previously the queue stayed built, and since a card can
+  only be in one filtered deck at a time, whichever total you clicked last
+  quietly held the collection hostage: the deck list under-counted, the
+  Browser filed those cards under `Study: Due`, and the next total you
+  clicked couldn't see them. Now, at rest, the queues hold nothing and are
+  hidden from both the deck list and the Browser's deck tree — cards live
+  in their own decks, and every click reflects the collection as it stands.
+  The queue is also capped at the number printed on the total you clicked:
+  "New 65" hands you 65 cards, not every unseen card in the collection. A
+  deck paused by a passed deadline stays paused — filtered decks ignore
+  per-day limits, so those decks are now excluded from the gather by name.
 - **The reviewer's card area fills the window.** It used to be capped at
   a reading measure (Settings → Reviewer → Card width — 780px at Medium).
   That's a good rule for prose and a bad one for everything else: a
@@ -29,13 +43,14 @@ All notable changes to Anki Design are documented here. Format loosely follows
   parent cues its children with it — and turns any of them into an
   immediate study queue. Cueing a subset needs somewhere for the
   selection to live, so this one does build a rescheduling filtered deck;
-  answers still count as normal reviews. It first sends home the cards in
-  the previous queue and in the filtered deck you're currently studying —
-  a card can only be in one filtered deck at a time, and cards stuck in
-  another are invisible to a new one. Cards locked in a filtered deck
-  you're *not* studying are left alone, and the message names that deck
-  instead of claiming there's nothing to study. Switch both off with
-  **reviewer_menu_extras**.
+  answers still count as normal reviews. Like the sidebar totals it is
+  transient: the cards go home the moment you leave the reviewer, and
+  building one first sends home the cards in the previous queue and in the
+  filtered deck you're currently studying — a card can only be in one
+  filtered deck at a time, and cards stuck in another are invisible to a
+  new one. Cards locked in a filtered deck you're *not* studying are left
+  alone, and the message names that deck instead of claiming there's
+  nothing to study. Switch both off with **reviewer_menu_extras**.
 - **The Browse tab now looks like the rest of the app.** The card table,
   column headers, sidebar tree, search bar, splitters and scrollbars are
   painted from the same palette as the deck list — paper background,
