@@ -103,7 +103,11 @@ in this file are the raw form the settings page writes.
   once a day, so it shrinks as the date approaches, and the deck is
   restored when the date passes. The dialog also checks whether the new
   cards can be *seen* in time — "212 new cards in 6 days needs 36/day —
-  this deck's limit is 20" — and offers to raise the limit in one click.
+  this deck's limit is 20" — and offers to raise the limit in one click;
+  it confirms with "Limit raised to 36/day ✓". The raise is written as
+  *this deck's* new-cards/day limit (Anki's Daily limits → This deck),
+  never the preset's, so it can't drag along every other deck sharing the
+  preset. Limits you set yourself in deck options are left alone too.
   `false` removes the menu item and stops enforcing any deadline already
   set.
 
@@ -114,10 +118,13 @@ in this file are the raw form the settings page writes.
   - **Maintain long-term** (default) — reviews carry on as normal. Cards
     coming due after the deadline are memory upkeep, not a missed target;
     that is how spaced repetition holds something you already know.
-  - **Pause reviews** — the deck stops presenting anything, by setting its
-    per-day review and new limits to 0. Reversible, and no card is
+  - **Pause reviews** — the deck stops presenting anything, by setting
+    *that deck's own* per-day review and new limits to 0 (not its
+    preset's, which other decks share). Reversible, and no card is
     suspended or otherwise altered: switch back to Maintain, or clear the
-    deadline, to resume.
+    deadline, to resume — and whatever limits the deck had before the
+    pause, including one you raised to hit the deadline, come back with
+    it.
 
 ## Windows
 - **cmdk** — the ⌘K / Ctrl+K command palette.

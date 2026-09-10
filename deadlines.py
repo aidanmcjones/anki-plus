@@ -162,9 +162,9 @@ def label_for(did: int) -> str:
 def paused_deck_ids() -> List[int]:
     """Decks whose deadline has passed and that chose "pause reviews".
 
-    A pause is expressed as `perDay = 0` on the deck's preset, which is how
-    Anki itself parks a deck — but per-day limits are a *deck queue* concept
-    and a filtered deck ignores them entirely. So anything that gathers
+    A pause is expressed as a per-day limit of 0, which is how Anki itself
+    parks a deck — but per-day limits are a *deck queue* concept and a
+    filtered deck ignores them entirely. So anything that gathers
     across the whole collection (the sidebar's Due/New/Learning queues) has
     to subtract these decks by hand, or the one feature that promises "stop
     showing me this deck" gets overruled by the one that promises "show me
@@ -286,10 +286,7 @@ def pacing(did: int) -> Optional[Dict[str, int]]:
     if not remaining:
         return None
     left = max(1, days_left(deadline))
-    try:
-        per_day = int(col.decks.config_dict_for_deck_id(did)["new"]["perDay"])
-    except Exception:
-        per_day = 20
+    per_day = effective_new_per_day(col, did)
     needed = int(math.ceil(remaining / left))
     return {
         "remaining": remaining,
@@ -300,54 +297,177 @@ def pacing(did: int) -> Optional[Dict[str, int]]:
     }
 
 
-def set_new_per_day(did: int, value: int) -> None:
+def effective_new_per_day(col: Any, did: int) -> int:
+    """How many new cards this deck will actually introduce today.
+
+    The v3 scheduler reads the *deck's* own limit first and only falls
+    back to the preset — `current_new_limit(deck).unwrap_or(config
+    .new_per_day)` in rslib's decks/limits.rs. Reading the preset alone,
+    as this module used to, reports a number the scheduler may not be
+    using, and then the dialog's pacing arithmetic is about the wrong
+    limit.
+    """
+    try:
+        deck = col.decks.get(did, default=False)
+        if deck:
+            today = col.sched.today
+            day = deck.get("newLimitToday") or {}
+            if day and int(day.get("today", -1)) == int(today):
+                return int(day.get("limit", 0))
+            own = deck.get("newLimit")
+            if own is not None:
+                return int(own)
+    except Exception:
+        pass
+    try:
+        return int(col.decks.config_dict_for_deck_id(did)["new"]["perDay"])
+    except Exception:
+        return 20
+
+
+def set_new_per_day(did: int, value: int) -> bool:
+    """Raise (or lower) how many new cards this deck introduces a day.
+
+    Written as the deck's own `newLimit` — Anki's "This deck" override,
+    the field deck options writes under Daily limits — and *not* as the
+    preset's `new/perDay`, which is what this used to do. Two reasons,
+    both of which broke the "Raise limit to N/day" button:
+
+      * A preset is shared. The deck you set a deadline on is very often
+        still on Default along with everything else (24 other decks, in
+        the demo collection), so raising Default to 36/day to make one
+        deck's deadline reachable quietly raised 24 unrelated decks —
+        and made *their* remembered "original" limit 36 as well.
+      * The deck's own limit is the one the scheduler consults first, so
+        it holds whatever preset the deck later ends up on, including the
+        `— deadline` clone this module makes for it. A preset write could
+        be — and was — undone by the next `_apply`.
+
+    `newLimitToday` is cleared with it. Anki's "increase today's limit"
+    writes that, and it outranks the persistent limit for the rest of the
+    day; leaving it in place would mean pressing "Raise limit to 36/day"
+    changed nothing at all today, which is the exact complaint.
+
+    Returns True if the limit is now `value`.
+    """
     col = getattr(mw, "col", None)
     if col is None:
-        return
-    entry = _state().get(str(did))
-    state = _state()
-    if isinstance(entry, dict):
-        conf = _ensure_own_preset(col, did, entry)
-        state[str(did)] = entry
-        _save_state(state)
-    else:
-        conf = col.decks.config_dict_for_deck_id(did)
+        return False
     limit = max(1, int(value))
-    conf.setdefault("new", {})["perDay"] = limit
-    col.decks.update_config(conf)
-    # Remember the raise as the deck's real limit, so coming back from
-    # "Pause reviews" restores what the user chose and not what the
-    # preset happened to say before they raised it.
-    if isinstance(entry, dict):
-        state = _state()
+    state = _state()
+    entry = dict(state.get(str(did)) or {})
+    paused = isinstance(entry.get("paused_limits"), dict)
+    try:
+        deck = col.decks.get(did, default=False)
+        if not deck:
+            return False
+        if paused:
+            # The deck is parked at 0/0 and its real limits are in the
+            # snapshot `_set_limits` took. Write there, or resuming would
+            # restore the old number over this one.
+            entry["paused_limits"]["newLimit"] = limit
+            state[str(did)] = entry
+            _save_state(state)
+        else:
+            deck["newLimit"] = limit
+            deck.pop("newLimitToday", None)
+            col.decks.update_dict(deck)
+    except Exception as exc:
+        _log(f"set new/day {did}: {exc!r}")
+        return False
+    # Also remembered as the deck's "original" limit, which is what the
+    # legacy preset-restore migration in `_set_limits` puts back.
+    state = _state()
+    if str(did) in state:
         cur = dict(state.get(str(did)) or {})
         cur["orig_new_per_day"] = limit
+        if paused and isinstance(cur.get("paused_limits"), dict):
+            cur["paused_limits"]["newLimit"] = limit
         state[str(did)] = cur
         _save_state(state)
+    return paused or effective_new_per_day(col, did) == limit
 
 
 # --------------------------------------------------------------------------- #
 # Set / clear / refresh
 # --------------------------------------------------------------------------- #
 def _set_limits(col: Any, conf: Dict[str, Any], entry: Dict[str, Any],
-                paused: bool) -> None:
+                did: int, paused: bool) -> None:
     """Stop or resume a deck without touching a single card.
 
-    Zeroing the preset's per-day limits is how you pause a deck in Anki:
-    the cards keep their due dates, their intervals and their history, and
-    nothing needs unsuspending afterwards — the deck simply stops
-    presenting anything. Suspending 400 cards to achieve the same thing
-    would be destructive and would lose the distinction between "parked by
-    me" and "parked by a deadline"."""
+    A per-day limit of 0 is how you park a deck in Anki: the cards keep
+    their due dates, their intervals and their history, and nothing needs
+    unsuspending afterwards — the deck simply stops presenting anything.
+    Suspending 400 cards to achieve the same thing would be destructive
+    and would lose the distinction between "parked by me" and "parked by a
+    deadline".
+
+    The zero goes on the *deck* (`newLimit` / `reviewLimit`, Anki's "This
+    deck" overrides), not on the preset. Two things were wrong with the
+    preset:
+
+      * it's shared, so parking one deck parked every deck sitting on the
+        same preset;
+      * resuming meant writing a remembered number back over `perDay`, and
+        `_apply` runs on every profile open and every deadline edit. So
+        any limit the user set afterwards — by hand in deck options, or
+        with this dialog's own "Raise limit to N/day" button — was
+        reverted at the next refresh, back to a snapshot taken when the
+        deadline was created (or to a hardcoded 20 for entries written
+        before that snapshot existed). That is the bug behind "the raise
+        button does nothing": it did something, and then this undid it.
+
+    Only a state change is written, so a deck that isn't paused is left
+    entirely alone.
+    """
+    deck = None
+    try:
+        deck = col.decks.get(did, default=False)
+    except Exception:
+        deck = None
+    if paused:
+        if deck is None:
+            return
+        # Snapshot the deck's own overrides *once*, before zeroing them —
+        # keyed on presence, not truthiness, or a second pass over an
+        # already-paused deck would snapshot the zeroes and resuming would
+        # restore a parked deck.
+        if "paused_limits" not in entry:
+            entry["paused_limits"] = {
+                "newLimit": deck.get("newLimit"),
+                "reviewLimit": deck.get("reviewLimit"),
+            }
+        if deck.get("newLimit") != 0 or deck.get("reviewLimit") != 0:
+            deck["newLimit"] = 0
+            deck["reviewLimit"] = 0
+            deck.pop("newLimitToday", None)
+            deck.pop("reviewLimitToday", None)
+            col.decks.update_dict(deck)
+        return
+    # Resuming — or never paused, in which case there is nothing to do.
+    saved = entry.pop("paused_limits", None)
+    if saved is not None and deck is not None:
+        # Back to exactly what the deck had, which is not necessarily
+        # "no override": a limit raised to hit the deadline is a choice
+        # the user made and pausing shouldn't quietly spend it.
+        if not isinstance(saved, dict):
+            saved = {}
+        for key in ("newLimit", "reviewLimit"):
+            val = saved.get(key)
+            if val is None:
+                deck.pop(key, None)
+            else:
+                deck[key] = int(val)
+        col.decks.update_dict(deck)
+    # Migration: an older build paused by zeroing the preset instead, and
+    # a preset stuck at 0 shows no cards at all. Put back what we
+    # remembered — once; after that the branch can't fire again.
     new = conf.setdefault("new", {})
     rev = conf.setdefault("rev", {})
-    if paused:
-        new["perDay"] = 0
-        rev["perDay"] = 0
-    else:
+    if int(new.get("perDay", 0) or 0) == 0 or int(rev.get("perDay", 0) or 0) == 0:
         new["perDay"] = int(entry.get("orig_new_per_day") or 20)
         rev["perDay"] = int(entry.get("orig_rev_per_day") or 200)
-    col.decks.update_config(conf)
+        col.decks.update_config(conf)
 
 
 def _apply(col: Any, did: int, entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -364,14 +484,14 @@ def _apply(col: Any, did: int, entry: Dict[str, Any]) -> Dict[str, Any]:
     if left >= 0:
         # Still ahead: cap intervals at the days remaining, normal limits.
         _set_max_interval(col, conf, max(1, left))
-        _set_limits(col, conf, entry, paused=False)
+        _set_limits(col, conf, entry, did, paused=False)
         entry.pop("notified_passed", None)
         return entry
     # Passed. The cap has done its job and comes off either way — a card
     # answered after the deadline is memory upkeep, not a failure to hit
     # the date.
     _set_max_interval(col, conf, int(entry.get("orig_max_ivl") or DEFAULT_MAX_IVL))
-    _set_limits(col, conf, entry, paused=(entry.get("mode") == MODE_PAUSE))
+    _set_limits(col, conf, entry, did, paused=(entry.get("mode") == MODE_PAUSE))
     return entry
 
 
@@ -435,14 +555,14 @@ def clear_deadline(did: int, notify: bool = False) -> None:
             _set_max_interval(
                 col, conf, int(entry.get("orig_max_ivl") or DEFAULT_MAX_IVL)
             )
-            _set_limits(col, conf, entry, paused=False)
+            _set_limits(col, conf, entry, did, paused=False)
             col.decks.set_config_id_for_deck_dict(col.decks.get(did), orig_conf)
         else:
             conf = col.decks.config_dict_for_deck_id(did)
             _set_max_interval(
                 col, conf, int(entry.get("orig_max_ivl") or DEFAULT_MAX_IVL)
             )
-            _set_limits(col, conf, entry, paused=False)
+            _set_limits(col, conf, entry, did, paused=False)
     except Exception as exc:
         _log(f"clear deadline {did}: {exc!r}")
     if notify:
@@ -654,13 +774,15 @@ def show_dialog(did: int) -> None:
 
             search = col.build_search_string(SearchNode(deck=name))
             remaining = len(col.find_cards(f"{search} is:new -is:suspended"))
-            per_day = int(col.decks.config_dict_for_deck_id(did)["new"]["perDay"])
+            per_day = effective_new_per_day(col, did)
         except Exception:
             note.setText("")
             return
         needed = int(math.ceil(remaining / left)) if remaining else 0
         day_s = "day" if left == 1 else "days"
         lines = [f"Intervals will be capped at {left} {day_s}."]
+        if pace_state.get("raised"):
+            lines.append(f"Limit raised to {pace_state['raised']}/day ✓")
         if remaining and needed > per_day:
             lines.append(
                 f"{remaining} new cards in {left} {day_s} needs "
@@ -696,9 +818,19 @@ def show_dialog(did: int) -> None:
     root.addLayout(row)
 
     def on_raise() -> None:
-        if pace_state.get("needed"):
-            set_new_per_day(did, pace_state["needed"])
-            refresh_note()
+        wanted = pace_state.get("needed")
+        if not wanted:
+            return
+        if set_new_per_day(did, wanted):
+            # Say so in the dialog. Previously the only evidence a raise
+            # had happened was the button disappearing, which reads much
+            # more like a control that gave up than one that worked.
+            pace_state["raised"] = wanted
+            _tooltip(f"“{name}” — new cards raised to {wanted}/day")
+            _refresh_deck_browser()
+        else:
+            _tooltip("Couldn't change that deck's daily limit")
+        refresh_note()
 
     def on_save() -> None:
         sel = cal.selectedDate()
