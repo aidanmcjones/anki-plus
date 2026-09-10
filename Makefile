@@ -14,9 +14,33 @@ BASE := $(HOME)/Library/Application Support/Anki2-dev/$(NAME)
 LINK := $(BASE)/addons21/$(NAME)
 
 # Anki ships a uv-managed venv; this script runs Anki directly (bypassing the
-# launcher) so we can pass -b and a per-instance USER. Override with ANKI=.
-ANKI    ?= $(HOME)/Library/Application Support/AnkiProgramFiles/.venv/bin/anki
-ANKI_PY ?= $(HOME)/Library/Application Support/AnkiProgramFiles/.venv/bin/python
+# launcher) so we can pass -b and a per-instance USER.
+#
+# Where that venv lives depends on how Anki got onto the machine, so probe the
+# known homes and take the first that actually has an `anki` in it:
+#   1. the official launcher's uv venv (a normal Anki install);
+#   2. `out/pyenv` of an Anki source tree built with `just run`, either beside
+#      this repo or at the conventional ~/dev/anki.
+# Spaces in the paths rule out make's $(wildcard); a tiny shell loop it is.
+# Override either with ANKI=/path/to/.venv/bin/anki (and ANKI_PY=…).
+ANKI_VENV := $(shell for p in \
+	"$$HOME/Library/Application Support/AnkiProgramFiles/.venv" \
+	"$(CURDIR)/../anki/out/pyenv" \
+	"$$HOME/dev/anki/out/pyenv"; do \
+	  [ -x "$$p/bin/anki" ] && { printf '%s' "$$p"; break; }; \
+	done)
+ANKI    ?= $(ANKI_VENV)/bin/anki
+ANKI_PY ?= $(ANKI_VENV)/bin/python
+
+# A source tree's out/pyenv installs anki/aqt *editable* from pylib/ and qt/,
+# but the generated halves of those packages (anki.buildinfo, the Fluent
+# bindings, _aqt) only exist under out/pylib and out/qt. Without them on
+# PYTHONPATH the very first `import anki` dies on `anki.buildinfo`. A launcher
+# venv is self-contained and gets an empty prefix.
+ANKI_ENV := $(shell v="$(ANKI_VENV)"; s="$${v%/out/pyenv}"; \
+	if [ "$$s" != "$$v" ] && [ -d "$$s/out/pylib" ]; then \
+	  printf 'PYTHONPATH="%s/out/pylib:%s/out/qt"' "$$s" "$$s"; \
+	fi)
 
 # Real base, used by `make seed` as a read source and `make install` as the
 # install target (your actual Anki, NOT the dev/demo bases).
@@ -55,18 +79,18 @@ dev:
 # single-instance key, so it runs alongside other worktrees' Ankis.
 # Output is logged (NOT discarded) so add-on tracebacks are recoverable.
 run:
-	@test -x "$(ANKI)" || { echo "anki not found at: $(ANKI)"; echo "set ANKI=/path/to/.venv/bin/anki"; exit 1; }
+	@test -x "$(ANKI)" || { echo "anki not found at: $(ANKI)"; echo "no Anki venv found — set ANKI=/path/to/.venv/bin/anki"; exit 1; }
 	@mkdir -p "$(BASE)"
-	@USER="$(NAME)" LOGNAME="$(NAME)" nohup "$(ANKI)" -b "$(BASE)" >"$(BASE)/run.log" 2>&1 &
+	@USER="$(NAME)" LOGNAME="$(NAME)" $(ANKI_ENV) nohup "$(ANKI)" -b "$(BASE)" >"$(BASE)/run.log" 2>&1 &
 	@echo "launched $(NAME) (base: $(BASE))"
 	@echo "log    : make logs   (or: tail -f '$(BASE)/run.log')"
 
 # Same, but in the foreground with output on the terminal — use this to see
 # a crash/traceback live while debugging.
 run-fg:
-	@test -x "$(ANKI)" || { echo "anki not found at: $(ANKI)"; echo "set ANKI=/path/to/.venv/bin/anki"; exit 1; }
+	@test -x "$(ANKI)" || { echo "anki not found at: $(ANKI)"; echo "no Anki venv found — set ANKI=/path/to/.venv/bin/anki"; exit 1; }
 	@mkdir -p "$(BASE)"
-	@USER="$(NAME)" LOGNAME="$(NAME)" "$(ANKI)" -b "$(BASE)"
+	@USER="$(NAME)" LOGNAME="$(NAME)" $(ANKI_ENV) "$(ANKI)" -b "$(BASE)"
 
 # Tail this worktree's Anki log.
 logs:
@@ -97,8 +121,8 @@ seed:
 # under $(DEMO_CACHE). The cache is what `make demo` copies from on
 # subsequent runs across any worktree — seed once, load fast everywhere.
 demo-seed: demo-stop
-	@test -x "$(ANKI_PY)" || { echo "anki venv python not found at: $(ANKI_PY)"; exit 1; }
-	@"$(ANKI_PY)" scripts/seed_demo.py --force --variant "$(VARIANT)" --base "$(DEMO_BASE)"
+	@test -x "$(ANKI_PY)" || { echo "anki venv python not found at: $(ANKI_PY)"; echo "no Anki venv found — set ANKI_PY=/path/to/.venv/bin/python"; exit 1; }
+	@$(ANKI_ENV) "$(ANKI_PY)" scripts/seed_demo.py --force --variant "$(VARIANT)" --base "$(DEMO_BASE)"
 	@$(MAKE) -s demo-cache-write
 	@$(MAKE) -s demo-link
 	@echo "demo  : seeded variant '$(VARIANT)' into $(DEMO_BASE)"
@@ -136,9 +160,9 @@ demo-link:
 # alongside this worktree's regular dev instance (unique USER => unique
 # single-instance key).
 demo-run:
-	@test -x "$(ANKI)" || { echo "anki not found at: $(ANKI)"; exit 1; }
+	@test -x "$(ANKI)" || { echo "anki not found at: $(ANKI)"; echo "no Anki venv found — set ANKI=/path/to/.venv/bin/anki"; exit 1; }
 	@test -f "$(DEMO_BASE)/$(DEMO_PROFILE)/collection.anki2" || { echo "no demo collection yet — run 'make demo VARIANT=$(VARIANT)' first"; exit 1; }
-	@USER="$(DEMO_NAME)" LOGNAME="$(DEMO_NAME)" nohup "$(ANKI)" -b "$(DEMO_BASE)" >"$(DEMO_BASE)/run.log" 2>&1 &
+	@USER="$(DEMO_NAME)" LOGNAME="$(DEMO_NAME)" $(ANKI_ENV) nohup "$(ANKI)" -b "$(DEMO_BASE)" >"$(DEMO_BASE)/run.log" 2>&1 &
 	@echo "launched demo Anki ($(VARIANT) variant, base: $(DEMO_BASE))"
 	@echo "log    : tail -f '$(DEMO_BASE)/run.log'"
 
