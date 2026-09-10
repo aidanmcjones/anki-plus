@@ -216,7 +216,7 @@
       // Wordmark — Anki+ lockup. Helvetica "anki" from the original mark,
       // followed by an accent-blue plus; scales from the same CSS variable.
       + '<div class="ba-side-head">'
-      +   '<span class="ad-logo ba-side-mark" aria-label="Anki+">'
+      +   '<span class="ad-logo ba-side-mark" aria-label="Anki+ — go to decks">'
       +     '<span class="ad-mark">anki<span class="ad-plus">+</span></span>'
       +   '</span>'
       + '</div>'
@@ -253,46 +253,21 @@
       })(statKinds[si]);
     }
 
-    // Wordmark is a static mark — it deliberately links nowhere.
+    // Wordmark doubles as the home button: clicking anki+ returns to the
+    // deck screen. "decks" also closes any open embed (same command the
+    // rail's Decks item sends), and Python no-ops when already home.
     var mark = aside.querySelector(".ba-side-mark");
     if (mark) {
-
-      // Googly period — on hover, the red dot grows an eyeball that tracks
-      // the cursor. A ring of ink particles bursts outward around it just
-      // as the sclera finishes scaling in (timing handled by the CSS
-      // animation-delay on .ad-dot::after). Skipped under reduced-motion.
-      var dot = mark.querySelector(".ad-dot");
-      var pupil = dot ? dot.querySelector(".ad-pupil") : null;
-      var reducedMotion = window.matchMedia
-        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if (dot && pupil && !reducedMotion) {
-        var trackPupil = function (e) {
-          var rect = dot.getBoundingClientRect();
-          var cx = rect.left + rect.width / 2;
-          var cy = rect.top + rect.height / 2;
-          var dx = e.clientX - cx;
-          var dy = e.clientY - cy;
-          var size = parseFloat(getComputedStyle(dot).fontSize) || 20;
-          var maxPx = 0.18 * size;
-          var len = Math.hypot(dx, dy);
-          if (len > maxPx) {
-            dx = (dx / len) * maxPx;
-            dy = (dy / len) * maxPx;
-          }
-          pupil.style.setProperty("--ad-pupil-x", dx + "px");
-          pupil.style.setProperty("--ad-pupil-y", dy + "px");
-        };
-        mark.addEventListener("mouseenter", function () {
-          document.addEventListener("mousemove", trackPupil);
-          mark.classList.add("is-burst");
-        });
-        mark.addEventListener("mouseleave", function () {
-          document.removeEventListener("mousemove", trackPupil);
-          pupil.style.setProperty("--ad-pupil-x", "0px");
-          pupil.style.setProperty("--ad-pupil-y", "0px");
-          mark.classList.remove("is-burst");
-        });
-      }
+      mark.setAttribute("role", "button");
+      mark.setAttribute("tabindex", "0");
+      var goHome = function () { send("decks"); };
+      mark.addEventListener("click", goHome);
+      mark.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          goHome();
+        }
+      });
     }
 
     // Command-K palette launcher. Rendered as a button styled like a
