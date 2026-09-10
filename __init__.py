@@ -3795,25 +3795,76 @@ except Exception as _e:
 #
 # Never ships: build.py and .gitignore exclude .devmode, so end users (who
 # install the zip, no .devmode) never start the watcher thread.
+#
+# .devmode is necessary but NOT sufficient — see _dev_profile_allowed below.
 # --------------------------------------------------------------------------- #
 ADDON_SRC = os.path.dirname(os.path.abspath(__file__))
-# Dev: a heartbeat file so we can verify the addon module imported (and at
-# what time) without scraping stdout. Truncate-on-import so each Anki start
-# produces a fresh entry.
-try:
-    _ctx = os.path.join(ADDON_SRC, ".context")
-    if os.path.isdir(_ctx):
-        with open(os.path.join(_ctx, "addon.log"), "w") as _fh:
-            _fh.write(f"imported {time.time():.0f}\n")
-except Exception:
-    pass
 
 _dev_stop = threading.Event()
 _dev_thread: Optional[threading.Thread] = None
 
 
+# --------------------------------------------------------------------------- #
+# Which profiles may arm the dev channel
+# --------------------------------------------------------------------------- #
+# A `.devmode` file is a property of the *source tree*, and a source tree can
+# be loaded by more than one Anki at once: this repo is commonly symlinked
+# into a real profile's addons21 as well as into the dev/demo bases. When it
+# is, `make demo` touching .devmode armed the command channel inside the
+# user's LIVE Anki too — same file, same watcher, same `.context/cmd` — and
+# scripted probes meant for a throwaway demo executed against their real
+# collection. That happened repeatedly, so the flag alone no longer decides.
+#
+# The base directory does. Every dev and demo instance is launched with
+# `-b .../Anki2-dev/<name>`; a normal install lives in `.../Anki2`. So the
+# channel arms only for a base under Anki2-dev (or one named like a demo
+# profile), or when someone deliberately sets ANKI_DESIGN_DEV=1. Anything
+# else — most importantly a real profile — refuses, .devmode or not.
+_DEV_BASE_PARENT = "Anki2-dev"
+_DEV_DEMO_PREFIX = "anki-design-demo"
+_DEV_ENV_FLAG = "ANKI_DESIGN_DEV"
+
+_dev_profile_ok: Dict[str, Optional[bool]] = {"v": None}
+
+
+def _dev_profile_allowed() -> bool:
+    """True if THIS Anki's profile is one the dev channel may drive."""
+    cached = _dev_profile_ok["v"]
+    if cached is not None:
+        return cached
+    if os.environ.get(_DEV_ENV_FLAG) == "1":
+        _dev_profile_ok["v"] = True
+        return True
+    try:
+        base = os.path.abspath(mw.pm.base)
+    except Exception:
+        # Profile not up yet (add-ons import before it opens). Refuse
+        # rather than guess, and don't cache — the answer isn't knowable
+        # yet, and every caller re-checks.
+        return False
+    if not base:
+        return False
+    ok = (
+        os.path.basename(os.path.dirname(base)) == _DEV_BASE_PARENT
+        or os.path.basename(base).startswith(_DEV_DEMO_PREFIX)
+    )
+    _dev_profile_ok["v"] = ok
+    if not ok and os.path.exists(os.path.join(ADDON_SRC, ".devmode")):
+        # Worth saying out loud: someone armed the tree and is running a
+        # profile that won't honour it. Silence here reads as a broken
+        # dev channel and sends you hunting in the wrong place.
+        print(
+            f"[anki-design] .devmode ignored: profile base {base!r} is not a "
+            f"dev/demo base. Set {_DEV_ENV_FLAG}=1 to override.",
+            flush=True,
+        )
+    return ok
+
+
 def _dev_active() -> bool:
-    return os.path.exists(os.path.join(ADDON_SRC, ".devmode"))
+    return os.path.exists(
+        os.path.join(ADDON_SRC, ".devmode")
+    ) and _dev_profile_allowed()
 
 
 def _dev_reload_views() -> None:
@@ -5095,6 +5146,19 @@ def _dev_cmd_start() -> None:
     if _dev_cmd_started["v"]:
         return
     _dev_cmd_started["v"] = True
+    # Heartbeat: truncate the log so each Anki start leaves a fresh file,
+    # and stamp it, so "did the add-on load, and when" is answerable
+    # without scraping stdout. This used to run at import — which meant
+    # any profile that loaded this tree, including a live one that will
+    # never arm the channel, wiped the log a demo instance was writing.
+    # It belongs here, past the gate.
+    try:
+        ctx = os.path.join(ADDON_SRC, ".context")
+        if os.path.isdir(ctx):
+            with open(os.path.join(ctx, "addon.log"), "w") as fh:
+                fh.write(f"imported {time.time():.0f}\n")
+    except Exception:
+        pass
     # Drain any stale cmd file from a prior session so we don't auto-fire
     # a command (like `show`) against the homepage state on startup.
     try:

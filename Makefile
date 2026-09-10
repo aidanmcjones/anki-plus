@@ -47,7 +47,7 @@ ANKI_ENV := $(shell v="$(ANKI_VENV)"; s="$${v%/out/pyenv}"; \
 REAL_BASE    := $(HOME)/Library/Application Support/Anki2
 REAL_INSTALL := $(REAL_BASE)/addons21/anki-design
 
-.PHONY: dev undev run run-fg logs seed demo-seed demo-run demo demo-rebuild demo-stop demo-clean demo-clean-cache demo-clean-all demo-cache-write demo-cache-restore demo-link deisolate clean-base build install clean
+.PHONY: dev undev run run-fg logs seed demo-seed demo-run demo demo-rebuild demo-stop demo-clean demo-clean-cache demo-clean-all demo-cache-write demo-cache-restore demo-link deisolate clean-base build install clean sandbox demo-sandbox sync
 
 # Demo bases — each variant gets its own Anki base + its own golden cache.
 # The cache lives under ~/Library/Caches so it's shared across all worktrees:
@@ -63,16 +63,69 @@ DEMO_LINK    := $(DEMO_BASE)/addons21/$(DEMO_NAME)
 DEMO_CACHE   := $(HOME)/Library/Caches/anki-design-demo/$(VARIANT)
 DEMO_PROFILE := User 1
 
-# Symlink this worktree into its isolated base AND enable web/ hot-reload.
-dev:
+# --- Sandboxes ------------------------------------------------------------
+# Dev and demo Ankis load a *copy* of this checkout, never the checkout
+# itself. The checkout is routinely symlinked into a real profile's
+# addons21 as well, and `.devmode` is a property of the tree rather than of
+# an instance: arming it here armed the command channel inside the user's
+# live Anki too, and scripted probes aimed at a throwaway demo ran against
+# their real collection. (`_dev_profile_allowed` in __init__.py refuses that
+# now; this keeps the flag out of the shared tree in the first place, so
+# neither guard is load-bearing alone.)
+#
+# `.context` in the checkout becomes a symlink into the sandbox, so
+# scripts/snap.sh and `.context/cmd` keep working from the repo root exactly
+# as documented. Edits are pushed with `make sync`.
+SANDBOX_ROOT := $(HOME)/Library/Caches/anki-design-sandbox
+SANDBOX      := $(SANDBOX_ROOT)/$(NAME)
+DEMO_SANDBOX := $(SANDBOX_ROOT)/$(DEMO_NAME)
+SB_EXCLUDES  := --exclude '.git/' --exclude '__pycache__/' --exclude 'out/' \
+                --exclude 'dist/' --exclude '.context' --exclude '.devmode'
+
+# $(call ba-sandbox,<dir>) — refresh a sandbox, arm it, point .context at it,
+# and make sure the checkout itself is left disarmed.
+define ba-sandbox
+	mkdir -p "$(1)"; \
+	rsync -a --delete $(SB_EXCLUDES) "$(SRC)/" "$(1)/"; \
+	touch "$(1)/.devmode"; \
+	mkdir -p "$(1)/.context/screenshot-requests" "$(1)/.context/dump-requests"; \
+	rm -f "$(SRC)/.devmode"; \
+	if [ ! -L "$(SRC)/.context" ]; then rm -rf "$(SRC)/.context"; fi; \
+	ln -sfn "$(1)/.context" "$(SRC)/.context"
+endef
+
+sandbox:
+	@$(call ba-sandbox,$(SANDBOX))
+	@echo "sandbox: $(SANDBOX)"
+
+demo-sandbox:
+	@$(call ba-sandbox,$(DEMO_SANDBOX))
+	@echo "sandbox: $(DEMO_SANDBOX)"
+
+# Push edits from the checkout into every sandbox that exists. Run after
+# changing anything under web/ (the hot-reloader watches the sandbox) and
+# after any Python change (which needs a restart regardless).
+sync:
+	@found=0; \
+	for d in "$(SANDBOX)" "$(DEMO_SANDBOX)"; do \
+	  [ -d "$$d" ] || continue; \
+	  found=1; \
+	  rsync -a --delete $(SB_EXCLUDES) "$(SRC)/" "$$d/"; \
+	  touch "$$d/.devmode"; \
+	  echo "synced -> $$d"; \
+	done; \
+	[ "$$found" = 1 ] || echo "no sandbox yet — run 'make dev' or 'make demo'"
+
+# Symlink this worktree's SANDBOX into its isolated base AND enable
+# web/ hot-reload.
+dev: sandbox
 	@mkdir -p "$(BASE)/addons21"
 	@rm -rf "$(LINK)"
-	@ln -s "$(SRC)" "$(LINK)"
-	@touch "$(SRC)/.devmode"
+	@ln -s "$(SANDBOX)" "$(LINK)"
 	@echo "addon  : $(NAME)"
 	@echo "base   : $(BASE)"
-	@echo "link   : $(LINK) -> $(SRC)"
-	@echo "hotload: web/*.css and web/*.js reload live — no restart needed."
+	@echo "link   : $(LINK) -> $(SANDBOX)"
+	@echo "hotload: web/*.css and web/*.js reload live after 'make sync'."
 	@echo "next   : 'make run' (first run = empty collection; 'make seed' for real data)"
 
 # Launch THIS worktree's Anki, backgrounded. Unique USER => unique
@@ -150,11 +203,10 @@ demo-cache-restore:
 
 # Symlink this worktree's source into the demo base's addons21 so the
 # add-on runs against THIS code (not a copy).
-demo-link:
+demo-link: demo-sandbox
 	@mkdir -p "$(DEMO_BASE)/addons21"
 	@rm -rf "$(DEMO_LINK)"
-	@ln -s "$(SRC)" "$(DEMO_LINK)"
-	@touch "$(SRC)/.devmode"
+	@ln -s "$(DEMO_SANDBOX)" "$(DEMO_LINK)"
 
 # Launch Anki against the demo base. Runs alongside your real Anki and
 # alongside this worktree's regular dev instance (unique USER => unique
@@ -200,6 +252,7 @@ demo-rebuild: demo-stop demo-seed demo-run
 # `make demo` is still instant).
 demo-clean: demo-stop
 	@rm -rf "$(DEMO_BASE)"
+	@rm -rf "$(DEMO_SANDBOX)"
 	@echo "removed live demo base: $(DEMO_BASE)"
 	@echo "(cache at $(DEMO_CACHE) preserved — run 'make demo-clean-cache VARIANT=$(VARIANT)' to drop)"
 
@@ -224,9 +277,14 @@ deisolate:
 	@"$(ANKI_PY)" scripts/strip_sync.py "$(BASE)/prefs21.db"
 
 # Remove this worktree's symlink + disable its hot-reload (keeps the base).
+# Takes the sandbox with it, and puts the checkout's .context back to being
+# a plain (absent) directory rather than a dangling symlink.
 undev:
 	@rm -rf "$(LINK)"
+	@rm -rf "$(SANDBOX)"
 	@rm -f "$(SRC)/.devmode"
+	@if [ -L "$(SRC)/.context" ] && [ ! -e "$(SRC)/.context" ]; then \
+	  rm -f "$(SRC)/.context"; fi
 	@echo "unlinked: $(NAME)"
 
 # Nuke this worktree's isolated base entirely.

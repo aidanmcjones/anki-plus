@@ -115,8 +115,27 @@ than ~1200px just adds empty margins to the shot.
   is the fast way.
 - The watcher only runs when `.devmode` is present. `make build` and the
   shipped `.ankiaddon` both exclude it, so end users never see this channel.
-- Multiple worktrees run isolated Ankis simultaneously; each writes to its
-  own `.context/` so requests can't cross-talk.
+- **The dev Anki loads a sandbox copy, not this checkout.** `make dev` /
+  `make demo` rsync the tree to
+  `~/Library/Caches/anki-design-sandbox/<name>`, arm *that* with
+  `.devmode`, and point the base's `addons21` entry at it; `.context` in
+  the repo root becomes a symlink into the sandbox, so `snap.sh`,
+  `dump.sh` and `.context/cmd` all still work from here unchanged.
+  **Edits in the checkout do not reach the running Anki until
+  `make sync`** — including `web/` changes, which the hot-reloader now
+  watches inside the sandbox. This exists because the repo is also
+  symlinked into the user's *real* profile: `.devmode` is a property of
+  the tree, not of an instance, so arming it here used to arm the command
+  channel inside their live Anki, where scripted probes then drove their
+  real collection.
+- **`.devmode` alone is not enough.** `_dev_profile_allowed` refuses
+  unless the profile's base directory sits under `Anki2-dev/`, is named
+  `anki-design-demo*`, or `ANKI_DESIGN_DEV=1` is set. A real profile
+  ignores the flag and prints one line saying so. If the channel looks
+  dead, check that line before suspecting the watcher — and don't
+  "fix" it by removing the gate.
+- Multiple worktrees run isolated Ankis simultaneously; each has its own
+  sandbox and `.context/`, so requests can't cross-talk.
 
 ### When silent capture isn't an option
 
