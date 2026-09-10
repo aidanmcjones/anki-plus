@@ -136,6 +136,7 @@ def _js_opts(cfg: Dict[str, Any]) -> Dict[str, Any]:
             "startup": startup,
             "dragMove": bool(cfg.get("deck_drag_move", True)),
             "singleHero": bool(cfg.get("single_deck_hero", True)),
+            "subsections": bool(cfg.get("deck_subsections", True)),
         },
         "reviewer": {
             "clickToReveal": bool(cfg.get("click_to_reveal", True)),
@@ -1370,6 +1371,10 @@ def _on_js_message(handled, message, context):
                     # one being studied.
                     from . import reviewer_menu as _rm
                     _rm.randomize_deck(did)
+                elif action == "subsection":
+                    from . import subsections as _subs
+                    if _subs.enabled():
+                        _subs.show_dialog(did)
                 elif action == "deadline":
                     from . import deadlines as _dl
                     if _dl.enabled():
@@ -3411,6 +3416,17 @@ try:
         _browse_style.on_browser_will_build_tree
     )
     gui_hooks.theme_did_change.append(_browse_style.on_theme_did_change)
+except Exception:
+    pass
+
+# "New subsection…" on a deck's right-click menu in the Browse sidebar —
+# the same action the deck list's gear menu carries.
+try:
+    from . import subsections as _subsections
+
+    gui_hooks.browser_sidebar_will_show_context_menu.append(
+        _subsections.on_browser_sidebar_context_menu
+    )
 except Exception:
     pass
 

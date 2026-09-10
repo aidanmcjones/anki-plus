@@ -32,6 +32,14 @@ in this file are the raw form the settings page writes.
   `"collapsed"` closes every parent on launch.
 - **deck_drag_move** — drag a deck onto another to nest it (or onto the
   top-level zone). "Move to…" in the deck menu is always available.
+- **deck_subsections** — **New subsection…** on a deck's menu, both on the
+  deck list (the gear) and in the Browse sidebar (right-click). Name a
+  heading — "Exam 1 Content" — and tick the sub-decks that belong under
+  it; they are renamed into it (`Microbiology::Week 1` becomes
+  `Microbiology::Exam 1 Content::Week 1`). A rename keeps the deck id, so
+  the cards, the scheduling, the preset, the per-day limits and any
+  **Memorize by…** deadline come with it — it is the same deck, filed one
+  level deeper. Ticking nothing creates the heading empty.
 - **single_deck_hero** — with one top-level deck, show it as a big card with
   its sub-decks listed beneath.
 - **skip_overview** — clicking a deck starts studying right away. `false`

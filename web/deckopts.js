@@ -42,6 +42,10 @@
            + '<path d="M4 4l5 5"/>',
     empty:   '<path d="M3 6h18"/><path d="M8 6V4h8v2"/>'
            + '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>',
+    // A folder with a plus — "gather some of these under a new heading".
+    folder:  '<path d="M3 7a2 2 0 0 1 2-2h3.5l2 2.5H19a2 2 0 0 1 2 2V18'
+           + 'a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'
+           + '<path d="M12 11.5v5"/><path d="M9.5 14h5"/>',
     delete:  '<path d="M3 6h18"/><path d="M8 6V4h8v2"/>'
            + '<path d="M10 11v6"/><path d="M14 11v6"/>'
            + '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>',
@@ -55,6 +59,7 @@
     { cmd: "export",  label: "Export deck…",     icon: "export" },
     { cmd: "rebuild", label: "Rebuild (filtered)", icon: "rebuild" },
     { cmd: "empty",   label: "Empty (filtered)",   icon: "empty" },
+    { cmd: "subsection", label: "New subsection…", icon: "folder" },
     { cmd: "restudy", label: "Restudy…",         icon: "rebuild" },
     { cmd: "randomize", label: "Randomize",      icon: "shuffle" },
     { cmd: "deadline", label: "Memorize by…",    icon: "calendar" },
@@ -103,12 +108,22 @@
     } catch (e) { return it.label; }
   }
 
+  // Settings → Deck list → "New subsection…" (config key deck_subsections).
+  // Missing key reads as on, same convention as every other __baOpts flag.
+  function subsectionsOn() {
+    try {
+      var o = window.__baOpts && window.__baOpts.deckList;
+      return !o || o.subsections !== false;
+    } catch (e) { return true; }
+  }
+
   function build(did) {
     var menu = document.createElement("div");
     menu.className = "ad-menu";
     menu.setAttribute("role", "menu");
     var html = "";
     ITEMS.forEach(function (it) {
+      if (it.cmd === "subsection" && !subsectionsOn()) return;
       if (it.sep_before) html += '<div class="ad-menu-sep" role="separator"></div>';
       var cls = "ad-menu-item" + (it.danger ? " ad-menu-danger" : "");
       html += '<button type="button" class="' + cls + '" role="menuitem" '

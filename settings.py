@@ -1016,6 +1016,13 @@ class AnkiDesignSettingsPage(QWidget):
             "zone to un-nest it. “Move to…” in the deck menu does the same.",
         ))
         v.addWidget(feature_row(
+            "deck_subsections", "New subsection…", True,
+            "Adds “New subsection…” to a deck's menu, on the deck list and "
+            "in Browse: name a heading, tick the sub-decks that belong "
+            "under it, and they're renamed into it — same decks, same "
+            "cards, same scheduling, same deadlines.",
+        ))
+        v.addWidget(feature_row(
             "single_deck_hero", "Single-deck hero", True,
             "With one top-level deck, show it as a big card with its "
             "sub-decks listed beneath.",

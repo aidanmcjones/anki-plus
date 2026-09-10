@@ -14,6 +14,7 @@
   "hide_bottom_on_overview": true,
   "deck_tree_startup": "remember",
   "deck_drag_move": true,
+  "deck_subsections": true,
   "single_deck_hero": true,
   "skip_overview": true,
   "reviewer_card_width": "medium",
