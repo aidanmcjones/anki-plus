@@ -391,6 +391,20 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             )
         except Exception:
             pass
+        # Same trick for the rail's active item. The deck browser re-renders
+        # behind an open embed's overlay (any collection op will do it), and
+        # a freshly built rail defaults to Decks — so without this seed the
+        # highlight walks off Browse and onto Decks while Browse is still
+        # what's on screen. An eval can't fix it after the fact: it would
+        # have to land between the page load and sidebar.js's IIFE.
+        try:
+            import json as _json
+            web_content.head += (
+                "<script>window.__baActiveItem = "
+                + _json.dumps(_active_embed_cmd() or "decks") + ";</script>"
+            )
+        except Exception:
+            pass
         # Per-deck deadline labels, so the gear menu can render
         # "Memorize by Sep 15 — 6d" without a round-trip per deck.
         try:
@@ -966,12 +980,46 @@ def _apply_chrome() -> None:
     _set_top_toolbar_visible(not _sidebar_on())
 
 
+# Which rail item each inline embed owns while its overlay is up. Only one
+# embed is ever open at a time, so the order here doesn't matter.
+_EMBED_RAIL_CMDS = (
+    ("addcard_embed", "add"),
+    ("browse_embed", "browse"),
+    ("stats_embed", "stats"),
+    ("settings_embed", "settings"),
+)
+
+
+def _active_embed_cmd() -> str:
+    """The rail item an open embed owns, or "" when none is open."""
+    from importlib import import_module
+
+    for mod_name, cmd in _EMBED_RAIL_CMDS:
+        try:
+            mod = import_module("." + mod_name, __name__)
+            if mod._state.get("overlay") is not None:
+                return cmd
+        except Exception:
+            continue
+    return ""
+
+
 def _mark_sidebar_active(state: Optional[str] = None) -> None:
     """Tell every themed webview's sidebar which item is current. Cheap and
-    safe — no-ops if the sidebar JS hasn't initialised yet."""
+    safe — no-ops if the sidebar JS hasn't initialised yet.
+
+    An open embed outranks `mw.state`, which is a poor witness while one is
+    up: an embed is an overlay *over* the deck browser, so mw.state reads
+    "deckBrowser" the entire time Browse is on screen. And the deck browser
+    re-renders behind that overlay for all sorts of reasons — expanding a
+    deck in Browse's own sidebar tree writes the collapse flag, which is a
+    collection op, which refreshes the deck browser — so every one of those
+    renders used to walk the highlight back to Decks underneath the user.
+    """
     raw = state if state is not None else getattr(mw, "state", "")
-    cmd = {"deckBrowser": "decks", "overview": "decks",
-           "review": "decks"}.get(str(raw), "")
+    cmd = _active_embed_cmd() or {
+        "deckBrowser": "decks", "overview": "decks", "review": "decks",
+    }.get(str(raw), "")
     if not cmd:
         return
     js = "window.__baSetActive && window.__baSetActive('%s');" % cmd

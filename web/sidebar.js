@@ -337,7 +337,7 @@
     var nav = document.createElement("nav");
     nav.className = "ba-side-nav";
     [
-      { cmd: "decks",  label: "Decks",  key: "D", active: true },
+      { cmd: "decks",  label: "Decks",  key: "D" },
       { cmd: "add",    label: "Add",    key: "A" },
       { cmd: "browse", label: "Browse", key: "B" },
       { cmd: "stats",  label: "Stats",  key: "T" },
@@ -516,6 +516,13 @@
   // Bootstrap from the <head>-embedded standing data (set by the addon
   // before any body script runs) — eliminates the eval-vs-IIFE race.
   if (window.__baStandingData) pending.standing = window.__baStandingData;
+  // Same for the active rail item. It used to be hardcoded onto the Decks
+  // row, which was only ever right on a cold start: an inline embed (Add,
+  // Browse, Stats, Settings) is an overlay over the deck browser, and any
+  // re-render of the page underneath it rebuilt this rail — pointing at
+  // Decks while Browse was still the thing on screen. Python seeds what it
+  // actually is.
+  pending.active = window.__baActiveItem || "decks";
 
   if (document.readyState !== "loading") inject();
   else document.addEventListener("DOMContentLoaded", inject);
