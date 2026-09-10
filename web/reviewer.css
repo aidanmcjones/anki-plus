@@ -715,7 +715,7 @@ html:not([data-rf-cardstyle="native"]) #qa hr {
    real editable target; `display: inline` keeps the layout unchanged. */
 .ba-rv-field {
   display: inline;
-  transition: text-decoration-color 160ms ease;
+  transition: border-color 160ms ease;
 }
 
 /* While editing, ease selector + click-to-reveal go away. */
@@ -723,26 +723,45 @@ body.ba-editing .ba-rv-ease { display: none !important; }
 body.ba-editing #qa { cursor: text; }
 
 /* Editing affordance: the text stays exactly where it sat in idle render
-   (no boxes, no fills, no padding shift). A single dashed underline is the
-   only persistent cue that something is editable; it turns solid + accent-
-   coloured when the field has the caret, so the user can always tell which
-   one they're typing into. */
+   (no boxes, no fills, no padding shift). A single dashed line under the
+   field is the only persistent cue that something is editable; it turns
+   solid + accent-coloured when the field has the caret, so the user can
+   always tell which one they're typing into.
+ *
+ * It is a BORDER, not `text-decoration: underline dashed`, and that is
+ * the whole point. `text-decoration` propagates to in-flow descendants
+ * and — per the spec — a descendant cannot turn it off or replace it. So
+ * with the affordance drawn as a decoration, the <u> that the quick
+ * editor's U button inserts had nothing to add: the text already carried
+ * a line, at the same 6px offset, and the user's underline was painted
+ * invisibly underneath it. B and I are inherited properties a descendant
+ * *can* override, which is exactly why those two looked fine and only U
+ * appeared dead.
+ *
+ * A border doesn't propagate, so <u> renders its own underline normally
+ * and stays legible against the dashed affordance below it. Vertical
+ * padding on an inline box doesn't affect line height, so the 4px that
+ * pushes the border clear of the descenders costs no layout shift.
+ */
 body.ba-editing .ba-rv-field {
   cursor: text;
   caret-color: var(--rf-accent);
-  text-decoration: underline dashed var(--rf-ink-faint);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 6px;
+  text-decoration: none;
+  border-bottom: 1px dashed var(--rf-ink-faint);
+  padding-bottom: 4px;
   outline: none;
 }
 body.ba-editing .ba-rv-field:hover {
-  text-decoration-color: var(--rf-ink-dim);
+  border-bottom-color: var(--rf-ink-dim);
 }
 body.ba-editing .ba-rv-field:focus {
   outline: none;
-  text-decoration: underline solid var(--rf-accent);
-  text-decoration-thickness: 1.5px;
-  text-underline-offset: 6px;
+  border-bottom: 2px solid var(--rf-accent);
+}
+/* The user's own formatting inside a field must win over the reset above. */
+body.ba-editing .ba-rv-field u,
+body.ba-editing .ba-rv-field ins {
+  text-decoration: underline;
 }
 
 /* Floating toolbar — pinned to the bottom of the viewport, centered. It
