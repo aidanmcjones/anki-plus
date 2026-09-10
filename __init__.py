@@ -3430,6 +3430,19 @@ try:
 except Exception:
     pass
 
+# Browse sidebar: multi-select without a mode. Installed per Browser (the
+# tree is built in `Browser.setupSidebar`), plus "Move to…" on the
+# right-click menu for whatever is selected.
+try:
+    from . import sidebar_select as _sidebar_select
+
+    gui_hooks.browser_will_show.append(_sidebar_select.install)
+    gui_hooks.browser_sidebar_will_show_context_menu.append(
+        _sidebar_select.on_sidebar_context_menu
+    )
+except Exception:
+    pass
+
 # Reviewer "More" menu: Randomize Set + the Cue… tag submenu.
 try:
     from . import reviewer_menu as _reviewer_menu

@@ -209,10 +209,37 @@ def on_browser_sidebar_context_menu(sidebar: Any, menu: Any, item: Any,
         did = int(item.id)
         if not did or is_filtered(did):
             return
+
+        # With several decks selected, "New subsection…" means "gather
+        # *these*": the heading goes under the deepest deck they all sit
+        # in, and they arrive pre-ticked. Reading the selection rather
+        # than only the clicked row is what makes a right-click on a
+        # multi-selection do the obvious thing.
+        selected: List[int] = []
+        parent_did = did
+        try:
+            from . import sidebar_select as _sidebar_select
+
+            picked = _sidebar_select._selected_deck_ids(sidebar)
+            if len(picked) > 1:
+                selected = picked
+                parent_did = _sidebar_select._common_parent(picked)
+        except Exception:
+            selected = []
+
+        if selected and (not parent_did or is_filtered(parent_did)):
+            # Nothing in common, or a filtered deck: a subsection needs a
+            # real deck to live under, so fall back to the clicked row.
+            selected, parent_did = [], did
+
         menu.addSeparator()
         menu.addAction(
-            "New subsection…",
-            lambda: show_dialog(did, parent_widget=sidebar),
+            f"New subsection from {len(selected)} decks…"
+            if selected
+            else "New subsection…",
+            lambda: show_dialog(
+                parent_did, parent_widget=sidebar, preselect=selected
+            ),
         )
     except Exception:
         pass
@@ -221,8 +248,15 @@ def on_browser_sidebar_context_menu(sidebar: Any, menu: Any, item: Any,
 # --------------------------------------------------------------------------- #
 # Dialog
 # --------------------------------------------------------------------------- #
-def show_dialog(did: int, parent_widget: Any = None) -> None:
-    """Name a subsection and tick the decks that go in it."""
+def show_dialog(
+    did: int, parent_widget: Any = None, preselect: Optional[List[int]] = None
+) -> None:
+    """Name a subsection and tick the decks that go in it.
+
+    `preselect` arrives from a multi-selection in the Browse sidebar: those
+    decks start ticked, so right-clicking four decks and choosing "New
+    subsection" is one field and one button.
+    """
     if not enabled():
         return
     from aqt.qt import (
@@ -283,10 +317,13 @@ def show_dialog(did: int, parent_widget: Any = None) -> None:
         col = QVBoxLayout(holder)
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(2)
+        ticked = {int(d) for d in (preselect or [])}
         for kid_id, leaf in kids:
             # QCheckBox reads "&" as a mnemonic, so "Pathology & Clinical"
             # renders as "Pathology  Clinical" with an underlined C.
             box = QCheckBox(leaf.replace("&", "&&"))
+            if kid_id in ticked:
+                box.setChecked(True)
             col.addWidget(box)
             boxes.append((box, kid_id))
         col.addStretch(1)

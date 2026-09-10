@@ -146,6 +146,19 @@ in this file are the raw form the settings page writes.
   hidden rows are all searches you can type — `is:due`, `flag:1`,
   `added:1`, `note:Basic`, `deck:current` — and the menu actions that
   create saved searches keep working.
+- **browse_sidebar_multiselect** — the sidebar picks several decks without
+  a mode. Anki puts multi-select behind a two-button tool row above the
+  tree (Search / Select); with this on, the tool row is gone and the tree
+  is always in the Select tool's mode. A plain click still searches the
+  deck you clicked. ⌘-click (Ctrl-click) adds a deck to the selection and
+  ⇧-click extends a run, without searching. Dragging any selected deck
+  onto another moves the whole selection in one undoable step, and
+  dragging from the empty space under the last deck lassos a rubber-band
+  across rows. Right-click acts on everything selected: **Move to…**
+  lists every deck the selection could go into (plus *Top level*), and
+  **New subsection…** arrives with those decks already ticked, filed
+  under the deepest deck they share. `false` restores Anki's tool row and
+  its single-selection default.
 - **browse_render_preview** — the Browse right-hand pane leads with the
   selected card, drawn exactly as the reviewer draws it (note type CSS,
   cloze, images, and your Reviewer settings), front *and* back in one

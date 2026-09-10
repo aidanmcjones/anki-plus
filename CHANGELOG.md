@@ -4,6 +4,25 @@ All notable changes to Anki Design are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver-ish.
 
 ## [Unreleased]
+### Changed
+- **The Browse sidebar picks several decks without a mode.** Anki put
+  multi-select behind a two-button tool row above the tree — Search, or
+  Select — which is a mode you have to know exists, switch into and
+  switch back out of, guarding behaviour that costs nothing to leave on.
+  The tool row is gone. The tree is always multi-selectable: ⌘-click adds
+  a deck, ⇧-click extends a run, and a plain click still just searches
+  the deck you clicked (the one thing the Search tool did that Select
+  didn't, put back by hand). Dragging any selected deck onto another
+  moves the whole selection in a single undoable step, and dragging from
+  the empty space below the last deck lassos a rubber band across rows.
+  Right-click acts on everything selected: **Move to…** lists every deck
+  the selection could go into, plus *Top level*, for when the destination
+  is scrolled somewhere a drag can't reach; **New subsection…** opens
+  with those decks already ticked, filed under the deepest deck they
+  share. Deck ids and card counts are untouched by any of it — these are
+  Anki's own reparent operations. `browse_sidebar_multiselect: false`
+  restores the tool row.
+
 ### Fixed
 - **Images can be added to a field again, and resized there.** Two separate
   faults made the embedded editors — the Browse pane's pencil mode and the
