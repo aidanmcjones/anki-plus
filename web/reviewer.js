@@ -87,6 +87,18 @@
     });
   }
 
+  // Bottom-left "‹ Previous". Unlike the ease selector and Hide Answer this
+  // is on screen for both sides of the card, so it never gets `hidden`; the
+  // only thing that changes is whether it's live. Python decides that by
+  // reading the undo queue (_can_prev) and calls in here — a disabled
+  // <button> swallows clicks on its own, and the CSS dims it to match.
+  window.__baSetPrev = function (enabled) {
+    var prev = document.querySelector(".ba-rv-prev");
+    if (!prev) return;
+    prev.disabled = !enabled;
+    prev.setAttribute("aria-disabled", enabled ? "false" : "true");
+  };
+
   // Receive {ease: interval_string} + defaultEase from Python and write
   // the interval strings into the ease chips, hiding chips with no
   // matching ease (i.e., 2/3-button new cards). The `isAnswer` flag comes
@@ -96,7 +108,7 @@
   window.__baSetEase = function (intervals, defaultEase, isAnswer) {
     var wasAnswer = window.__baReviewerState === "answer";
     window.__baReviewerState = isAnswer ? "answer" : "question";
-    // Bottom-left "Hide Answer" control rides the same signal as the ease
+    // Bottom-right "Hide Answer" control rides the same signal as the ease
     // selector below — both only make sense once the answer is on screen.
     // Checked first (and separately) since the ease selector itself is
     // absent in "native" answer-buttons mode, and we don't want that to

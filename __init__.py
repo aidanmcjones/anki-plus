@@ -433,8 +433,14 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
                 hide_answer_html = _reviewer_hide_answer_html()
             except Exception:
                 hide_answer_html = ""
+        prev_html = ""
+        if cfg.get("reviewer_prev_card", True):
+            try:
+                prev_html = _reviewer_prev_html()
+            except Exception:
+                prev_html = ""
         web_content.body = (
-            head_html + web_content.body + ease_html + hide_answer_html
+            head_html + web_content.body + ease_html + prev_html + hide_answer_html
         )
     if _is(context, _ToolbarCtx):
         web_content.css.append(f"{WEB}/toolbar.css")
@@ -1175,6 +1181,23 @@ def _on_js_message(handled, message, context):
                 if getattr(rv, "state", "") != "answer":
                     return handled
                 rv._showQuestion()
+            except Exception:
+                return handled
+        elif cmd == "prev-card":
+            # Bottom-left "‹ Previous" button / P key: step back to the card
+            # you just answered so you can grade it again. This is Anki's own
+            # review undo — mw.undo() pops the AnswerCard entry off the undo
+            # queue, which restores that card's pre-answer scheduling in full
+            # (ivl, due, factor, reps, lapses, and its revlog row) and puts it
+            # back at the head of the queue, where the reviewer re-shows it in
+            # its *question* state for a fresh grade. Guarded by _can_prev()
+            # so we never fire when the pending undo is something other than
+            # an answer (adding a note, switching decks, an empty stack) —
+            # undoing those from here would be a nasty surprise.
+            try:
+                if not _can_prev():
+                    return handled
+                mw.undo()
             except Exception:
                 return handled
         elif cmd == "flag-cycle":
@@ -2668,13 +2691,32 @@ def _reviewer_ease_html() -> str:
     )
 
 
+def _reviewer_prev_html() -> str:
+    """Bottom-LEFT "‹ Previous" control — step back to the card you just
+    answered and grade it again. Unlike Hide Answer this is present on
+    *both* sides of the card, so it never starts `hidden`; what changes is
+    whether it's enabled, which __baSetPrev (web/reviewer.js) drives from
+    _push_prev_state's read of the undo queue. Renders disabled: the first
+    reviewer_did_show_question right after this body is injected pushes the
+    real state a beat later."""
+    return (
+        '<button class="ba-rv-prev" type="button" disabled aria-disabled="true"'
+        ' onclick="pycmd(\'ba:prev-card\')"'
+        ' title="Back to the previous card, to grade it again (P)"'
+        ' aria-label="Previous card">'
+        '<span class="ba-rv-prev-chev" aria-hidden="true">‹</span>'
+        'Previous</button>'
+    )
+
+
 def _reviewer_hide_answer_html() -> str:
-    """Bottom-left "Hide Answer" control — pinned in the corner the ease
-    selector's centered layout leaves empty. Only meaningful once the
-    answer is showing ("let me try that card again"), so it starts
-    `hidden` like the ease selector and is flipped by the same
-    __baSetEase call (see web/reviewer.js), driven by the same
-    Python-side isAnswer signal from _push_progress."""
+    """Bottom-RIGHT "Hide Answer" control — pinned in the corner the ease
+    selector's centered layout leaves empty. (It sat bottom-left until
+    "‹ Previous" claimed that corner; the two are otherwise the same quiet
+    flat idiom.) Only meaningful once the answer is showing ("let me try
+    that card again"), so it starts `hidden` like the ease selector and is
+    flipped by the same __baSetEase call (see web/reviewer.js), driven by
+    the same Python-side isAnswer signal from _push_progress."""
     return (
         '<button class="ba-rv-hide-answer" type="button" hidden'
         ' onclick="pycmd(\'ba:hide-answer\')"'
@@ -2844,17 +2886,32 @@ def _hide_answer_shortcut() -> None:
         pass
 
 
+def _shortcut_key_taken(shortcuts: list, key: str) -> bool:
+    for item in shortcuts:
+        if not isinstance(item, tuple) or len(item) != 2:
+            continue
+        existing, _fn = item
+        if isinstance(existing, str) and existing.lower() == key:
+            return True
+    return False
+
+
 def _on_reviewer_state_shortcuts_will_change(state: str, shortcuts: list) -> None:
+    """Add our review-state keys to Anki's own table rather than rewriting
+    it. Both are checked against Reviewer._shortcutKeys() (aqt/reviewer.py)
+    and against each other's neighbours here, and skipped entirely if
+    something else already claims the letter."""
     if state != "review":
         return
     try:
-        for item in shortcuts:
-            if not isinstance(item, tuple) or len(item) != 2:
-                continue
-            key, _fn = item
-            if isinstance(key, str) and key.lower() == "h":
-                return  # already bound (another add-on?) — don't clobber it
-        shortcuts.append(("h", _hide_answer_shortcut))
+        if _config().get("reviewer_hide_answer", True) and not _shortcut_key_taken(
+            shortcuts, "h"
+        ):
+            shortcuts.append(("h", _hide_answer_shortcut))
+        if _config().get("reviewer_prev_card", True) and not _shortcut_key_taken(
+            shortcuts, "p"
+        ):
+            shortcuts.append(("p", _prev_card_shortcut))
     except Exception:
         pass
 
@@ -2881,13 +2938,124 @@ def _set_hide_answer_shortcut_enabled(on: bool) -> None:
             pass
 
 
+# --------------------------------------------------------------------------- #
+# "‹ Previous" — P key
+#
+# Step back to the card you just answered so you can change the grade. This
+# is deliberately *not* a bespoke re-queue: it's Anki's own review undo
+# (mw.undo() → aqt.operations.collection.undo → col.undo()), which pops the
+# AnswerCard entry and restores that card's pre-answer row wholesale — ivl,
+# due, factor, reps, lapses, queue/type, and the revlog entry it wrote — then
+# puts it back at the head of the queue. The reviewer's op_executed sees
+# study_queues change and calls nextCard(), so the card comes back in its
+# *question* state and the user re-grades it forward from there. Successive
+# presses walk back through consecutive AnswerCard entries.
+#
+# The whole feature therefore hinges on one question: is the top of the undo
+# stack an answer? col.undo_status().undo is the localized description of
+# that pending op (rslib/src/ops.rs: Op::AnswerCard → tr.actions_answer_card),
+# so we compare it against the same translation rather than a hardcoded
+# English string. If the head is anything else — a note the user just added,
+# a deck switch, an empty stack — the button is dimmed and inert and the key
+# does nothing, because undoing *that* from a "Previous card" control would
+# silently destroy unrelated work.
+#
+# "p" is free: it's not in Reviewer._shortcutKeys() (aqt/reviewer.py), and
+# the add-on's own bare-key bindings are "," (settings), "e" (inline edit)
+# and "h" (hide answer) — cmdk only takes Ctrl/Cmd+P. "," was the first
+# choice but is already ours, so "p" it is. Registered per-state alongside
+# "h"; unlike "h" it stays enabled and gates on _can_prev() at press time,
+# since it's live on both sides of the card.
+# --------------------------------------------------------------------------- #
+def _answer_card_op_name() -> str:
+    """Anki's own label for the AnswerCard undo entry, in the user's
+    language. Falls back to the English string only if the translation
+    lookup itself fails."""
+    col = getattr(mw, "col", None)
+    if col is not None:
+        try:
+            return str(col.tr.actions_answer_card()).strip()
+        except Exception:
+            pass
+    try:
+        from aqt.utils import tr as _tr
+        return str(_tr.actions_answer_card()).strip()
+    except Exception:
+        return "Answer Card"
+
+
+def _can_prev() -> bool:
+    """True when the pending undo operation is an answered card, i.e. when
+    "Previous" has somewhere to go."""
+    try:
+        if not _config().get("reviewer_prev_card", True):
+            return False
+        col = getattr(mw, "col", None)
+        if col is None:
+            return False
+        rv = getattr(mw, "reviewer", None)
+        if rv is None or getattr(rv, "card", None) is None:
+            return False
+        pending = (getattr(col.undo_status(), "undo", "") or "").strip()
+        if not pending:
+            return False  # bottom of the stack
+        return pending == _answer_card_op_name()
+    except Exception:
+        return False
+
+
+def _push_prev_state() -> None:
+    """Sync the button's enabled state to the undo queue. Cheap enough to
+    call on every card render and after every collection op — undo_status()
+    is a single backend read.
+
+    Nothing in here may raise. One caller is Anki's operation_did_execute,
+    which runs inside CollectionOp's completion path (aqt/operations/
+    __init__.py: on_op_finished), and an exception escaping there would
+    strand whatever op just finished — so the config read is inside the
+    guard too, not just the backend call."""
+    try:
+        if not _config().get("reviewer_prev_card", True):
+            return
+        if getattr(mw, "state", "") != "review":
+            return
+        on = "true" if _can_prev() else "false"
+        mw.reviewer.web.eval(f"window.__baSetPrev && window.__baSetPrev({on});")
+    except Exception:
+        pass
+
+
+def _prev_card_shortcut() -> None:
+    if not _can_prev():
+        return
+    try:
+        mw.undo()
+    except Exception:
+        pass
+
+
+def _on_operation_did_execute(changes, handler) -> None:
+    """Anything that touches the collection can change what's at the head of
+    the undo queue — adding a note mid-review, setting a due date, burying.
+    reviewer_did_show_question doesn't fire for those (the card on screen
+    doesn't change), so the button would keep a stale enabled state without
+    this. Deliberately total: this runs inside CollectionOp's completion
+    path, so it must never raise."""
+    try:
+        _push_prev_state()
+    except Exception:
+        pass
+
+
 def on_show_question(card) -> None:
     _push_progress()
+    _push_prev_state()
     _set_hide_answer_shortcut_enabled(False)
 
 
 def on_show_answer(card) -> None:
     _push_progress()
+    _push_prev_state()
     _set_hide_answer_shortcut_enabled(True)
 
 
@@ -2943,6 +3111,12 @@ try:
     gui_hooks.state_shortcuts_will_change.append(
         _on_reviewer_state_shortcuts_will_change
     )
+except Exception:
+    pass
+# Keeps "‹ Previous" honest about what's actually at the head of the undo
+# queue after ops that don't swap the card (add note, set due date, bury).
+try:
+    gui_hooks.operation_did_execute.append(_on_operation_did_execute)
 except Exception:
     pass
 

@@ -23,6 +23,7 @@
   "click_to_reveal": true,
   "press_feedback": true,
   "reviewer_hide_answer": true,
+  "reviewer_prev_card": true,
   "inline_edit": true,
   "show_progress": true,
   "reviewer_menu_extras": true,

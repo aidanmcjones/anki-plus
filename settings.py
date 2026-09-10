@@ -1078,9 +1078,15 @@ class AnkiDesignSettingsPage(QWidget):
         ))
         v.addWidget(feature_row(
             "reviewer_hide_answer", "Hide Answer button", True,
-            "A quiet button (and H) in the bottom-left corner while the "
+            "A quiet button (and H) in the bottom-right corner while the "
             "answer's showing — back out to the question, ungraded, to "
             "try recalling it again.",
+        ))
+        v.addWidget(feature_row(
+            "reviewer_prev_card", "Previous card button", True,
+            "A quiet button (and P) in the bottom-left corner — step back "
+            "to the card you just answered, with its old interval and due "
+            "date restored, and grade it again.",
         ))
         v.addWidget(feature_row(
             "inline_edit", "Edit cards in place", True,
