@@ -4,8 +4,23 @@ The stock Browser shows you a *note editor* and hides the actual card
 behind Ctrl+Shift+P, in a separate floating window. That's backwards:
 when you're browsing you're looking for a card, and a card is a rendered
 thing — cloze holes, note-type CSS, images, tables. So the Browse tab's
-right-hand pane becomes a vertical split: the card as the reviewer would
-draw it on top, the fields underneath.
+right-hand pane leads with the card as the reviewer would draw it, and
+the fields editor is a mode you switch into (the pencil in the pane's
+header — see `browse_embed`), not a permanent half of the pane.
+
+The whole card, both sides
+--------------------------
+One view, front *and* back. Most templates end `{{FrontSide}}<hr
+id=answer>{{Back}}`, so the answer render already contains the question
+and is the whole card; that is exactly what Anki's own previewer means by
+"show both sides". For the templates that don't replay the front, we
+stack them ourselves with the same `<hr id=answer>` divider the reviewer
+uses, so "the full card" means the same thing for every note type.
+
+There is consequently no Question/Answer switch and no click-to-flip:
+with both sides on screen there is nothing to flip to. Text selection and
+the right-click Google lookup are unaffected — they were competing with
+the flip gesture before.
 
 How the rendering matches study exactly
 ---------------------------------------
@@ -35,9 +50,10 @@ images and video still render; only autoplay is suppressed.
 
 from __future__ import annotations
 
+import html as _html
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from aqt import gui_hooks, mw
 from aqt.qt import (
@@ -77,9 +93,6 @@ class PreviewPane(QWidget):
         self.setObjectName("ba-browse-preview")
         self.browser = browser
         self.mw = browser.mw
-        # "answer" by default: the whole card is what you came to look at.
-        # Clicking the card flips to the question side.
-        self._state = "answer"
         self._last_render_key: Any = None
         self._last_card_id = 0
         self._timer: Any = None
@@ -117,22 +130,9 @@ class PreviewPane(QWidget):
             pass
 
     def _on_bridge_cmd(self, cmd: str) -> Any:
-        if cmd == "ba:pv-toggle":
-            self.toggle_side()
-        elif cmd.startswith("ba:pv-side:"):
-            side = cmd.split(":")[-1]
-            if side in ("question", "answer") and side != self._state:
-                self._state = side
-                self._last_render_key = None
-                self.render(force=True)
         return None
 
     # -- state -----------------------------------------------------------
-    def toggle_side(self) -> None:
-        self._state = "question" if self._state == "answer" else "answer"
-        self._last_render_key = None
-        self.render(force=True)
-
     def card(self) -> Any:
         """The single selected card, mirroring `BrowserPreviewer.card()`.
         A multi-row selection has no single card to draw."""
@@ -173,39 +173,35 @@ class PreviewPane(QWidget):
             self._render_placeholder()
             return
 
-        # Flip back to the question side when the card itself changes, so
-        # stepping through rows doesn't leave you looking at answers you
-        # never asked to see... except we default to "answer" because the
-        # point of this pane is *seeing the card*. So: keep whichever side
-        # the user last chose, and only reset the render cache.
         if card.id != self._last_card_id:
             self._last_card_id = card.id
             self._last_render_key = None
 
+        note = None
         try:
             note = card.note()
             note.load()
-            key = (self._state, card.id, note.mod, card.mod)
+            key = (card.id, note.mod, card.mod)
         except Exception:
-            key = (self._state, card.id, time.time())
+            key = (card.id, time.time())
         if key == self._last_render_key and not force:
             return
 
         try:
-            question = card.question(reload=True)
-            answer = card.answer()
+            text = self._whole_card_html(card)
         except Exception:
             self._render_placeholder(_ERR_TEXT)
             return
 
-        text = answer if self._state == "answer" else question
         try:
             text = self.mw.prepare_card_text_for_display(text)
         except Exception:
             pass
         try:
-            kind = "preview" + self._state.capitalize()
-            text = gui_hooks.card_will_show(text, card, kind)
+            # "previewAnswer" and not a kind of our own: an add-on filtering
+            # card text has no reason to learn about this pane, and the
+            # answer side is what it is being handed.
+            text = gui_hooks.card_will_show(text, card, "previewAnswer")
         except Exception:
             pass
 
@@ -217,19 +213,53 @@ class PreviewPane(QWidget):
             bodyclass = ""
 
         try:
-            if self._state == "question":
-                escaped_answer = self.mw.col.media.escape_media_filenames(answer)
-                js = (
-                    f"_showQuestion({json.dumps(text)}, "
-                    f"{json.dumps(escaped_answer)}, '{bodyclass}');"
-                )
-            else:
-                js = f"_showAnswer({json.dumps(text)}, '{bodyclass}');"
-            js += f"window.__baPvSide && window.__baPvSide('{self._state}');"
+            js = f"_showAnswer({json.dumps(text)}, '{bodyclass}');"
+            js += (
+                "window.__baPvTags && window.__baPvTags("
+                + json.dumps(self._tags(note)) + ");"
+            )
             self.web.eval(js)
             self._last_render_key = key
         except Exception:
             pass
+
+    def _whole_card_html(self, card: Any) -> str:
+        """Front and back in one view.
+
+        `answer_text` usually opens with the rendered question, because
+        `{{FrontSide}}` is how nearly every back template starts — that is
+        the whole card already, and it's what Anki's previewer shows for
+        "both sides". A template that doesn't replay the front would
+        otherwise render back-only here, which is not "the full card", so
+        those get stacked with the reviewer's own `<hr id=answer>` divider.
+
+        Built from `render_output` rather than `card.question()` /
+        `card.answer()` because those each prepend the note type's
+        `<style>` block, and concatenating them would inject the same
+        stylesheet twice.
+        """
+        out = card.render_output(reload=True)
+        question = (out.question_text or "").strip()
+        answer = out.answer_text or ""
+        if question and question not in answer:
+            body = f'{question}<hr id="answer">{answer}'
+        else:
+            body = answer
+        return f"<style>{out.css}</style>{body}"
+
+    def _tags(self, note: Any) -> List[str]:
+        """The note's tags, for the strip under the card.
+
+        Read-only here on purpose: the pane's job in this mode is to show
+        you the card, and a tag you can accidentally edit while skimming is
+        a worse deal than one you have to press the pencil to change.
+        """
+        if note is None:
+            return []
+        try:
+            return [str(t) for t in (note.tags or []) if str(t).strip()]
+        except Exception:
+            return []
 
     def _render_placeholder(self, message: str = "") -> None:
         """Nothing selected, or several rows selected. Shown in the design
@@ -251,14 +281,14 @@ class PreviewPane(QWidget):
             sub = ""
         html = (
             '<div class="ba-pv-empty">'
-            f'<div class="ba-pv-empty-title">{message}</div>'
-            + (f'<div class="ba-pv-empty-sub">{sub}</div>' if sub else "")
+            f'<div class="ba-pv-empty-title">{_html.escape(message)}</div>'
+            + (f'<div class="ba-pv-empty-sub">{_html.escape(sub)}</div>' if sub else "")
             + "</div>"
         )
         try:
             self.web.eval(
                 f"_showQuestion({json.dumps(html)}, '', 'ba-pv-placeholder');"
-                "window.__baPvSide && window.__baPvSide('none');"
+                "window.__baPvTags && window.__baPvTags([]);"
             )
         except Exception:
             pass

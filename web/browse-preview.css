@@ -36,44 +36,41 @@ html[data-ba-preview] body {
   border-top: 0;
 }
 
-/* ---------------- Side switch ---------------- */
-#ba-pv-bar {
+/* ---------------- Tags ----------------
+ * The note's tags, under the card. They used to be at the bottom of the
+ * fields editor, which in this pane meant they sat in the half you
+ * weren't looking at — and once the editor became a mode rather than a
+ * permanent half, nowhere at all. They belong with the card: metadata
+ * about the thing on screen, set small and quiet so the row reads as a
+ * caption and not as a second strip of controls. */
+#ba-pv-tags {
   grid-row: 3;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 10px 16px 12px;
+  gap: 5px 6px;
+  padding: 9px 24px 11px;
   border-top: 1px solid var(--rf-line, rgba(127, 127, 127, 0.14));
   background: var(--rf-paper, transparent);
-  font: 500 11px/1 var(--rf-sans, system-ui, sans-serif);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  user-select: none;
+  user-select: text;
 }
-#ba-pv-bar[hidden] { display: none !important; }
+#ba-pv-tags[hidden] { display: none !important; }
 
-#ba-pv-bar button {
-  all: unset;
-  cursor: pointer;
-  color: var(--rf-ink-faint, #8a8a8a);
-  padding: 3px 2px;
-  border-bottom: 1px solid transparent;
-  transition: color 160ms ease, border-color 160ms ease;
-}
-/* Typographic hover — an underline, never a row box. */
-#ba-pv-bar button:hover {
+.ba-pv-tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid var(--rf-line-2, rgba(127, 127, 127, 0.3));
+  border-radius: 999px;
+  font: 500 10.5px/1.5 var(--rf-sans, system-ui, sans-serif);
+  letter-spacing: 0.02em;
   color: var(--rf-ink-dim, #6a6557);
-  border-bottom-color: var(--rf-line-2, rgba(127, 127, 127, 0.3));
+  overflow-wrap: anywhere;
 }
-#ba-pv-bar button.is-on {
-  color: var(--rf-ink, #1f1d18);
-  border-bottom-color: var(--rf-accent, #6c8cff);
-}
-#ba-pv-bar .ba-pv-sep {
-  width: 1px;
-  height: 10px;
-  background: var(--rf-line, rgba(127, 127, 127, 0.18));
+.ba-pv-tag-sep {
+  padding: 0 3px;
+  color: var(--rf-ink-faint, #a39d8b);
 }
 
 /* ---------------- Empty state ----------------

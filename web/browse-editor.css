@@ -33,6 +33,57 @@ html[data-ba-editor="browse"] .button-toolbar {
   padding-right: 12px !important;
 }
 
+/* …and let it WRAP.
+ *
+ * addcard.css pins the toolbar to a single non-wrapping row with
+ * `overflow-x: clip`, which is right for a 700px Add window and wrong
+ * here: it's ~880px of buttons in a ~460px pane, so roughly half of them
+ * — the cloze, attachment, HTML-editor and settings groups — were cut off
+ * at the right edge with no scrollbar and no way to reach them. A control
+ * you can neither see nor click is worse than one that costs a second row
+ * of height.
+ *
+ * Wrapping also lets overflow go back to `visible`. The note in
+ * addcard.css explains why `clip` was there at all: mixing
+ * `overflow-x: auto` with `overflow-y: visible` forces both axes to auto,
+ * which crops the colour-picker and settings dropdowns at the toolbar's
+ * bottom edge. With nothing overflowing horizontally there is nothing to
+ * clip, and those popups hang free again. */
+html[data-ba-editor="browse"] .editor-toolbar {
+  height: auto !important;
+  min-height: 0 !important;
+  overflow: visible !important;
+}
+html[data-ba-editor="browse"] .button-toolbar.btn-toolbar {
+  flex-wrap: wrap !important;
+  --buttons-wrap: wrap !important;
+  overflow: visible !important;
+  height: auto !important;
+  min-height: 0 !important;
+  align-items: flex-start !important;
+  row-gap: 3px !important;
+  padding-top: 5px !important;
+  padding-bottom: 5px !important;
+}
+/* The wrap has to reach the level the buttons actually sit in. The
+   toolbar's direct child is a `.dynamically-slottable` whose own children
+   are `display: contents`, so the flex items that need to wrap are the
+   button-groups two levels down — and addcard.css pins every slottable to
+   `flex-shrink: 0`, which let this one stay 880px wide inside a 436px
+   toolbar and overflow instead of wrapping. Give it the full width to
+   wrap within and let it shrink. */
+html[data-ba-editor="browse"] .button-toolbar.btn-toolbar .dynamically-slottable {
+  flex-wrap: wrap !important;
+  row-gap: 3px !important;
+  height: auto !important;
+}
+html[data-ba-editor="browse"] .button-toolbar.btn-toolbar > .dynamically-slottable {
+  flex: 1 1 100% !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
+
 /* No top rule: the pane's own hairline (the vertical splitter above,
    drawn in Qt) already separates it from the rendered card. A second
    line here reads as a double border. */

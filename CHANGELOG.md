@@ -57,13 +57,19 @@ All notable changes to Anki Design are documented here. Format loosely follows
   hairline rules, flat uppercase column labels, a quiet accent wash for
   the selected row, and no Qt button gradients anywhere. Switch off with
   **browse_restyle**.
-- **A rendered card preview in the Browse tab.** The right-hand pane is
-  now a vertical split: the selected card drawn exactly as the reviewer
+- **The Browse right-hand pane leads with the card.** One pane, two
+  modes. It opens on the selected card drawn exactly as the reviewer
   draws it (note-type CSS, cloze holes, images, MathJax, your reviewer
-  typography settings) on top, the fields underneath. Click the card, or
-  the Question / Answer switch, to flip sides; it follows the row
-  selection as you arrow through the table. Switch off with
-  **browse_render_preview**.
+  typography settings) — front and back together, the whole card, with
+  the note's tags in a strip underneath it. The pencil in the pane's
+  header (or ⌘E / Ctrl+E) swaps the same space for the fields editor and
+  becomes **Done**, which returns to the card with your edit rendered.
+  Both modes follow the row selection as you arrow through the table.
+  There is no Question / Answer switch any more: with both sides on
+  screen there is nothing to flip to. The editor's format toolbar also
+  wraps to fit the pane instead of being cut off at its right edge — at
+  460px roughly half the buttons, cloze and the settings gear included,
+  were unreachable. Switch off with **browse_render_preview**.
 - **A trimmed Browse sidebar.** Decks and Tags — the two real ways a
   collection is grouped — and nothing else. Saved Searches, Today, Flags,
   Card State and Note Types are hidden; every one of them was a search

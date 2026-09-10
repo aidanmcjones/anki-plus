@@ -34,7 +34,9 @@ from aqt.qt import (
     QDockWidget,
     QEvent,
     QFrame,
+    QHBoxLayout,
     QKeySequence,
+    QLabel,
     QObject,
     QPalette,
     QShortcut,
@@ -67,10 +69,11 @@ EDITOR_MIN = 320   # narrowest the field area stays legible
 EDITOR_PREF = 460  # default share on first open
 TABLE_MIN = 360    # card table + search bar need at least this much
 
-# Editor side, split vertically: [rendered card | fields]. The rendered
-# card is the primary view — you browse to *find a card*, and a card is a
-# rendered thing — so it takes the larger share by default.
-PREVIEW_SHARE = 0.60
+# Editor side: one pane, two modes. Read (the rendered card, both sides,
+# tags underneath) and Edit (Anki's fields editor), switched by the pencil
+# in the pane's header. They used to be stacked in a vertical splitter,
+# which gave each of them half a pane — enough for neither, and a card cut
+# off mid-answer above a field list cut off mid-field.
 PREVIEW_MIN = 180
 FIELDS_MIN = 170
 
@@ -152,20 +155,50 @@ def _apply_initial_splitter_sizes(splitter: "QSplitter", central: Any) -> None:
     QTimer.singleShot(0, _set)
 
 
+# Pencil (read mode) and its "done" counterpart (edit mode). Drawn rather
+# than themed from a resource so they match the sidebar's stroke icons.
+_PENCIL_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
+    'width="16" height="16" fill="none" stroke="{c}" stroke-width="1.7" '
+    'stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M4 20h4l11-11-4-4L4 16v4z"/><path d="M14 6l4 4"/></svg>'
+)
+_DONE_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
+    'width="16" height="16" fill="none" stroke="{c}" stroke-width="1.9" '
+    'stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M5 12.5l4.5 4.5L19 7"/></svg>'
+)
+
+
+def _svg_icon(markup: str, color: str) -> Any:
+    """An SVG string as a QIcon, tinted to the current palette."""
+    from aqt.qt import QIcon, QPixmap
+
+    pix = QPixmap()
+    pix.loadFromData(markup.format(c=color).encode("utf-8"), "SVG")
+    return QIcon(pix)
+
+
 def _install_preview(br: Any) -> None:
-    """Turn the Browser's editor side into [rendered card | fields].
+    """Turn the Browser's editor side into one pane with two modes.
 
     Anki's `verticalLayoutWidget` holds a QVBoxLayout whose only content is
     `horizontalLayout2` → `fieldsArea`. We lift `fieldsArea` into a holder,
-    put both into a vertical QSplitter, and hand that back to the layout.
-    Going through the layout (rather than reparenting `verticalLayoutWidget`
-    itself) keeps every Browser code path that pokes at
-    `form.splitter.widget(1)` or `form.fieldsArea` working untouched.
+    put it and the rendered-card pane into a QStackedWidget under a thin
+    header, and hand that back to the layout. Going through the layout
+    (rather than reparenting `verticalLayoutWidget` itself) keeps every
+    Browser code path that pokes at `form.splitter.widget(1)` or
+    `form.fieldsArea` working untouched — including the editor's own
+    `loadNote`, which keeps running while the editor is the hidden page,
+    so switching to Edit shows the current row immediately.
     """
     from . import browse_preview
 
     if not browse_preview.enabled():
         return
+
+    from aqt.qt import QSize, QStackedWidget, QToolButton
 
     form = br.form
     vl = form.verticalLayout
@@ -183,17 +216,96 @@ def _install_preview(br: Any) -> None:
     hl.addWidget(fields, 1)
     holder.setMinimumHeight(FIELDS_MIN)
 
-    vsplit = QSplitter(Qt.Orientation.Vertical, parent)
-    vsplit.setObjectName("ba-browse-vsplit")
-    vsplit.setChildrenCollapsible(False)
-    vsplit.setHandleWidth(6)
-    vsplit.addWidget(pane)
-    vsplit.addWidget(holder)
-    vsplit.setStretchFactor(0, 3)
-    vsplit.setStretchFactor(1, 2)
+    stack = QStackedWidget(parent)
+    stack.setObjectName("ba-browse-pane-stack")
+    stack.addWidget(pane)     # 0 — read
+    stack.addWidget(holder)   # 1 — edit
+
+    # -- header ------------------------------------------------------
+    header = QWidget(parent)
+    header.setObjectName("ba-browse-pane-head")
+    hrow = QHBoxLayout(header)
+    hrow.setContentsMargins(16, 6, 12, 6)
+    hrow.setSpacing(6)
+    label = QLabel("Card")
+    label.setObjectName("ba-browse-pane-title")
+    hrow.addWidget(label)
+    hrow.addStretch(1)
+    edit_btn = QToolButton(header)
+    edit_btn.setObjectName("ba-browse-pane-edit")
+    edit_btn.setCheckable(True)
+    edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    edit_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+    edit_btn.setIconSize(QSize(16, 16))
+    hrow.addWidget(edit_btn)
+
+    def _paint_header() -> None:
+        """Icon + label for whichever mode we're in, in palette colours."""
+        try:
+            from . import addcard as _addcard
+
+            p, _dark = _addcard._resolve_palette()
+            editing = stack.currentIndex() == 1
+            edit_btn.setIcon(
+                _svg_icon(_DONE_SVG if editing else _PENCIL_SVG, p["ink_dim"])
+            )
+            edit_btn.setText("Done" if editing else "Edit")
+            edit_btn.setToolTip(
+                "Back to the card (⌘E)" if editing
+                else "Edit this note's fields (⌘E)"
+            )
+            label.setText("Editing" if editing else "Card")
+        except Exception:
+            pass
+
+    def _set_mode(editing: bool) -> None:
+        stack.setCurrentIndex(1 if editing else 0)
+        if edit_btn.isChecked() != editing:
+            edit_btn.setChecked(editing)
+        _paint_header()
+        if editing:
+            # The editor kept loading notes while it was hidden, so there
+            # is nothing to reload — just put the caret somewhere useful.
+            try:
+                br.editor.web.setFocus()
+            except Exception:
+                pass
+        else:
+            # Anything typed in the fields is written on focus loss; make
+            # sure the card we re-render is the saved one.
+            try:
+                br.editor.call_after_note_saved(
+                    lambda: pane.render(force=True), keepFocus=False
+                )
+            except Exception:
+                pane.render(force=True)
+
+    edit_btn.toggled.connect(_set_mode)
+
+    def _on_page_changed(index: int) -> None:
+        # QStackedLayout switches to a page that gets shown directly, and
+        # Anki's editor calls `widget.show()` on every load_note. Rather
+        # than fight that, follow it: a header that says "Card" over the
+        # fields editor is worse than either mode.
+        editing = index == 1
+        if edit_btn.isChecked() != editing:
+            edit_btn.blockSignals(True)
+            edit_btn.setChecked(editing)
+            edit_btn.blockSignals(False)
+        _paint_header()
+
+    stack.currentChanged.connect(_on_page_changed)
+
+    wrap = QWidget(parent)
+    wrap.setObjectName("ba-browse-pane")
+    wl = QVBoxLayout(wrap)
+    wl.setContentsMargins(0, 0, 0, 0)
+    wl.setSpacing(0)
+    wl.addWidget(header)
+    wl.addWidget(stack, 1)
 
     # Drain whatever the .ui put in the layout (the now-empty
-    # horizontalLayout2) and install the splitter in its place.
+    # horizontalLayout2) and install ours in its place.
     while vl.count():
         item = vl.takeAt(0)
         if item is None:
@@ -201,32 +313,38 @@ def _install_preview(br: Any) -> None:
         child = item.layout()
         if child is not None:
             child.setParent(None)
-    vl.addWidget(vsplit, 1)
-
-    def _size() -> None:
-        try:
-            avail = vsplit.height() - vsplit.handleWidth()
-            if avail <= 0:
-                return
-            top = max(PREVIEW_MIN, int(avail * PREVIEW_SHARE))
-            vsplit.setSizes([top, max(FIELDS_MIN, avail - top)])
-        except Exception:
-            pass
-
-    QTimer.singleShot(0, _size)
+    vl.addWidget(wrap, 1)
 
     def _on_row(browser: Any, _pane=pane, _br=br) -> None:
         if browser is not _br:
             return
         try:
+            # Both modes stay live: the editor loads the row itself, and
+            # the card re-renders behind it, so switching mode never shows
+            # you the previous row for a frame.
             _pane.schedule()
         except Exception:
             pass
 
     gui_hooks.browser_did_change_row.append(_on_row)
 
+    # ⌘E / Ctrl+E from anywhere in the Browser. The editor's own webview
+    # swallows most keys, so the shortcut is on the whole central widget.
+    try:
+        sc = QShortcut(QKeySequence("Ctrl+E"), br.form.centralwidget)
+        sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        sc.activated.connect(lambda: edit_btn.setChecked(not edit_btn.isChecked()))
+        _state["edit_shortcut"] = sc
+    except Exception:
+        pass
+
     _state["preview"] = pane
     _state["preview_hook"] = _on_row
+    _state["pane_stack"] = stack
+    _state["pane_head"] = header
+    _state["pane_edit_btn"] = edit_btn
+    _state["pane_paint"] = _paint_header
+    _paint_header()
     # First paint: the webview needs a beat to finish loading reviewer.js
     # before `_showAnswer` means anything.
     QTimer.singleShot(350, pane.render)
@@ -239,6 +357,15 @@ def _teardown_preview() -> None:
             gui_hooks.browser_did_change_row.remove(hook)
         except Exception:
             pass
+    sc = _state.pop("edit_shortcut", None)
+    if sc is not None:
+        try:
+            sc.setParent(None)
+            sc.deleteLater()
+        except Exception:
+            pass
+    for key in ("pane_stack", "pane_head", "pane_edit_btn", "pane_paint"):
+        _state.pop(key, None)
     pane = _state.pop("preview", None)
     if pane is not None:
         try:

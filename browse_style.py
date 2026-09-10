@@ -260,6 +260,43 @@ QWidget#verticalLayoutWidget, QWidget#fieldsArea {{
     border: 0;
 }}
 
+/* ---------------- Right pane header ----------------
+   One pane, two modes: the rendered card, or the fields editor. This is
+   the strip that says which and switches between them, so it sits on the
+   pane's own rule rather than floating over the card — a control that
+   moves with the content it acts on. */
+QWidget#ba-browse-pane-head {{
+    background: {p['paper']};
+    border-bottom: 1px solid {p['line']};
+}}
+QLabel#ba-browse-pane-title {{
+    color: {p['ink_faint']};
+    font-size: 8.5pt;
+    font-weight: 600;
+    letter-spacing: 1.1px;
+    text-transform: uppercase;
+    background: transparent;
+}}
+QToolButton#ba-browse-pane-edit {{
+    background: transparent;
+    color: {p['ink_dim']};
+    /* Transparent, not absent, so the checked ring doesn't resize it. */
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 3px 9px 3px 6px;
+    font-size: 9.5pt;
+    font-weight: 500;
+}}
+QToolButton#ba-browse-pane-edit:hover {{
+    background: {p['hover']};
+    color: {p['ink']};
+}}
+QToolButton#ba-browse-pane-edit:checked {{
+    background: {_sel_colors(p, is_dark, accent)[0]};
+    border-color: {accent};
+    color: {p['ink']};
+}}
+
 {_scrollbars(p)}
 """
 

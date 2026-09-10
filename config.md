@@ -146,13 +146,17 @@ in this file are the raw form the settings page writes.
   hidden rows are all searches you can type — `is:due`, `flag:1`,
   `added:1`, `note:Basic`, `deck:current` — and the menu actions that
   create saved searches keep working.
-- **browse_render_preview** — split the Browse editor pane vertically and
-  render the selected card on top, exactly as the reviewer renders it
-  (note type CSS, cloze, images, and your Reviewer settings). Click the
-  card, or the Question / Answer switch, to flip sides. `false` gives the
-  fields the whole pane back, as in stock Anki. Needs `embed_browse`: the
-  pane is built when Browse opens as a tab. With Browse in its own window
-  you still have Anki's own preview on `Ctrl+Shift+P`.
+- **browse_render_preview** — the Browse right-hand pane leads with the
+  selected card, drawn exactly as the reviewer draws it (note type CSS,
+  cloze, images, and your Reviewer settings), front *and* back in one
+  view, with the note's tags in a strip underneath. The fields editor is
+  a mode you switch into with the pencil in the pane's header (⌘E /
+  Ctrl+E); the pencil becomes **Done** and takes you back to the card,
+  which re-renders with whatever you changed. Both modes follow the row
+  selection live. `false` gives the fields the whole pane back, as in
+  stock Anki. Needs `embed_browse`: the pane is built when Browse opens
+  as a tab. With Browse in its own window you still have Anki's own
+  preview on `Ctrl+Shift+P`.
 - **restyle_browse_editor** — apply the Add window's editor styling to
   the Browse fields pane. `false` keeps Anki's stock editor there.
 

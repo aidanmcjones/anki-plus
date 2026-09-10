@@ -1,12 +1,14 @@
 // Anki Design — Browse tab card-preview pane.
 //
 // The pane's webview is Anki's own reviewer page (revHtml + reviewer.js),
-// so `_showQuestion` / `_showAnswer` do the rendering and we only add the
-// two things a *preview* needs that a review doesn't: a side switch, and
-// click-to-flip.
+// so `_showAnswer` does the rendering. Python hands it the *whole* card —
+// front and back in one view — so there is no side switch here and no
+// click-to-flip: there is nothing to flip to, and the gesture was
+// competing with selecting text on the card.
 //
-// Everything here is additive to <body>; `_showQuestion` only replaces
-// `#qa`'s innerHTML, so the bar survives every re-render.
+// What's left is the tag strip. Everything here is additive to <body>;
+// `_showAnswer` only replaces `#qa`'s innerHTML, so the strip survives
+// every re-render.
 (function () {
   "use strict";
 
@@ -18,60 +20,57 @@
     }
   } catch (_) {}
 
-  function ensureBar() {
-    var bar = document.getElementById("ba-pv-bar");
-    if (bar) return bar;
+  // A side switch left over from a previous version of this file — the
+  // pane's webview survives a web/ hot-reload — would sit under the card
+  // doing nothing at all.
+  try {
+    var old = document.getElementById("ba-pv-bar");
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+  } catch (_) {}
+
+  function ensureTags() {
+    var el = document.getElementById("ba-pv-tags");
+    if (el) return el;
     if (!document.body) return null;
-    bar = document.createElement("div");
-    bar.id = "ba-pv-bar";
-    bar.innerHTML =
-      '<button type="button" data-side="question">Question</button>' +
-      '<span class="ba-pv-sep"></span>' +
-      '<button type="button" data-side="answer">Answer</button>';
-    bar.addEventListener("click", function (e) {
-      var t = e.target && e.target.closest("button[data-side]");
-      if (!t) return;
-      e.stopPropagation();
-      try {
-        pycmd("ba:pv-side:" + t.getAttribute("data-side"));
-      } catch (_) {}
-    });
-    document.body.appendChild(bar);
-    return bar;
+    el = document.createElement("div");
+    el.id = "ba-pv-tags";
+    el.hidden = true;
+    document.body.appendChild(el);
+    return el;
   }
 
-  // Called from Python after every render so the bar reflects the side
-  // actually on screen (and hides itself for the empty state).
-  window.__baPvSide = function (side) {
-    var bar = ensureBar();
-    if (!bar) return;
-    bar.hidden = side === "none";
-    var btns = bar.querySelectorAll("button[data-side]");
-    for (var i = 0; i < btns.length; i++) {
-      var on = btns[i].getAttribute("data-side") === side;
-      btns[i].classList.toggle("is-on", on);
+  function escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // Called from Python after every render. An untagged note gets no strip
+  // at all, rather than an empty rule across the bottom of the pane.
+  window.__baPvTags = function (tags) {
+    var el = ensureTags();
+    if (!el) return;
+    if (!tags || !tags.length) {
+      el.hidden = true;
+      el.innerHTML = "";
+      return;
     }
+    el.hidden = false;
+    el.innerHTML = tags
+      .map(function (t) {
+        // A nested tag is one tag, not two: keep the path but let the
+        // separator recede.
+        var parts = escapeHTML(t)
+          .split("::")
+          .join('<span class="ba-pv-tag-sep">/</span>');
+        return '<span class="ba-pv-tag">' + parts + "</span>";
+      })
+      .join("");
   };
 
-  // Click the card to flip — the same gesture as click-to-reveal in study.
-  document.addEventListener("click", function (e) {
-    var t = e.target;
-    if (!t || !t.closest) return;
-    if (t.closest("#ba-pv-bar")) return;
-    if (t.closest("a")) return;
-    if (t.closest(".ba-pv-empty")) return;
-    // Let text selection through: only a plain click (no drag) flips.
-    try {
-      if (String(window.getSelection())) return;
-    } catch (_) {}
-    try {
-      pycmd("ba:pv-toggle");
-    } catch (_) {}
-  });
-
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", ensureBar);
+    document.addEventListener("DOMContentLoaded", ensureTags);
   } else {
-    ensureBar();
+    ensureTags();
   }
 })();
