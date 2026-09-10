@@ -269,8 +269,16 @@ def sidebar_qss(p: Dict[str, str], is_dark: bool, accent: str) -> str:
     tool row above the tree, and the tree itself."""
     sel_bg, sel_fg = _sel_colors(p, is_dark, accent)
     from . import addcard as _addcard
+    from . import colors as _colors
 
     sans = _addcard.SANS
+    # The tool row is a two-position *mode* switch (Search / Select), and
+    # the checked button is the only thing on screen that says which mode
+    # you're in. It used to be given the same tint as :hover, which under a
+    # cursor that has just clicked it is no change at all — hence "the
+    # Select button does nothing". Give it the accent wash the deck list
+    # uses for a selected row, so the mode is legible at a glance.
+    tool_on_bg = _colors.mix(p["paper"], accent, 0.34 if is_dark else 0.24)
     return f"""
 QWidget {{
     background: {p['paper']};
@@ -300,12 +308,17 @@ QLineEdit:focus {{ border-color: {accent}; outline: none; }}
 QToolBar {{ background: transparent; border: 0; padding: 0; spacing: 2px; }}
 QToolButton {{
     background: transparent;
-    border: 0;
+    /* Transparent rather than 0 so the checked state can colour it in
+       without the button changing size under the cursor. */
+    border: 1px solid transparent;
     border-radius: 6px;
-    padding: 4px;
+    padding: 3px;
 }}
 QToolButton:hover {{ background: {p['hover']}; }}
-QToolButton:checked {{ background: {p['hover']}; }}
+QToolButton:checked, QToolButton:checked:hover {{
+    background: {tool_on_bg};
+    border-color: {accent};
+}}
 
 {_scrollbars(p)}
 """
@@ -645,6 +658,39 @@ def _patch_sidebar_style(browser: Any, p: Dict[str, str], is_dark: bool,
         # park it on the tree so it isn't garbage-collected out from under
         # the view.
         sidebar._ba_delegate = delegate  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    _label_sidebar_tools(sidebar)
+
+
+# What the two sidebar tools actually change, in words. Anki labels them
+# "Search" and "Select" and stops there, which is fine next to a manual and
+# useless next to a 24px icon: the Select tool turns the tree into a
+# multi-select — several decks or tags at once, drag to move them, and the
+# context menu then acts on the lot — and none of that announces itself.
+_TOOL_HINTS = {
+    "search": "Search — click a deck or tag to search it",
+    "select": (
+        "Select — pick several decks or tags at once "
+        "(⌘-click or ⇧-click), drag to move them"
+    ),
+}
+
+
+def _label_sidebar_tools(sidebar: Any) -> None:
+    """Give the sidebar's tool buttons tooltips that say what they do.
+
+    Keyed off `SidebarToolbar._tools`, which is the same order the actions
+    were added in, rather than off the button labels — those are
+    translated, and matching on "Select" would only ever work in English.
+    """
+    try:
+        toolbar = sidebar.toolbar
+        tools = getattr(toolbar, "_tools", ())
+        for action, tool in zip(toolbar.actions(), tools):
+            hint = _TOOL_HINTS.get(tool[0].name.lower())
+            if hint:
+                action.setToolTip(hint)
     except Exception:
         pass
 
