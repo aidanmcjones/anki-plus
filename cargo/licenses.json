@@ -96,14 +96,6 @@
     "repository": "https://github.com/dtolnay/anyhow"
   },
   {
-    "authors": "The Rust-Fuzz Project Developers|Nick Fitzgerald <fitzgen@gmail.com>|Manish Goregaokar <manishsmail@gmail.com>|Simonas Kazlauskas <arbitrary@kazlauskas.me>|Brian L. Troutwine <brian@troutwine.us>|Corey Farwell <coreyf@rwell.org>",
-    "description": "The trait for generating structured data from unstructured data",
-    "license": "Apache-2.0 OR MIT",
-    "license_file": null,
-    "name": "arbitrary",
-    "repository": "https://github.com/rust-fuzz/arbitrary/"
-  },
-  {
     "authors": "David Roundy <roundyd@physics.oregonstate.edu>",
     "description": "Macros to take array references of slices",
     "license": "BSD-2-Clause",
@@ -542,14 +534,6 @@
     "license_file": null,
     "name": "deranged",
     "repository": "https://github.com/jhpratt/deranged"
-  },
-  {
-    "authors": "The Rust-Fuzz Project Developers|Nick Fitzgerald <fitzgen@gmail.com>|Manish Goregaokar <manishsmail@gmail.com>|Andre Bogus <bogusandre@gmail.com>|Corey Farwell <coreyf@rwell.org>",
-    "description": "Derives arbitrary traits",
-    "license": "Apache-2.0 OR MIT",
-    "license_file": null,
-    "name": "derive_arbitrary",
-    "repository": "https://github.com/rust-fuzz/arbitrary"
   },
   {
     "authors": "Dima Kudosh <dimakudosh@gmail.com>",
@@ -1224,14 +1208,6 @@
     "repository": "https://github.com/krisprice/ipnet"
   },
   {
-    "authors": "YOSHIOKA Takuma <nop_thread@nops.red>",
-    "description": "IRI as string types",
-    "license": "Apache-2.0 OR MIT",
-    "license_file": null,
-    "name": "iri-string",
-    "repository": "https://github.com/lo48576/iri-string"
-  },
-  {
     "authors": "bluss",
     "description": "Extra iterator adaptors, iterator methods, free functions, and macros.",
     "license": "Apache-2.0 OR MIT",
@@ -1705,14 +1681,6 @@
   },
   {
     "authors": "Steven Fackler <sfackler@gmail.com>",
-    "description": "Runtime support for perfect hash function data structures",
-    "license": "MIT",
-    "license_file": null,
-    "name": "phf",
-    "repository": "https://github.com/rust-phf/rust-phf"
-  },
-  {
-    "authors": "Steven Fackler <sfackler@gmail.com>",
     "description": "Codegen library for PHF types",
     "license": "MIT",
     "license_file": null,
@@ -1729,26 +1697,10 @@
   },
   {
     "authors": "Steven Fackler <sfackler@gmail.com>",
-    "description": "PHF generation logic",
-    "license": "MIT",
-    "license_file": null,
-    "name": "phf_generator",
-    "repository": "https://github.com/rust-phf/rust-phf"
-  },
-  {
-    "authors": "Steven Fackler <sfackler@gmail.com>",
     "description": "Macros to generate types in the phf crate",
     "license": "MIT",
     "license_file": null,
     "name": "phf_macros",
-    "repository": "https://github.com/rust-phf/rust-phf"
-  },
-  {
-    "authors": "Steven Fackler <sfackler@gmail.com>",
-    "description": "Support code shared by PHF libraries",
-    "license": "MIT",
-    "license_file": null,
-    "name": "phf_shared",
     "repository": "https://github.com/rust-phf/rust-phf"
   },
   {
@@ -1846,6 +1798,14 @@
     "license_file": null,
     "name": "precomputed-hash",
     "repository": "https://github.com/emilio/precomputed-hash"
+  },
+  {
+    "authors": "David Tolnay <dtolnay@gmail.com>",
+    "description": "A minimal `syn` syntax tree pretty-printer",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "name": "prettyplease",
+    "repository": "https://github.com/dtolnay/prettyplease"
   },
   {
     "authors": "David Tolnay <dtolnay@gmail.com>",
@@ -2005,22 +1965,6 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "name": "rand",
-    "repository": "https://github.com/rust-random/rand"
-  },
-  {
-    "authors": "The Rand Project Developers|The Rust Project Developers",
-    "description": "Random number generators and other randomness functionality.",
-    "license": "Apache-2.0 OR MIT",
-    "license_file": null,
-    "name": "rand",
-    "repository": "https://github.com/rust-random/rand"
-  },
-  {
-    "authors": "The Rand Project Developers|The Rust Project Developers|The CryptoCorrosion Contributors",
-    "description": "ChaCha random number generator",
-    "license": "Apache-2.0 OR MIT",
-    "license_file": null,
-    "name": "rand_chacha",
     "repository": "https://github.com/rust-random/rand"
   },
   {
@@ -2393,6 +2337,14 @@
   },
   {
     "authors": "RustCrypto Developers",
+    "description": "SHA-1 hash function",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "name": "sha1",
+    "repository": "https://github.com/RustCrypto/hashes"
+  },
+  {
+    "authors": "RustCrypto Developers",
     "description": "Pure Rust implementation of the SHA-2 hash function family including SHA-224, SHA-256, SHA-384, and SHA-512.",
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
@@ -2556,22 +2508,6 @@
     "description": "Helpful macros for working with enums and strings",
     "license": "MIT",
     "license_file": null,
-    "name": "strum",
-    "repository": "https://github.com/Peternator7/strum"
-  },
-  {
-    "authors": "Peter Glotfelty <peter.glotfelty@microsoft.com>",
-    "description": "Helpful macros for working with enums and strings",
-    "license": "MIT",
-    "license_file": null,
-    "name": "strum_macros",
-    "repository": "https://github.com/Peternator7/strum"
-  },
-  {
-    "authors": "Peter Glotfelty <peter.glotfelty@microsoft.com>",
-    "description": "Helpful macros for working with enums and strings",
-    "license": "MIT",
-    "license_file": null,
     "name": "strum_macros",
     "repository": "https://github.com/Peternator7/strum"
   },
@@ -2582,6 +2518,14 @@
     "license_file": null,
     "name": "subtle",
     "repository": "https://github.com/dalek-cryptography/subtle"
+  },
+  {
+    "authors": "David Tolnay <dtolnay@gmail.com>",
+    "description": "Parser for Rust source code",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "name": "syn",
+    "repository": "https://github.com/dtolnay/syn"
   },
   {
     "authors": "David Tolnay <dtolnay@gmail.com>",
@@ -2809,6 +2753,14 @@
   },
   {
     "authors": "Tower Maintainers <team@tower-rs.com>",
+    "description": "Tower middleware and utilities for HTTP clients and servers",
+    "license": "MIT",
+    "license_file": null,
+    "name": "tower-http",
+    "repository": "https://github.com/tower-rs/tower-http"
+  },
+  {
+    "authors": "Tower Maintainers <team@tower-rs.com>",
     "description": "Decorates a `Service` to allow easy composition between `Service`s.",
     "license": "MIT",
     "license_file": null,
@@ -2894,6 +2846,14 @@
     "license_file": null,
     "name": "type-map",
     "repository": "https://github.com/kardeiz/type-map"
+  },
+  {
+    "authors": "Chip Senkbeil <chip@senkbeil.org>",
+    "description": "Provides typed variants of Path and PathBuf for Unix and Windows",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "name": "typed-path",
+    "repository": "https://github.com/chipsenkbeil/typed-path"
   },
   {
     "authors": "Paho Lurie-Gregg <paho@paholg.com>|Andre Bogus <bogusandre@gmail.com>",
@@ -3256,7 +3216,7 @@
     "repository": "https://github.com/BurntSushi/winapi-util"
   },
   {
-    "authors": "Microsoft",
+    "authors": null,
     "description": "Rust for Windows",
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
@@ -3281,6 +3241,14 @@
   },
   {
     "authors": null,
+    "description": "Core type support for COM and Windows",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "name": "windows-core",
+    "repository": "https://github.com/microsoft/windows-rs"
+  },
+  {
+    "authors": null,
     "description": "Windows async types",
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
@@ -3288,16 +3256,16 @@
     "repository": "https://github.com/microsoft/windows-rs"
   },
   {
-    "authors": "Microsoft",
-    "description": "The implement macro for the windows crate",
+    "authors": null,
+    "description": "The implement macro for the Windows crates",
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "name": "windows-implement",
     "repository": "https://github.com/microsoft/windows-rs"
   },
   {
-    "authors": "Microsoft",
-    "description": "The interface macro for the windows crate",
+    "authors": null,
+    "description": "The interface macro for the Windows crates",
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "name": "windows-interface",
@@ -3305,6 +3273,14 @@
   },
   {
     "authors": "Microsoft",
+    "description": "Linking for Windows",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "name": "windows-link",
+    "repository": "https://github.com/microsoft/windows-rs"
+  },
+  {
+    "authors": null,
     "description": "Linking for Windows",
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
@@ -3336,7 +3312,23 @@
     "repository": "https://github.com/microsoft/windows-rs"
   },
   {
+    "authors": null,
+    "description": "Windows error handling",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "name": "windows-result",
+    "repository": "https://github.com/microsoft/windows-rs"
+  },
+  {
     "authors": "Microsoft",
+    "description": "Windows string types",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "name": "windows-strings",
+    "repository": "https://github.com/microsoft/windows-rs"
+  },
+  {
+    "authors": null,
     "description": "Windows string types",
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
@@ -3384,7 +3376,7 @@
     "repository": "https://github.com/microsoft/windows-rs"
   },
   {
-    "authors": "Microsoft",
+    "authors": null,
     "description": "Windows threading",
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
@@ -3693,7 +3685,7 @@
     "license": "MIT",
     "license_file": null,
     "name": "zip",
-    "repository": "https://github.com/zip-rs/zip2.git"
+    "repository": "https://github.com/zip-rs/zip2"
   },
   {
     "authors": null,
