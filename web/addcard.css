@@ -274,9 +274,23 @@ html[data-ba-editor] #notetype .label-button:hover {
   color: var(--ba-ink) !important;
   background: var(--ba-hover) !important;
 }
-/* Gear: push to the very end via flex order. */
-html[data-ba-editor] .item#settings { order: 99 !important; }
-html[data-ba-editor] .item#notetype { order: -1 !important; }
+/* Gear last, notetype first — via flex `order`, applied one level DOWN.
+ *
+ * Anki's toolbar is `.button-toolbar > .dynamically-slottable > .item#…`,
+ * and every `.item` is `display: contents`. A `display: contents` box
+ * generates no box of its own, so `order` on `.item` is silently ignored
+ * — the real flex items are the `.button-group`s *inside* each item, which
+ * get hoisted into the slottable's flex container. Ordering those works.
+ *
+ * This replaces a JS DOM move (`parent.appendChild(settings)`) that used
+ * to do the same job. That move relocated a node Svelte owns, which
+ * invalidated the insertion anchors DynamicallySlottable renders against:
+ * on the Browse pane — where `loadNote` re-renders the toolbar on every
+ * row change — the `#template` group (attach-media / record-audio /
+ * equations) was destroyed and the image-occlusion group's buttons were
+ * rendered in its place. Never move Svelte-managed nodes; order them. */
+html[data-ba-editor] .item#settings > * { order: 99 !important; }
+html[data-ba-editor] .item#notetype > * { order: -1 !important; }
 /* Dropdown panels (Popper-based "floating" elements). Anki's stylesheet
    already puts them at z-index 890 — high enough to clear the sidebar
    (z-index 50) and the editor's own canvas-elevated chrome (z-index 60).

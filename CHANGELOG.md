@@ -4,6 +4,34 @@ All notable changes to Anki Design are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver-ish.
 
 ## [Unreleased]
+### Fixed
+- **Images can be added to a field again, and resized there.** Two separate
+  faults made the embedded editors — the Browse pane's pencil mode and the
+  Add tab — unable to take a picture. In the Browse pane the attach button
+  wasn't there at all: our JS moved the settings item to the end of the
+  toolbar with `appendChild`, and moving a node Svelte owns invalidates the
+  anchors it renders against, so on the next re-render (the Browse editor
+  re-renders on every row change) the whole attach / record / equations
+  group was destroyed and the image-occlusion buttons were drawn in its
+  place. The reorder is now pure CSS `order`, applied to the button groups
+  rather than the `display: contents` items that were silently ignoring it.
+  Second, in both editors the picker ran, the file really was copied into
+  `collection.media`, and no image ever appeared: Anki's editor finishes an
+  attach on the field's *next* focus event, and asks its parent window to
+  activate to produce one. Our Add and Browse shells are hidden windows
+  whose widgets live inside the main window, so that activation did
+  nothing and the focus event never came. They now hand the activation to
+  the window their widgets are actually in. Pasting an image and dragging
+  a file onto a field were unaffected and keep working.
+
+  Resizing was never broken, only hidden behind Anki's own **Shrink
+  Images** default: click an image and the frame says "double-click to
+  expand", because until you do, the corner handles are deliberately inert.
+  Expanded, dragging a corner writes `width=` onto the image and the size
+  is saved with the note — see the new *Images in fields* section of
+  `config.md`, including how a set width interacts with the card's
+  `max-width: 100%` cap.
+
 ### Changed
 - **The Due / New / Learning queues are transient.** Clicking one of the
   sidebar totals gathers that queue *from scratch* at that moment and drops

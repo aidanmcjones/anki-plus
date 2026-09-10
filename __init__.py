@@ -4393,6 +4393,28 @@ def _dev_shutdown() -> None:
 _dev_cmd_seen_mtime = {"v": 0.0}
 
 
+def _dev_py_namespace() -> dict:
+    """One namespace for `pyeval:` / `pyfile:` snippets.
+
+    Deliberately a single dict, used as *both* globals and locals. The
+    earlier form — `exec(code, globals(), ns)` — gave a snippet two scopes:
+    its top-level assignments landed in `ns` (the locals), but any function
+    it defined resolved free variables against this module's globals, where
+    those names don't exist. So a perfectly ordinary snippet
+
+        state = {"n": 0}
+        def tick(): state["n"] += 1      # NameError: 'state' is not defined
+
+    blew up at call time, with a traceback that pointed at `<string>` and
+    told the reader nothing. A copy of our globals (so add-on helpers stay
+    reachable) merged with `mw` gives snippets normal module semantics, and
+    the copy keeps their assignments out of the real module namespace."""
+    ns = dict(globals())
+    ns["mw"] = mw
+    ns["result"] = None
+    return ns
+
+
 def _dev_run_cmd(raw: str) -> None:
     try:
         cmd = raw.strip()
@@ -4820,8 +4842,8 @@ def _dev_run_cmd(raw: str) -> None:
             # showcase capture pipeline (window geometry, ui scale, etc.).
             code = raw.split(":", 1)[1]
             try:
-                ns: dict = {"mw": mw, "result": None}
-                exec(code, globals(), ns)
+                ns = _dev_py_namespace()
+                exec(code, ns)
                 _dev_cmd_log(f"pyeval ok: result={ns.get('result')!r}")
             except Exception as e:
                 _dev_cmd_log(f"pyeval err: {e!r}")
@@ -4831,8 +4853,8 @@ def _dev_run_cmd(raw: str) -> None:
             try:
                 with open(path) as fh:
                     code = fh.read()
-                ns2: dict = {"mw": mw, "result": None}
-                exec(code, globals(), ns2)
+                ns2 = _dev_py_namespace()
+                exec(code, ns2)
                 _dev_cmd_log(f"pyfile ok: result={ns2.get('result')!r}")
             except Exception as e:
                 _dev_cmd_log(f"pyfile err: {e!r}")

@@ -587,6 +587,17 @@ def open_inline(parent_mw: Any = None) -> None:
         class _EmbeddedBrowser(Browser):  # type: ignore[misc, valid-type]
             def show(self) -> None:  # noqa: D401 — Qt override
                 pass
+
+            def activateWindow(self) -> None:  # noqa: N802 — Qt override
+                # This "window" is a hidden shell — its widgets were
+                # reparented into `mw` — so the stock implementation
+                # activates nothing. The editor calls this after every
+                # modal to get DOM focus back into the field it was
+                # editing; addcard.reactivate_editor explains what breaks
+                # when it silently does nothing.
+                from . import addcard as _addcard
+
+                _addcard.reactivate_editor(self)
         br = _EmbeddedBrowser(parent_mw)
     except Exception:
         try:

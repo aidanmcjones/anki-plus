@@ -160,6 +160,36 @@ in this file are the raw form the settings page writes.
 - **restyle_browse_editor** — apply the Add window's editor styling to
   the Browse fields pane. `false` keeps Anki's stock editor there.
 
+## Images in fields
+
+Not a setting — a note on where the controls are, because both editors
+(the Add tab and the Browse pane's pencil mode) use Anki's own machinery,
+and it is worth knowing which knob belongs to whom.
+
+Three ways to get a picture into a field, all Anki's: the **paperclip**
+in the format toolbar (or `F3`) opens a file picker, **paste** an image
+from the clipboard, and **drag a file** onto a field. Each copies the
+file into `collection.media` and inserts an `<img>` at the cursor.
+
+To **resize**, click an image in a field. A dashed frame appears with
+corner handles and a small toolbar beneath it (float left / none / right,
+actual size, restore original). Out of the box the handles are inert and
+the frame reads *"(double-click to expand)"* — that is Anki's **Shrink
+Images** option, on by default, which previews large images at a reduced
+size. Double-click the image (or press the toolbar's actual-size button)
+to release it, then drag any corner; the label tracks the live size.
+Turn Shrink Images off in the toolbar's **gear** menu to have the handles
+live on the first click. That checkbox is Anki's own, stored with the
+collection, and it applies to every editor.
+
+Dragging writes a plain `width=` onto the `<img>`, so the size travels
+with the note and shows up on the card. The card in review and the Browse
+read pane both cap media at the width of the content column
+(`max-width: 100%`, with `height: auto` keeping the aspect ratio): a width
+**smaller** than the column is honoured exactly, a width **larger** than
+it is capped down to the column. So resizing is reliable for making an
+image smaller, and past the column width it simply has no further effect.
+
 Changes take effect the next time the relevant screen is drawn (return to
 the deck list / start a review). The four **Browse** options above are
 read when the Browse tab opens, so close and reopen it after changing

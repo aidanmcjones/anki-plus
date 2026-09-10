@@ -266,6 +266,15 @@ def open_inline(parent_mw: Any = None) -> None:
         class _EmbeddedAddCards(AddCards):  # type: ignore[misc, valid-type]
             def show(self) -> None:  # noqa: D401 — Qt method override
                 pass
+
+            def activateWindow(self) -> None:  # noqa: N802 — Qt override
+                # Hidden shell: the widgets live in `mw`, so the stock
+                # implementation activates nothing and the editor's
+                # post-modal focus hand-back never happens. See
+                # addcard.reactivate_editor.
+                from . import addcard as _addcard
+
+                _addcard.reactivate_editor(self)
         ac = _EmbeddedAddCards(parent_mw)
     except Exception:
         # Anki's normal flow as a last resort.

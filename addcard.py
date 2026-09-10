@@ -91,6 +91,64 @@ def _config() -> Dict[str, Any]:
     return mw.addonManager.getConfig(ADDON) or {}
 
 
+# --------------------------------------------------------------------------- #
+# Returning from a modal, when the editor's "window" is a hidden shell
+# --------------------------------------------------------------------------- #
+# Nudge the focused field through a real blur/focus pair. `document
+# .activeElement` on the editor page is the `.rich-text-editable` host; the
+# contenteditable itself lives in its (open) shadow root.
+_REFOCUS_EDITABLE_JS = """
+(function () {
+  var host = document.activeElement;
+  if (!host || !host.shadowRoot) { return; }
+  var editable = host.shadowRoot.querySelector("anki-editable");
+  if (!editable) { return; }
+  editable.blur();
+  editable.focus();
+})();
+"""
+
+
+def reactivate_editor(shell: Any) -> None:
+    """Stand-in for `activateWindow()` on an embedded Add/Browse shell.
+
+    Anki's editor re-activates its parent window after every modal it puts
+    up — the media picker, the image-occlusion picker, the colour dialog —
+    because the legacy editor defers work until the field being edited sees
+    a DOM `focus` event again. Attaching media is the clearest case:
+    `Editor.resolve_media` copies the file into `collection.media` and then
+    hands the `<img>` tag to a *one-shot focus handler*, so the tag is only
+    ever inserted on the editable's next focus.
+
+    Our embedded shells are hidden windows whose widgets have been
+    reparented into `mw`, so the stock `activateWindow()` activates nothing
+    at all. The symptom was silent and confusing: the paperclip opened the
+    picker, the chosen file really did land in `collection.media`, and no
+    image ever appeared in the field.
+
+    So: activate the window the widgets are actually in, hand Qt focus back
+    to the editor webview, and — only when we are genuinely returning from
+    a modal, i.e. the webview had lost Qt focus — walk the editable through
+    an explicit blur/focus. That last step is needed because the editable
+    frequently never lost DOM focus in the first place, and a focus event
+    that never fires can't be waited on.
+    """
+    try:
+        mw.activateWindow()
+    except Exception:
+        pass
+    web = getattr(getattr(shell, "editor", None), "web", None)
+    if web is None:
+        return
+    try:
+        returning_from_modal = not web.hasFocus()
+        web.setFocus()
+        if returning_from_modal:
+            web.eval(_REFOCUS_EDITABLE_JS)
+    except Exception:
+        pass
+
+
 def _resolve_palette() -> Tuple[Dict[str, str], bool]:
     cfg = _config()
     pref = cfg.get("theme", "system")

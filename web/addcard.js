@@ -6,11 +6,11 @@
 // CSP blocks inline scripts on the editor page, so this work happens in a
 // loaded JS file rather than a <script> in the page head.
 //
-// Also moves the gear/options button to the end of the toolbar (visual
-// order). CSS `order:` should do this but Anki's Svelte adds extra wrappers
-// that defeat the flex-order on some builds; a one-shot DOM reorder is
-// reliable and runs once on first paint plus once after Anki's async
-// editor ready.
+// Toolbar ordering (gear last, notetype first) is CSS-only — see the
+// `.item#settings > *` block in addcard.css. It used to be a DOM move
+// here, which corrupted Svelte's slot anchors and wiped the attach-media
+// button group out of the Browse pane; that comment explains the details.
+// Nothing in this file may relocate a node Anki's Svelte owns.
 (function () {
   "use strict";
   var MODE = "add";
@@ -24,18 +24,14 @@
     }
   } catch (_) {}
 
-  function reorderToolbar() {
-    var toolbar = document.querySelector(".button-toolbar.btn-toolbar");
-    var settings = document.getElementById("settings");
-    if (!toolbar || !settings) return false;
-    // Walk up to find the closest sibling-set container.
-    var parent = settings.parentElement;
-    if (!parent) return false;
-    // Move to last position in its parent (the dynamically-slottable wrapper).
-    if (parent.lastElementChild !== settings) {
-      parent.appendChild(settings);
-    }
-    return true;
+  // Toolbar readiness probe. The visual reordering itself is done in CSS;
+  // this only reports whether the toolbar has rendered, so the reveal
+  // (below) waits for a painted toolbar rather than a bare page.
+  function toolbarReady() {
+    return !!(
+      document.querySelector(".button-toolbar.btn-toolbar") &&
+      document.getElementById("settings")
+    );
   }
 
   // Strip the trailing "…"/"..." from the Fields/Cards label-buttons —
@@ -150,7 +146,7 @@
   }
   function settleAndReveal() {
     var ok = true;
-    ok = reorderToolbar() && ok;
+    ok = toolbarReady() && ok;
     ok = cleanFieldsCardsLabels() && ok;
     ok = keepTagsOpen() && ok;
     ok = moveTagsIntoFields() && ok;
@@ -171,7 +167,6 @@
   // change, notetype switch, etc.).
   try {
     new MutationObserver(function () {
-      reorderToolbar();
       cleanFieldsCardsLabels();
       keepTagsOpen();
       moveTagsIntoFields();
