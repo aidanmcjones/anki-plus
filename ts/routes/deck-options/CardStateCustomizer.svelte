@@ -22,8 +22,7 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
                     class="card-state-customizer form-control"
                     bind:value
                     spellcheck="false"
-                    autocapitalize="none"
-                ></textarea>
+                    autocapitalize="none"></textarea>
             </div>
         </details>
     </ConfigInput>

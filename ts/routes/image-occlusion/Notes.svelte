@@ -53,8 +53,7 @@ License: GNU AGPL, version 3 or later; http://www.gnu.org/licenses/agpl.html
             <textarea
                 id="{field.id}--textarea"
                 class="text-area"
-                bind:value={field.textareaValue}
-            ></textarea>
+                bind:value={field.textareaValue}></textarea>
         </div>
     </Row>
 {/each}
