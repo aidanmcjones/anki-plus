@@ -14,7 +14,7 @@ use fsrs::ReviewPriorityFn;
 use fsrs::SimulatorConfig;
 use fsrs::FSRS;
 use itertools::Itertools;
-use rand::Rng;
+use rand::RngExt;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 

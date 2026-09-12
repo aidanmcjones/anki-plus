@@ -47,7 +47,7 @@ anki_proto_gen = { path = "rslib/proto_gen" }
 ninja_gen = { "path" = "build/ninja_gen" }
 
 # pinned
-unicase = "=2.6.0" # any changes could invalidate sqlite indexes
+unicase = "=2.9.0" # any changes could invalidate sqlite indexes
 
 # normal
 ammonia = "4.1.2"
@@ -130,7 +130,7 @@ syn = { version = "3.0.3", features = ["parsing", "printing"] }
 tar = "0.4.46"
 tempfile = "3.20.0"
 termcolor = "1.4.1"
-tokio = { version = "1.45", features = ["fs", "rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1.45", features = ["fs", "io-util", "rt-multi-thread", "macros", "signal"] }
 tokio-util = { version = "0.7.15", features = ["io"] }
 tower-http = { version = "0.7.1", features = ["trace"] }
 tracing = { version = "0.1.41", features = ["max_level_trace", "release_max_level_debug"] }
