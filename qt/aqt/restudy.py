@@ -29,6 +29,14 @@ from aqt.utils import disable_help_button, showWarning, tooltip, tr
 
 _EXCERPT_LEN = 60
 
+_COL_CHECK = 0
+_COL_CARD = 1
+_COL_TYPE = 2
+_COL_DIFFICULTY = 3
+_COL_LAPSES = 4
+_COL_MISSED = 5
+_COL_DUE = 6
+
 
 @dataclass
 class RestudyRow:
@@ -97,9 +105,7 @@ def _gather_rows(col: Collection, deck_id: DeckId) -> RestudyData:
             )
         )
 
-    rows.sort(
-        key=lambda r: (r.difficulty is None, -(r.difficulty or 0.0), -r.lapses)
-    )
+    rows.sort(key=lambda r: (r.difficulty is None, -(r.difficulty or 0.0), -r.lapses))
     return RestudyData(deck_id=deck_id, deck_name=name, rows=rows)
 
 
@@ -152,6 +158,33 @@ class RestudyDialog(QDialog):
         quick.addStretch()
         layout.addLayout(quick)
 
+        # Master select-all/deselect-all, top-left of the table. The square
+        # mirrors the table (unchecked/partial/checked) and toggles all/none;
+        # the word next to it is a menu button offering per-card-type
+        # selection. Driven from `clicked` (user gestures only), so
+        # programmatic setCheckState() can't recurse into it.
+        master_row = QHBoxLayout()
+        master_row.setSpacing(4)
+        self.master_check = QCheckBox()
+        self.master_check.setTristate(False)
+        self.master_check.setToolTip(tr.studying_restudy_master_select())
+        qconnect(self.master_check.clicked, self._on_master_clicked)
+        master_row.addWidget(self.master_check)
+        self.type_button = QToolButton()
+        self.type_button.setText(tr.studying_restudy_master_select() + " \u25be")
+        self.type_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.type_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        # the text carries its own arrow; hide the style's duplicate
+        self.type_button.setStyleSheet(
+            "QToolButton { border: none; } QToolButton::menu-indicator { image: none; }"
+        )
+        self._type_menu = _KeepOpenMenu(self)
+        qconnect(self._type_menu.aboutToShow, self._rebuild_type_menu)
+        self.type_button.setMenu(self._type_menu)
+        master_row.addWidget(self.type_button)
+        master_row.addStretch()
+        layout.addLayout(master_row)
+
         headers = [
             "",
             tr.studying_restudy_card(),
@@ -166,43 +199,35 @@ class RestudyDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        for i, row in enumerate(self.data.rows):
-            check = QTableWidgetItem()
-            check.setFlags(
-                Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
-            )
-            check.setCheckState(Qt.CheckState.Unchecked)
-            difficulty = (
-                f"{row.difficulty * 100:.0f}%" if row.difficulty is not None else "-"
-            )
-            due = str(row.due_in_days) if row.due_in_days is not None else "-"
-            missed = "✓" if row.missed_recently else ""
-            excerpt_item = QTableWidgetItem(row.excerpt)
-            link_font = excerpt_item.font()
-            link_font.setUnderline(True)
-            excerpt_item.setFont(link_font)
-            excerpt_item.setForeground(
-                self.palette().color(QPalette.ColorRole.Link)
-            )
-            excerpt_item.setToolTip(tr.actions_preview())
-            for col_idx, item in enumerate(
-                [
-                    check,
-                    excerpt_item,
-                    QTableWidgetItem(row.type_name),
-                    QTableWidgetItem(difficulty),
-                    QTableWidgetItem(str(row.lapses)),
-                    QTableWidgetItem(missed),
-                    QTableWidgetItem(due),
-                ]
-            ):
-                self.table.setItem(i, col_idx, item)
+        self._view_rows: list[RestudyRow] = list(self.data.rows)
         header = self.table.horizontalHeader()
         assert header is not None
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(_COL_CARD, QHeaderView.ResizeMode.Stretch)
+        # Sorting is done manually (header.sectionClicked -> _apply_sort)
+        # rather than via setSortingEnabled(): a plain __lt__ can't keep
+        # value-less rows ("-") at the bottom for both directions, and
+        # repopulating by card id keeps check states with their cards.
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(_COL_DIFFICULTY, Qt.SortOrder.DescendingOrder)
+        self._sort_column = _COL_DIFFICULTY
+        self._sort_order = Qt.SortOrder.DescendingOrder
+        qconnect(header.sectionClicked, self._on_header_clicked)
+        self._populate(self._view_rows, checked=set())
         qconnect(self.table.itemChanged, self._on_item_changed)
         qconnect(self.table.cellClicked, self._on_cell_clicked)
         qconnect(self.table.cellDoubleClicked, self._on_cell_double_clicked)
+        # Drag-select: a press on the checkbox column starts painting that
+        # row's toggled state across every row the cursor passes, with
+        # timer-driven auto-scroll past the viewport edges.
+        self._drag_target: Qt.CheckState | None = None
+        self._drag_last_row: int | None = None
+        self._autoscroll_timer = QTimer(self)
+        self._autoscroll_timer.setInterval(60)
+        qconnect(self._autoscroll_timer.timeout, self._drag_autoscroll_tick)
+        viewport = self.table.viewport()
+        assert viewport is not None
+        viewport.installEventFilter(self)
         layout.addWidget(self.table)
 
         self.selected_label = QLabel()
@@ -218,12 +243,90 @@ class RestudyDialog(QDialog):
         layout.addLayout(modes)
 
         self.button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         qconnect(self.button_box.accepted, self._on_accept)
         qconnect(self.button_box.rejected, self.reject)
         layout.addWidget(self.button_box)
+
+    def _populate(self, rows: list[RestudyRow], checked: set[CardId]) -> None:
+        "Fill the table with `rows`, restoring check state by card id."
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(rows))
+        self._view_rows = rows
+        for i, row in enumerate(rows):
+            check = QTableWidgetItem()
+            check.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            check.setCheckState(
+                Qt.CheckState.Checked
+                if row.card_id in checked
+                else Qt.CheckState.Unchecked
+            )
+            difficulty = (
+                f"{row.difficulty * 100:.0f}%" if row.difficulty is not None else "-"
+            )
+            due = str(row.due_in_days) if row.due_in_days is not None else "-"
+            missed = "✓" if row.missed_recently else ""
+            excerpt_item = QTableWidgetItem(row.excerpt)
+            link_font = excerpt_item.font()
+            link_font.setUnderline(True)
+            excerpt_item.setFont(link_font)
+            excerpt_item.setForeground(self.palette().color(QPalette.ColorRole.Link))
+            excerpt_item.setToolTip(tr.actions_preview())
+            for col_idx, item in enumerate(
+                [
+                    check,
+                    excerpt_item,
+                    QTableWidgetItem(row.type_name),
+                    QTableWidgetItem(difficulty),
+                    QTableWidgetItem(str(row.lapses)),
+                    QTableWidgetItem(missed),
+                    QTableWidgetItem(due),
+                ]
+            ):
+                self.table.setItem(i, col_idx, item)
+        self.table.blockSignals(False)
+        self._refresh_selected_label()
+
+    def _sort_key(self, column: int):
+        "Raw per-row sort value for `column`; None means no value."
+        checked = set(self._selected_ids())
+        return {
+            _COL_CHECK: lambda r: r.card_id in checked,
+            _COL_CARD: lambda r: r.excerpt.casefold(),
+            _COL_TYPE: lambda r: r.type_name.casefold(),
+            _COL_DIFFICULTY: lambda r: r.difficulty,
+            _COL_LAPSES: lambda r: r.lapses,
+            _COL_MISSED: lambda r: r.missed_recently,
+            _COL_DUE: lambda r: r.due_in_days,
+        }[column]
+
+    def _on_header_clicked(self, column: int) -> None:
+        if column == self._sort_column:
+            self._sort_order = (
+                Qt.SortOrder.DescendingOrder
+                if self._sort_order == Qt.SortOrder.AscendingOrder
+                else Qt.SortOrder.AscendingOrder
+            )
+        else:
+            self._sort_column = column
+            self._sort_order = Qt.SortOrder.AscendingOrder
+        header = self.table.horizontalHeader()
+        assert header is not None
+        header.setSortIndicator(self._sort_column, self._sort_order)
+        self._apply_sort()
+
+    def _apply_sort(self) -> None:
+        key = self._sort_key(self._sort_column)
+        checked = set(self._selected_ids())
+        known = [r for r in self._view_rows if key(r) is not None]
+        missing = [r for r in self._view_rows if key(r) is None]
+        known.sort(
+            key=key,
+            reverse=self._sort_order == Qt.SortOrder.DescendingOrder,
+        )
+        # rows with no value in this column sort last in both directions
+        self._populate(known + missing, checked)
 
     def _hardest_quartile_predicate(self):
         known = sorted(
@@ -236,7 +339,7 @@ class RestudyDialog(QDialog):
         return lambda r: r.difficulty is not None and r.difficulty >= cutoff
 
     def _select(self, predicate) -> None:
-        for i, row in enumerate(self.data.rows):
+        for i, row in enumerate(self._view_rows):
             item = self.table.item(i, 0)
             assert item is not None
             item.setCheckState(
@@ -245,7 +348,7 @@ class RestudyDialog(QDialog):
 
     def _selected_ids(self) -> list[CardId]:
         ids = []
-        for i, row in enumerate(self.data.rows):
+        for i, row in enumerate(self._view_rows):
             item = self.table.item(i, 0)
             assert item is not None
             if item.checkState() == Qt.CheckState.Checked:
@@ -253,15 +356,177 @@ class RestudyDialog(QDialog):
         return ids
 
     def _on_item_changed(self, _item: QTableWidgetItem) -> None:
+        self._refresh_selected_label()
+
+    def _on_master_clicked(self, _checked: bool = False) -> None:
+        # Decide from the table's state, not the box's (Qt has already
+        # toggled the box by the time `clicked` fires).
+        select_all = len(self._selected_ids()) < len(self._view_rows)
+        self._select(lambda row: select_all)
+
+    def _refresh_selected_label(self) -> None:
+        if not hasattr(self, "button_box"):
+            # the initial _populate runs before the label/buttons exist;
+            # __init__'s _select() refreshes once the ui is complete
+            return
         count = len(self._selected_ids())
+        total = len(self.data.rows)
         self.selected_label.setText(
-            tr.studying_restudy_selected(
-                selected=count, total=len(self.data.rows)
-            )
+            tr.studying_restudy_selected(selected=count, total=total)
         )
         ok = self.button_box.button(QDialogButtonBox.StandardButton.Ok)
         assert ok is not None
         ok.setEnabled(count > 0)
+        if count == 0:
+            state = Qt.CheckState.Unchecked
+        elif count == total:
+            state = Qt.CheckState.Checked
+        else:
+            state = Qt.CheckState.PartiallyChecked
+        self.master_check.blockSignals(True)
+        self.master_check.setCheckState(state)
+        self.master_check.blockSignals(False)
+
+    def _rebuild_type_menu(self) -> None:
+        """One checkable action per distinct card type; toggles combine.
+
+        Checking a type adds all of its cards to the selection; unchecking
+        removes them. An action shows as checked iff *all* of that type's
+        cards are currently selected — a partially-selected type displays
+        unchecked, so checking it completes the group.
+        """
+        self._type_menu.clear()
+        counts: dict[str, int] = {}
+        selected_by_type: dict[str, int] = {}
+        selected = set(self._selected_ids())
+        for row in self.data.rows:
+            counts[row.type_name] = counts.get(row.type_name, 0) + 1
+            if row.card_id in selected:
+                selected_by_type[row.type_name] = (
+                    selected_by_type.get(row.type_name, 0) + 1
+                )
+        for name in sorted(counts, key=str.casefold):
+            action = self._type_menu.addAction(f"{name} ({counts[name]})")
+            assert action is not None
+            action.setCheckable(True)
+            action.setChecked(selected_by_type.get(name, 0) == counts[name])
+            qconnect(
+                action.triggered,
+                lambda checked=False, t=name: self._on_type_toggled(t, checked),
+            )
+        self._type_menu.addSeparator()
+        invert = self._type_menu.addAction(tr.studying_restudy_invert())
+        assert invert is not None
+        qconnect(invert.triggered, self._invert_selection)
+
+    def _on_type_toggled(self, type_name: str, checked: bool) -> None:
+        "Set every card of `type_name` to `checked`; leave the rest alone."
+        selected = set(self._selected_ids())
+
+        def apply(row: RestudyRow) -> bool:
+            if row.type_name == type_name:
+                return checked
+            return row.card_id in selected
+
+        self._select(apply)
+
+    def _invert_selection(self, _checked: bool = False) -> None:
+        checked = set(self._selected_ids())
+        self._select(lambda r: r.card_id not in checked)
+
+    # Drag-select
+    ##########################################################################
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if obj is self.table.viewport():
+            etype = event.type()
+            if (
+                etype == QEvent.Type.MouseButtonPress
+                and isinstance(event, QMouseEvent)
+                and event.button() == Qt.MouseButton.LeftButton
+            ):
+                y = int(event.position().y())
+                row = self.table.rowAt(y)
+                if (
+                    row >= 0
+                    and self.table.columnAt(int(event.position().x())) == _COL_CHECK
+                ):
+                    item = self.table.item(row, _COL_CHECK)
+                    assert item is not None
+                    self._drag_target = (
+                        Qt.CheckState.Unchecked
+                        if item.checkState() == Qt.CheckState.Checked
+                        else Qt.CheckState.Checked
+                    )
+                    self._drag_last_row = row
+                    item.setCheckState(self._drag_target)
+                    self._autoscroll_timer.start()
+                    # consume so Qt's own indicator handling can't re-toggle
+                    return True
+            elif etype == QEvent.Type.MouseMove and self._drag_target is not None:
+                if isinstance(event, QMouseEvent):
+                    self._drag_apply_at(int(event.position().y()))
+                return True
+            elif (
+                etype == QEvent.Type.MouseButtonRelease
+                and self._drag_target is not None
+            ):
+                self._end_drag()
+                return True
+            elif etype == QEvent.Type.Wheel and self._drag_target is not None:
+                # let the table scroll, then paint the row now under the cursor
+                QTimer.singleShot(0, self._drag_apply_under_cursor)
+                return False
+        return super().eventFilter(obj, event)
+
+    def _drag_apply_at(self, y: int) -> None:
+        "Apply the drag state to every row between the last painted row and y."
+        if self._drag_target is None:
+            return
+        viewport = self.table.viewport()
+        assert viewport is not None
+        y = max(0, min(y, viewport.height() - 1))
+        row = self.table.rowAt(y)
+        if row < 0 or self._drag_last_row is None:
+            return
+        step = 1 if row >= self._drag_last_row else -1
+        for i in range(self._drag_last_row, row + step, step):
+            item = self.table.item(i, _COL_CHECK)
+            assert item is not None
+            item.setCheckState(self._drag_target)
+        self._drag_last_row = row
+
+    def _drag_apply_under_cursor(self) -> None:
+        if self._drag_target is None:
+            return
+        viewport = self.table.viewport()
+        assert viewport is not None
+        self._drag_apply_at(viewport.mapFromGlobal(QCursor.pos()).y())
+
+    def _drag_autoscroll_tick(self) -> None:
+        "While dragging past an edge, scroll a row and keep painting."
+        if self._drag_target is None:
+            return
+        viewport = self.table.viewport()
+        assert viewport is not None
+        pos_y = viewport.mapFromGlobal(QCursor.pos()).y()
+        scrollbar = self.table.verticalScrollBar()
+        assert scrollbar is not None
+        if pos_y < 0:
+            scrollbar.setValue(scrollbar.value() - 1)
+        elif pos_y > viewport.height():
+            scrollbar.setValue(scrollbar.value() + 1)
+        self._drag_apply_at(pos_y)
+
+    def _end_drag(self) -> None:
+        self._drag_target = None
+        self._drag_last_row = None
+        self._autoscroll_timer.stop()
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        # safety: never leave a drag armed if the dialog goes away mid-drag
+        self._end_drag()
+        super().hideEvent(event)
 
     def _on_cell_clicked(self, row_idx: int, col_idx: int) -> None:
         if col_idx == 1:
@@ -271,7 +536,7 @@ class RestudyDialog(QDialog):
         self._preview_row(row_idx)
 
     def _preview_row(self, row_idx: int) -> None:
-        card = self.mw.col.get_card(self.data.rows[row_idx].card_id)
+        card = self.mw.col.get_card(self._view_rows[row_idx].card_id)
         _SingleCardPreviewer(card=card, mw=self.mw).open()
 
     # Actions
@@ -340,6 +605,27 @@ class RestudyDialog(QDialog):
         ):
             op.run_in_background()
             self.accept()
+
+
+class _KeepOpenMenu(QMenu):
+    """A QMenu whose *checkable* actions toggle without closing the menu.
+
+    Lets several card-type toggles be combined in one visit. Chosen over a
+    QWidgetAction full of QCheckBoxes because embedded widgets lose hover
+    highlighting and keyboard navigation on Qt6/macOS; overriding
+    mouseReleaseEvent keeps native menu look and behavior. Non-checkable
+    actions (Invert selection), Escape, and clicking outside still close
+    the menu normally, as does keyboard activation of any action (an
+    acceptable trade-off — the mouse is the primary path here).
+    """
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        action = self.actionAt(event.position().toPoint())
+        if action is not None and action.isCheckable() and action.isEnabled():
+            action.trigger()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class _SingleCardPreviewer(Previewer):
