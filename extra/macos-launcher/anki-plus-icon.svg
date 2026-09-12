@@ -1,0 +1,115 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#101828"/>
+      <stop offset="0.55" stop-color="#0a1020"/>
+      <stop offset="1" stop-color="#04060c"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#60a5fa"/>
+      <stop offset="0.5" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="cardface" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e293f"/>
+      <stop offset="1" stop-color="#141c30"/>
+    </linearGradient>
+    <linearGradient id="cardface2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#182238"/>
+      <stop offset="1" stop-color="#101828"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softglow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <radialGradient id="halo" cx="0.5" cy="0.42" r="0.6">
+      <stop offset="0" stop-color="#1d4ed8" stop-opacity="0.35"/>
+      <stop offset="0.6" stop-color="#1d4ed8" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#1d4ed8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- macOS squircle -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#halo)"/>
+  <rect x="103" y="103" width="818" height="818" rx="182" fill="none" stroke="#2b3b5e" stroke-width="3" opacity="0.6"/>
+
+  <!-- flashcards fanned behind, lower half -->
+  <g>
+    <g transform="translate(512 734) rotate(9)">
+      <rect x="-235" y="-92" width="470" height="184" rx="26" fill="url(#cardface2)" stroke="#26344f" stroke-width="4"/>
+    </g>
+    <g transform="translate(512 722) rotate(-7)">
+      <rect x="-245" y="-95" width="490" height="190" rx="26" fill="url(#cardface2)" stroke="#2b3b5e" stroke-width="4"/>
+    </g>
+    <g transform="translate(512 710)">
+      <rect x="-255" y="-98" width="510" height="196" rx="28" fill="url(#cardface)" stroke="url(#blue)" stroke-width="5"/>
+      <!-- A+ on the front card -->
+      <text x="-168" y="52" font-family="Avenir Next, Helvetica, sans-serif" font-size="118" font-weight="800" fill="url(#blue)" filter="url(#softglow)">A+</text>
+      <!-- answer lines -->
+      <rect x="30" y="-34" width="180" height="16" rx="8" fill="#31415f"/>
+      <rect x="30" y="4" width="140" height="16" rx="8" fill="#2a3852"/>
+      <rect x="30" y="42" width="160" height="16" rx="8" fill="#243149"/>
+    </g>
+  </g>
+
+  <!-- brain: silhouette + network -->
+  <g transform="translate(0 -26)"><g filter="url(#glow)">
+    <path d="M 500 208
+             C 448 196 400 214 378 252
+             C 330 244 288 272 280 318
+             C 236 330 214 372 226 414
+             C 200 446 204 494 238 520
+             C 236 560 264 592 306 598
+             C 322 636 366 654 406 640
+             C 434 668 484 668 512 640
+             L 512 208 Z"
+          fill="#0f1a30" stroke="url(#blue)" stroke-width="10" stroke-linejoin="round"/>
+    <path d="M 524 208
+             C 576 196 624 214 646 252
+             C 694 244 736 272 744 318
+             C 788 330 810 372 798 414
+             C 824 446 820 494 786 520
+             C 788 560 760 592 718 598
+             C 702 636 658 654 618 640
+             C 590 668 540 668 512 640
+             L 512 208 Z"
+          fill="#0f1a30" stroke="url(#blue)" stroke-width="10" stroke-linejoin="round"/>
+  </g>
+
+  <!-- left hemisphere gyri squiggles -->
+  <g fill="none" stroke="#3b82f6" stroke-width="7" stroke-linecap="round" opacity="0.75">
+    <path d="M 340 300 C 372 282 410 288 428 314"/>
+    <path d="M 292 388 C 320 368 356 372 380 396"/>
+    <path d="M 296 476 C 330 458 368 464 392 492"/>
+    <path d="M 356 566 C 388 546 424 552 446 578"/>
+  </g>
+
+  <!-- right hemisphere network: nodes + synapses -->
+  <g stroke="#60a5fa" stroke-width="6" opacity="0.9" fill="none">
+    <path d="M 560 280 L 632 320 L 700 300"/>
+    <path d="M 632 320 L 616 400 L 688 452"/>
+    <path d="M 616 400 L 548 372 L 560 280"/>
+    <path d="M 548 372 L 556 470 L 616 400"/>
+    <path d="M 556 470 L 636 540 L 688 452"/>
+    <path d="M 636 540 L 576 590"/>
+    <path d="M 688 452 L 744 400 L 700 300"/>
+  </g>
+  <g fill="#93c5fd" filter="url(#softglow)">
+    <circle cx="560" cy="280" r="15"/>
+    <circle cx="632" cy="320" r="12"/>
+    <circle cx="700" cy="300" r="14"/>
+    <circle cx="616" cy="400" r="16"/>
+    <circle cx="548" cy="372" r="11"/>
+    <circle cx="744" cy="400" r="12"/>
+    <circle cx="556" cy="470" r="13"/>
+    <circle cx="688" cy="452" r="15"/>
+    <circle cx="636" cy="540" r="12"/>
+    <circle cx="576" cy="590" r="11"/>
+  </g>
+</g>
+</svg>
