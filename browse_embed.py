@@ -31,6 +31,7 @@ from aqt import gui_hooks, mw
 from aqt.qt import (
     QApplication,
     QColor,
+    QCursor,
     QDockWidget,
     QEvent,
     QFrame,
@@ -39,6 +40,7 @@ from aqt.qt import (
     QLabel,
     QObject,
     QPalette,
+    QPushButton,
     QShortcut,
     QSplitter,
     Qt,
@@ -508,6 +510,85 @@ def _on_op_executed_embedded(changes: Any, handler: object | None) -> None:
         pass
 
 
+def _on_add_note_embedded(note: Any) -> None:
+    """Pull a just-added note into Browse's visible results.
+
+    `_on_op_executed_embedded` (above) repaints existing rows/sidebar
+    counts, but it can't make a brand-new row appear: `Table.op_executed`
+    only calls `mark_cache_stale()` (invalidates cached field content for
+    rows already in the result set) — the row ID list itself is a snapshot
+    taken by the last `Table.search()` call, and nothing re-runs that
+    search on note-add in stock Anki either (aqt/addcards.py never touches
+    an open Browser). `Browser.search()` (self.table.search(self.
+    _lastSearchTxt)) is the same call the search box itself makes, so this
+    just re-issues the user's own last search — a normal, expected refresh,
+    not a rebuild-from-scratch workaround."""
+    br = _state.get("browser")
+    if br is None:
+        return
+    try:
+        br.search()
+    except Exception:
+        pass
+
+
+def _open_add_in_browse(parent_mw: Any) -> None:
+    """Add-card button inside the embedded Browse's search row.
+
+    Reuses `addcard_embed.open_inline` wholesale — no parallel Add
+    implementation. Unlike the left-nav "Add" rail item (which tears this
+    Browse embed down first and swaps to a full-pane Add tab — see
+    `__init__.py`'s `ba:add` handling — and is left unchanged), this opens
+    the same Add panel stacked on top of Browse's own overlay: both are
+    QFrames positioned at the same geometry on `parent_mw.form.
+    centralwidget`, so the Add panel visually covers the table without
+    destroying Browse underneath. Closing Add (Esc / save-and-close)
+    reveals Browse exactly as it was — same search, same selection — and
+    `addcard_embed.close_inline`'s sidebar-tab restore is taught (see
+    below) to land back on "browse" instead of "decks" when this embed is
+    still open underneath.
+
+    One thing stacking breaks that a straight reuse-call can't fix by
+    itself: Browse's own Esc shortcut (closes Browse) and AddCards' Esc
+    shortcut (closes Add) are both `Qt.ShortcutContext.WindowShortcut`,
+    and both now live in the same top-level window (`parent_mw`) at once
+    — two enabled QShortcuts on the same key in the same window are
+    ambiguous to Qt and neither fires. Disable Browse's for as long as
+    Add is stacked on top; a wrapper layered on top of addcard_embed's
+    own `ac._close` (the same wrap-and-chain pattern addcard_embed.
+    open_inline already uses internally) re-enables it once Add closes."""
+    br_esc = _state.get("esc_shortcut")
+    try:
+        if br_esc is not None:
+            br_esc.setEnabled(False)
+    except Exception:
+        pass
+    try:
+        from . import addcard_embed
+        addcard_embed.open_inline(parent_mw)
+        ac = addcard_embed._state.get("addcards")
+        if ac is not None:
+            orig_close = ac._close
+
+            def _reenable_browse_esc(orig=orig_close, esc=br_esc) -> None:
+                try:
+                    orig()
+                finally:
+                    try:
+                        if esc is not None:
+                            esc.setEnabled(True)
+                    except Exception:
+                        pass
+
+            ac._close = _reenable_browse_esc  # type: ignore[assignment]
+    except Exception:
+        try:
+            if br_esc is not None:
+                br_esc.setEnabled(True)
+        except Exception:
+            pass
+
+
 def drop_curtain() -> None:
     """Tear down the anti-flash curtain. Safe to call multiple times."""
     c = _state.pop("curtain", None)
@@ -535,10 +616,15 @@ def close_inline() -> None:
     # deleted page (the crash class upstream fixed in FindDuplicates).
     _teardown_preview()
 
-    # Stop forcing repaints (see _on_op_executed_embedded) now that the
-    # embed is going away.
+    # Stop forcing repaints (see _on_op_executed_embedded) and note-add
+    # refreshes (see _on_add_note_embedded) now that the embed is going
+    # away.
     try:
         gui_hooks.operation_did_execute.remove(_on_op_executed_embedded)
+    except Exception:
+        pass
+    try:
+        gui_hooks.add_cards_did_add_note.remove(_on_add_note_embedded)
     except Exception:
         pass
 
@@ -549,6 +635,7 @@ def close_inline() -> None:
     _state["filter"] = None
     _state.pop("splitter", None)
     _state.pop("central", None)
+    _state.pop("esc_shortcut", None)
     cw_palette = _state.pop("cw_palette", None)
     curtain = _state.pop("curtain", None)
     if curtain is not None:
@@ -682,6 +769,56 @@ def open_inline(parent_mw: Any = None) -> None:
             pass
 
         central = br.centralWidget()
+
+        # "+ Add" — lets the user add a note without leaving Browse. Sits
+        # in the same QGridLayout Anki already docks the Cards/Notes
+        # switch (col 0) and the search box (col 1) into
+        # (Browser.setup_table: `self.form.gridLayout.addWidget(switch, 0,
+        # 0)`), so it inherits the same row and native layout/resize
+        # behaviour for free — col 2, to the right of the search box.
+        # Styled to match addcard.py's `#ba-footer QPushButton#ba-add`
+        # (the Add screen's own submit button) so the two "Add" affordances
+        # read as the same control everywhere they appear.
+        try:
+            from . import addcard as _addcard
+            palette, _ = _addcard._resolve_palette()
+            accent = _addcard._config().get("accent", "#6c8cff")
+            add_btn = QPushButton("+ Add")
+            add_btn.setObjectName("ba-browse-add")
+            add_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            add_btn.setToolTip("Add a note without leaving Browse")
+            add_btn.setStyleSheet(f"""
+                QPushButton#ba-browse-add {{
+                    color: {palette['paper']};
+                    background: {palette['ink']};
+                    border: 1px solid {palette['ink']};
+                    border-radius: 6px;
+                    padding: 5px 14px;
+                    font-family: {_addcard.SANS};
+                    font-size: 10.5pt;
+                    font-weight: 500;
+                    letter-spacing: 0.15px;
+                }}
+                QPushButton#ba-browse-add:hover {{
+                    background: {palette['ink_dim']};
+                    border-color: {palette['ink_dim']};
+                }}
+                QPushButton#ba-browse-add:pressed {{
+                    background: {palette['ink_faint']};
+                    border-color: {palette['ink_faint']};
+                }}
+                QPushButton#ba-browse-add:focus {{
+                    outline: none;
+                    border-color: {accent};
+                }}
+            """)
+            add_btn.clicked.connect(
+                lambda _checked=False, pm=parent_mw: _open_add_in_browse(pm)
+            )
+            br.form.gridLayout.addWidget(add_btn, 0, 2)
+        except Exception as e:
+            print(f"[anki-design.browse_embed] add button failed: {e}",
+                  flush=True)
 
         # Inner splitter inside central: [search+table | editor]. Three
         # things have to be true for the editor pane to behave like a real
@@ -868,6 +1005,11 @@ def open_inline(parent_mw: Any = None) -> None:
             esc.setAutoRepeat(False)
             esc.setContext(Qt.ShortcutContext.WindowShortcut)
             esc.activated.connect(close_inline)
+            # Stashed so _open_add_in_browse can disable it while an Add
+            # panel is stacked on top — two WindowShortcut QShortcuts on
+            # the same key in the same top-level window are ambiguous to
+            # Qt and neither fires.
+            _state["esc_shortcut"] = esc
         except Exception:
             pass
 
@@ -886,6 +1028,14 @@ def open_inline(parent_mw: Any = None) -> None:
         except Exception:
             pass
         gui_hooks.operation_did_execute.append(_on_op_executed_embedded)
+
+        # See _on_add_note_embedded: pulls a note added via the in-Browse
+        # "+ Add" button (_open_add_in_browse) into the visible results.
+        try:
+            gui_hooks.add_cards_did_add_note.remove(_on_add_note_embedded)
+        except Exception:
+            pass
+        gui_hooks.add_cards_did_add_note.append(_on_add_note_embedded)
 
         # Highlight "Browse" in the sidebar.
         try:

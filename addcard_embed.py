@@ -188,11 +188,25 @@ def close_inline() -> None:
                 ac.close()
             except Exception:
                 pass
-    # Restore the sidebar's active tab.
+    # Restore the sidebar's active tab. Normally that's "decks" — but if
+    # this Add panel was opened from inside Browse (browse_embed's "+ Add"
+    # button, browse_embed._open_add_in_browse) rather than the left-nav
+    # "Add" rail item, browse_embed's own overlay is still open underneath
+    # (that entry point never tears Browse down), so "browse" is the
+    # correct tab to land back on.
+    target = "decks"
+    try:
+        from . import browse_embed
+        if browse_embed._state.get("overlay") is not None:
+            target = "browse"
+    except Exception:
+        pass
     try:
         w = getattr(mw, "web", None)
         if w is not None:
-            w.eval("window.__baSetActive && window.__baSetActive('decks');")
+            w.eval(
+                "window.__baSetActive && window.__baSetActive('%s');" % target
+            )
     except Exception:
         pass
 
