@@ -7,6 +7,19 @@
 body.ba-with-side {
   padding-left: var(--rf-side-w, 264px);
   box-sizing: border-box;
+  transition: padding-left 200ms cubic-bezier(.2, .8, .2, 1);
+}
+
+/* ---------------------------- COLLAPSE (Item 2) ----------------------------
+   `data-ba-sidebar="collapsed"` is stamped on <html> by sidebar.js (and
+   bootstrapped from window.__baSidebarCollapsed before first paint) —
+   overriding --rf-side-w here is the single point every page's layout
+   (this file's `body.ba-with-side` padding, congrats.css's identical
+   var(--rf-side-w) reference, and the Python-side Qt overlays via
+   addcard.sidebar_w()) reads from, so nothing needs a second edit to
+   agree on the new width. */
+:root[data-ba-sidebar="collapsed"] {
+  --rf-side-w: 64px;
 }
 
 .ba-side {
@@ -26,6 +39,8 @@ body.ba-with-side {
   -webkit-user-select: none;
   overflow-y: auto;
   overflow-x: hidden;
+  transition: width 200ms cubic-bezier(.2, .8, .2, 1),
+              padding 200ms cubic-bezier(.2, .8, .2, 1);
 }
 .ba-side, .ba-side * {
   box-sizing: border-box;
@@ -45,6 +60,10 @@ body.ba-with-side {
 /* ---------------------------- WORDMARK ---------------------------- */
 .ba-side-head {
   padding: 0 4px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
 }
 /* The wordmark itself is rendered as the .ad-logo lockup (web/logo.css).
    Here we just position it in the rail at the right size and pin the ink
@@ -59,6 +78,81 @@ body.ba-with-side {
   outline: 2px solid var(--rf-accent, #6c8cff);
   outline-offset: 4px;
   border-radius: 4px;
+}
+
+/* Collapse toggle — a chevron that flips direction with the state. Lives
+   in the head, which is never hidden by collapse, so it's always the
+   re-expand affordance the user needs. */
+.ba-side-collapse-btn {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0 !important;
+  border-radius: 6px;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+  color: var(--rf-ink-faint);
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+.ba-side-collapse-btn:hover {
+  background: var(--rf-row-hover) !important;
+  color: var(--rf-ink-dim);
+}
+.ba-side-collapse-btn:focus-visible {
+  outline: 2px solid var(--rf-accent, #6c8cff);
+  outline-offset: 1px;
+}
+.ba-side-collapse-ico {
+  transition: transform 220ms cubic-bezier(.2, .8, .2, 1);
+}
+:root[data-ba-sidebar="collapsed"] .ba-side-collapse-ico {
+  transform: rotate(180deg);
+}
+
+/* ---------------------------- COLLAPSED LAYOUT ----------------------------
+   Icons-only rail at 64px. Labels, the search box, totals, the sync dot
+   and the New-deck inline input all hide; rows keep their full height and
+   hover/active treatment so nothing about *using* an item changes, only
+   its label. Each row also carries a native `title` (set in sidebar.js)
+   so hovering an icon still tells you what it does. */
+:root[data-ba-sidebar="collapsed"] .ba-side {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+:root[data-ba-sidebar="collapsed"] .ba-side-head {
+  justify-content: center;
+}
+:root[data-ba-sidebar="collapsed"] .ba-side-mark {
+  display: none;
+}
+:root[data-ba-sidebar="collapsed"] .ba-side-cmdk,
+:root[data-ba-sidebar="collapsed"] .ba-side-totals,
+:root[data-ba-sidebar="collapsed"] .ba-side-item .ba-side-l,
+:root[data-ba-sidebar="collapsed"] .ba-side-item .ba-side-key,
+:root[data-ba-sidebar="collapsed"] .ba-side-item .ba-side-dot,
+:root[data-ba-sidebar="collapsed"] .ba-side-newdeck-swap {
+  display: none !important;
+}
+:root[data-ba-sidebar="collapsed"] .ba-side-item {
+  justify-content: center;
+  gap: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+:root[data-ba-sidebar="collapsed"] .ba-side-newdeck {
+  justify-content: center;
+  gap: 0;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 /* ---------------------------- CMD-K LAUNCHER ---------------------------- */

@@ -406,6 +406,18 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             )
         except Exception:
             pass
+        # Left-rail collapse state (Item 2) — bootstrapped the same way so
+        # sidebar.js can stamp the `data-ba-sidebar` attribute on <html>
+        # before its first paint instead of flashing expanded-then-collapsed.
+        try:
+            import json as _json
+            web_content.head += (
+                "<script>window.__baSidebarCollapsed = "
+                + _json.dumps(bool(cfg.get("sidebar_collapsed", False)))
+                + ";</script>"
+            )
+        except Exception:
+            pass
         # Per-deck deadline labels, so the gear menu can render
         # "Memorize by Sep 15 — 6d" without a round-trip per deck.
         try:
@@ -993,13 +1005,16 @@ def _apply_chrome() -> None:
 # Which rail item each inline embed owns while its overlay is up.
 #
 # addcard_embed is deliberately absent: there is no "add" rail item any
-# more (Add lives inside Browse — see _open_add below), and addcard_embed's
-# overlay can now be open *stacked on top of* browse_embed's (see
-# browse_embed._open_add_in_browse) rather than instead of it. If
-# addcard_embed were listed here, an open Add-over-Browse would wrongly
-# try to highlight a rail item that no longer exists instead of falling
-# through to "browse" below, which is what should be lit while Add
-# covers it.
+# more (Add lives inside Browse — see _open_add below). Add now normally
+# renders *inside* Browse's own CARD panel (browse_embed._open_add_in_panel),
+# which never touches addcard_embed._state at all — it reparents just the
+# AddCards dialog's central widget into browse_embed's own QStackedWidget.
+# The old stacked-overlay path (browse_embed._open_add_in_browse, used as a
+# fallback and by the dev screenshot harness) does open addcard_embed's own
+# overlay on top of browse_embed's. Either way, if addcard_embed were listed
+# here it would wrongly try to highlight a rail item that no longer exists
+# instead of falling through to "browse" below, which is what should be lit
+# while Add is showing (panel or fallback overlay alike).
 #
 # Among the embeds listed here, only one is ever open at a time, so the
 # order doesn't matter.
@@ -1225,6 +1240,31 @@ def _on_js_message(handled, message, context):
             mw.on_sync_button_clicked()
         elif cmd == "settings":
             _open_settings()
+        elif cmd.startswith("sidebar-collapse:"):
+            # Left-rail collapse toggle (Item 2). Persist to the add-on's
+            # own config (same key/reader _config() uses) and, if any
+            # *_embed.py overlay is currently open, reposition it to the
+            # new sidebar width immediately rather than waiting for the
+            # next window resize to correct the gap it sits in.
+            val = cmd[len("sidebar-collapse:"):]
+            collapsed = val not in ("0", "false", "")
+            try:
+                cfg2 = mw.addonManager.getConfig(__name__) or {}
+                cfg2["sidebar_collapsed"] = collapsed
+                mw.addonManager.writeConfig(__name__, cfg2)
+            except Exception:
+                pass
+            for mod in (
+                "addcard_embed", "browse_embed", "settings_embed", "stats_embed",
+            ):
+                try:
+                    from importlib import import_module
+                    _m = import_module("." + mod, __name__)
+                    _reflow = getattr(_m, "reflow", None)
+                    if _reflow is not None:
+                        _reflow()
+                except Exception:
+                    pass
         elif cmd == "website":
             try:
                 from aqt.utils import openLink
@@ -2884,6 +2924,8 @@ def on_webview_did_inject_style_into_page(webview) -> None:
             # Full tree for the deck-options "Move to…" picker + flags.
             f"window.__baDeckTree={_json.dumps(all_decks)};"
             f"window.__baOpts={_json.dumps(_js_opts(cfg))};"
+            f"window.__baSidebarCollapsed="
+            f"{_json.dumps(bool(cfg.get('sidebar_collapsed', False)))};"
         )
         webview.eval(theme_attr + seed + accent_style + css_inject + js_inject)
     except Exception:
@@ -3531,12 +3573,15 @@ def _open_add(*args: Any, **kwargs: Any) -> None:
     land the user in the same place the "+ Add" button does.
 
     When both the Browse and Add embeds are enabled (the default), open
-    the embedded Browse and stack the embedded Add panel on top of it via
-    `browse_embed._open_add_in_browse` — the exact same call the "+ Add"
-    button makes, no parallel implementation. If Browse's embed is off
-    (but Add's isn't), there's nothing to stack Add onto, so fall back to
-    the old full-pane inline Add. If neither embed is enabled, fall back
-    to Anki's own Add Cards window."""
+    the embedded Browse and turn its CARD panel into the add-a-note form
+    via `browse_embed._open_add_in_panel` — the exact same call the
+    "+ Add" button makes, no parallel implementation. That function falls
+    back to the old stacked-overlay Add (`_open_add_in_browse`) on its
+    own if the panel isn't available for some reason, so nothing extra is
+    needed here for that case. If Browse's embed is off (but Add's
+    isn't), there's nothing to open a panel inside, so fall back to the
+    old full-pane inline Add. If neither embed is enabled, fall back to
+    Anki's own Add Cards window."""
     if _embed_enabled("embed_add") and _config().get("restyle_addcard", True):
         try:
             from . import addcard_embed
@@ -3544,7 +3589,7 @@ def _open_add(*args: Any, **kwargs: Any) -> None:
                 from . import browse_embed
                 browse_embed.open_inline(mw)
                 if browse_embed._state.get("overlay") is not None:
-                    browse_embed._open_add_in_browse(mw)
+                    browse_embed._open_add_in_panel(mw)
                     return
                 # Browse's embed didn't come up for some reason — fall
                 # through to a plain full-pane Add rather than doing

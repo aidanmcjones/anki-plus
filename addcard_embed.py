@@ -55,7 +55,21 @@ from aqt.qt import (
 )
 
 
-SIDEBAR_W = 264  # px — matches --rf-side-w in web/theme.css
+SIDEBAR_W = 264  # px fallback — see _sidebar_w() for the live value
+
+
+def _sidebar_w() -> int:
+    """Current left-rail width — 264px expanded, 64px collapsed (Item 2).
+    Single Python-side source of truth is addcard.sidebar_w(); every
+    *_embed.py module calls through this same helper so the Qt overlay
+    offset always matches the web sidebar's actual width, including right
+    after the user toggles collapse (see reflow(), called from the
+    ba:sidebar-collapse pycmd handler in __init__.py)."""
+    try:
+        from . import addcard as _addcard
+        return _addcard.sidebar_w()
+    except Exception:
+        return SIDEBAR_W
 
 
 def _palette_styles() -> str:
@@ -100,10 +114,11 @@ class _EmbedFilter(QObject):
         if event.type() == QEvent.Type.Resize:
             try:
                 cw = mw.form.centralwidget
+                w = _sidebar_w()
                 self._overlay.setGeometry(
-                    SIDEBAR_W,
+                    w,
                     0,
-                    cw.width() - SIDEBAR_W,
+                    cw.width() - w,
                     cw.height(),
                 )
             except Exception:
@@ -112,6 +127,24 @@ class _EmbedFilter(QObject):
 
 
 _state: dict = {"addcards": None, "overlay": None, "filter": None}
+
+
+def reflow() -> None:
+    """Reposition the open overlay/curtain to the current sidebar width.
+
+    Called from __init__.py's `ba:sidebar-collapse` pycmd handler right
+    after the config flip, so an Add screen that's open while the user
+    collapses/expands the rail doesn't sit at the old offset until the
+    next window resize."""
+    try:
+        cw = mw.form.centralwidget
+        w = _sidebar_w()
+        for key in ("overlay", "curtain"):
+            widget = _state.get(key)
+            if widget is not None:
+                widget.setGeometry(w, 0, cw.width() - w, cw.height())
+    except Exception:
+        pass
 
 
 def drop_curtain() -> None:
@@ -215,6 +248,71 @@ def close_inline() -> None:
         pass
 
 
+def create_inline(parent_mw: Any = None) -> Optional[Any]:
+    """Construct a hidden, fully-redressed AddCards instance with no
+    curtain/overlay/positioning attached — just the object.
+
+    Shared by `open_inline` (the full-overlay Add screen, still used by
+    the left-nav "A" shortcut's fallback path and the dev screenshot
+    harness) and `browse_embed._open_add_in_panel` (Add rendered inside
+    Browse's CARD panel). Both call sites get the exact same form: Anki's
+    `add_cards_did_init` gui_hook fires `addcard.py`'s `_redress()` during
+    `AddCards.__init__` regardless of who constructed it, so
+    `ac.centralWidget()` already has the inline notetype/deck pickers and
+    the debounced save button wired up (`ac._ba_safe_add`) by the time
+    this returns. There is exactly one Add implementation; only how its
+    centralWidget gets mounted differs between the two callers.
+
+    Returns None on construction failure — callers decide the fallback
+    (normally `parent_mw.onAddCard()`)."""
+    parent_mw = parent_mw or mw
+    try:
+        from aqt.addcards import AddCards
+        # Anki's AddCards.__init__ ends with `self.show()`, which would
+        # flash the standalone QMainWindow on screen for one paint before
+        # the caller reparents its central widget elsewhere and hides the
+        # window. Subclassing to no-op `show()` keeps it invisible from
+        # the start; everything else (geometry restore, hook firing,
+        # central-widget construction via _redress) still runs in the
+        # parent constructor.
+        class _EmbeddedAddCards(AddCards):  # type: ignore[misc, valid-type]
+            def show(self) -> None:  # noqa: D401 — Qt method override
+                pass
+
+            def activateWindow(self) -> None:  # noqa: N802 — Qt override
+                # Hidden shell: the widgets live in `mw`, so the stock
+                # implementation activates nothing and the editor's
+                # post-modal focus hand-back never happens. See
+                # addcard.reactivate_editor.
+                from . import addcard as _addcard
+
+                _addcard.reactivate_editor(self)
+        ac = _EmbeddedAddCards(parent_mw)
+        ac.setVisible(False)
+        return ac
+    except Exception:
+        return None
+
+
+def teardown_inline(ac: Any) -> None:
+    """Close an AddCards instance created by `create_inline`.
+
+    Uses AddCards' own synchronous `_close()` (NOT the public `.close()`)
+    for the same reason `close_inline` below does: `.close()` routes via
+    `ifCanClose` → `editor.call_after_note_saved`, which never completes
+    once the central widget has been reparented elsewhere, so the hook
+    unsubscribe inside `_close` never runs."""
+    if ac is None:
+        return
+    try:
+        ac._close()  # type: ignore[attr-defined]
+    except Exception:
+        try:
+            ac.close()
+        except Exception:
+            pass
+
+
 def open_inline(parent_mw: Any = None) -> None:
     """Open AddCards embedded in the main window's content area.
 
@@ -258,7 +356,7 @@ def open_inline(parent_mw: Any = None) -> None:
     curtain.setStyleSheet(
         "QFrame#ba-embed-curtain { background: " + palette["paper"] + "; }"
     )
-    curtain.setGeometry(SIDEBAR_W, 0, cw.width() - SIDEBAR_W, cw.height())
+    curtain.setGeometry(_sidebar_w(), 0, cw.width() - _sidebar_w(), cw.height())
     curtain.show()
     curtain.raise_()
     _state["curtain"] = curtain
@@ -272,29 +370,8 @@ def open_inline(parent_mw: Any = None) -> None:
     except Exception:
         pass
 
-    try:
-        from aqt.addcards import AddCards
-        # Anki's AddCards.__init__ ends with `self.show()`, which would
-        # flash the standalone QMainWindow on screen for one paint before
-        # we reparent its central widget into the overlay and hide the
-        # window. Subclassing to no-op `show()` keeps it invisible from
-        # the start; everything else (geometry restore, hook firing,
-        # central-widget construction via _redress) still runs in the
-        # parent constructor.
-        class _EmbeddedAddCards(AddCards):  # type: ignore[misc, valid-type]
-            def show(self) -> None:  # noqa: D401 — Qt method override
-                pass
-
-            def activateWindow(self) -> None:  # noqa: N802 — Qt override
-                # Hidden shell: the widgets live in `mw`, so the stock
-                # implementation activates nothing and the editor's
-                # post-modal focus hand-back never happens. See
-                # addcard.reactivate_editor.
-                from . import addcard as _addcard
-
-                _addcard.reactivate_editor(self)
-        ac = _EmbeddedAddCards(parent_mw)
-    except Exception:
+    ac = create_inline(parent_mw)
+    if ac is None:
         # Anki's normal flow as a last resort.
         try:
             curtain.deleteLater()
@@ -353,8 +430,9 @@ def open_inline(parent_mw: Any = None) -> None:
             cw.setPalette(_cw_pal)
         except Exception:
             pass
+        _ow = _sidebar_w()
         overlay.setGeometry(
-            SIDEBAR_W, 0, cw.width() - SIDEBAR_W, cw.height()
+            _ow, 0, cw.width() - _ow, cw.height()
         )
         overlay.show()
         overlay.raise_()

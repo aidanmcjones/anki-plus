@@ -43,7 +43,18 @@ from aqt.qt import (
 )
 
 
-SIDEBAR_W = 264  # px — matches --rf-side-w in web/theme.css; same as the other embeds
+SIDEBAR_W = 264  # px fallback — see _sidebar_w() for the live value
+
+
+def _sidebar_w() -> int:
+    """Current left-rail width — 264px expanded, 64px collapsed (Item 2).
+    See addcard_embed._sidebar_w() for the full explanation; every
+    *_embed.py module goes through the same addcard.sidebar_w()."""
+    try:
+        from . import addcard as _addcard
+        return _addcard.sidebar_w()
+    except Exception:
+        return SIDEBAR_W
 
 
 class _EmbedFilter(QObject):
@@ -57,10 +68,11 @@ class _EmbedFilter(QObject):
         if event.type() == QEvent.Type.Resize:
             try:
                 cw = mw.form.centralwidget
+                w = _sidebar_w()
                 self._overlay.setGeometry(
-                    SIDEBAR_W,
+                    w,
                     0,
-                    cw.width() - SIDEBAR_W,
+                    cw.width() - w,
                     cw.height(),
                 )
             except Exception:
@@ -74,6 +86,19 @@ _state: dict = {
     "filter": None,
     "closing": False,
 }
+
+
+def reflow() -> None:
+    """Reposition the open overlay/curtain to the current sidebar width."""
+    try:
+        cw = mw.form.centralwidget
+        w = _sidebar_w()
+        for key in ("overlay", "curtain"):
+            widget = _state.get(key)
+            if widget is not None:
+                widget.setGeometry(w, 0, cw.width() - w, cw.height())
+    except Exception:
+        pass
 
 
 def drop_curtain() -> None:
@@ -185,7 +210,7 @@ def open_inline(parent_mw: Any = None) -> None:
     curtain.setStyleSheet(
         "QFrame#ba-settings-curtain { background: " + palette["paper"] + "; }"
     )
-    curtain.setGeometry(SIDEBAR_W, 0, cw.width() - SIDEBAR_W, cw.height())
+    curtain.setGeometry(_sidebar_w(), 0, cw.width() - _sidebar_w(), cw.height())
     curtain.show()
     curtain.raise_()
     _state["curtain"] = curtain
@@ -294,8 +319,9 @@ def open_inline(parent_mw: Any = None) -> None:
         except Exception:
             pass
 
+        _ow = _sidebar_w()
         overlay.setGeometry(
-            SIDEBAR_W, 0, cw.width() - SIDEBAR_W, cw.height()
+            _ow, 0, cw.width() - _ow, cw.height()
         )
         overlay.show()
         overlay.raise_()

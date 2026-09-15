@@ -18,6 +18,10 @@ in this file are the raw form the settings page writes.
 ## Home page
 - **sidebar_nav** — the left rail replaces Anki's top toolbar. The inline
   windows below need it.
+- **sidebar_collapsed** — the left rail's collapsed/expanded state. Toggled
+  by the chevron next to the anki+ wordmark (collapsed = icons-only, 64px
+  wide; expanded = 264px), not meant to be hand-edited — this just
+  remembers what you last left it as, including across restarts.
 - **show_today** — the today panel (cards · minutes + per-hour bars).
 - **show_streak** — the streak counter above the heatmap.
 - **show_heatmap**, **heatmap_weeks**, **heatmap_palette** — the review
@@ -172,6 +176,13 @@ in this file are the raw form the settings page writes.
   preview on `Ctrl+Shift+P`.
 - **restyle_browse_editor** — apply the Add window's editor styling to
   the Browse fields pane. `false` keeps Anki's stock editor there.
+- **browse_tree_collapsed** / **browse_table_collapsed** — whether the
+  Browse sidebar tree (Decks/Tags) and the card-list table are currently
+  hidden. Toggled by the **Sidebar** / **Table** buttons in the small
+  toolbar above the panes — hiding either one hands its width to the
+  editor/preview pane, useful while adding or editing a card. Both
+  toggles stay reachable in that same toolbar no matter what else is
+  collapsed. Not meant to be hand-edited; remembered across restarts.
 
 ## Images in fields
 

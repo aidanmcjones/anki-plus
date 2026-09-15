@@ -59,6 +59,8 @@
         '<circle cx="12" cy="12" r="3"/>' +
         '<path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3h0a1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 1 1.5h0a1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8v0a1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>' +
       '</g>',
+    collapse:
+      '<path d="M15 5l-7 7 7 7"/>',
   };
   function iconSVG(name, extraClass) {
     var body = ICONS[name];
@@ -87,6 +89,9 @@
     b.type = "button";
     b.className = "ba-side-item";
     b.setAttribute("data-cmd", it.cmd);
+    // Native tooltip — the only label a row has left when the rail is
+    // collapsed to its icons-only 64px state.
+    b.title = it.label;
     if (it.active) b.setAttribute("data-active", "true");
     if (it.cls) b.classList.add(it.cls);
     var iconBlock = (it.cmd === "sync")
@@ -114,6 +119,7 @@
     row.className = "ba-side-item ba-side-act ba-side-newdeck";
     row.setAttribute("data-cmd", "create");
     row.setAttribute("data-state", "idle");
+    row.title = "New deck";
     // The icon slot holds two SVGs stacked in the same 14×14 box: the
     // idle plus and the active submit (right arrow). They cross-fade as
     // the state changes — the shared horizontal stroke of both glyphs
@@ -156,10 +162,18 @@
       close();
     }
 
-    // Click on the row (outside the input/icon) opens it.
+    // Click on the row (outside the input/icon) opens it. When the rail
+    // is collapsed the label/input slot is hidden by CSS (no room for it
+    // at 64px) — expand the rail first so the input actually has
+    // somewhere to render.
     row.addEventListener("click", function (e) {
       if (row.getAttribute("data-state") === "active") return;
       e.preventDefault();
+      if (document.documentElement.getAttribute("data-ba-sidebar") === "collapsed") {
+        applyCollapsed(false);
+        setTimeout(open, 160);
+        return;
+      }
       open();
     });
     // Keyboard activation when the row itself is focused (idle state).
@@ -211,10 +225,19 @@
     aside.innerHTML = ''
       // Wordmark — Anki+ lockup. Helvetica "anki" from the original mark,
       // followed by an accent-blue plus; scales from the same CSS variable.
+      // The collapse toggle sits alongside it: a chevron that flips
+      // direction with the collapsed state (see sidebar.css) and, when
+      // collapsed, is the one control guaranteed to stay reachable —
+      // it lives in the head, never inside a part of the rail that
+      // collapse itself would hide.
       + '<div class="ba-side-head">'
       +   '<span class="ad-logo ba-side-mark" aria-label="Anki+ — go to decks">'
       +     '<span class="ad-mark">anki<span class="ad-plus">+</span></span>'
       +   '</span>'
+      +   '<button type="button" class="ba-side-collapse-btn" '
+      +     'aria-label="Collapse sidebar" title="Collapse sidebar">'
+      +     iconSVG("collapse", "ba-side-collapse-ico")
+      +   '</button>'
       + '</div>'
       // Cross-deck totals — hidden in single-deck mode (the hero owns them).
       + '<dl class="ba-side-totals">'
@@ -263,6 +286,20 @@
           e.preventDefault();
           goHome();
         }
+      });
+    }
+
+    // Collapse toggle — flips the rail between its full width and a thin
+    // icons-only strip. State lives in the add-on config (Python side),
+    // so it survives a restart; here we just flip the DOM attribute for
+    // an instant response and tell Python so it can persist it and
+    // reflow any open embed (Browse/Add/Stats/Settings) to match.
+    var collapseBtn = aside.querySelector(".ba-side-collapse-btn");
+    if (collapseBtn) {
+      collapseBtn.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleCollapsed();
       });
     }
 
@@ -383,6 +420,34 @@
       else els[i].removeAttribute("data-active");
     }
   }
+
+  // ---- collapse (Item 2) ------------------------------------------------ //
+  // The attribute lives on <html> (not the aside itself) so sidebar.css's
+  // `--rf-side-w` override — read by congrats.css and every other page's
+  // `body.ba-with-side { padding-left: var(--rf-side-w) }` — flips in the
+  // same paint as the rail's own width, with nothing left mismatched.
+  var collapsedState = false;
+  function applyCollapsed(collapsed, opts) {
+    collapsedState = !!collapsed;
+    document.documentElement.setAttribute(
+      "data-ba-sidebar", collapsedState ? "collapsed" : ""
+    );
+    var btn = document.querySelector(".ba-side-collapse-btn");
+    if (btn) {
+      btn.setAttribute(
+        "aria-label", collapsedState ? "Expand sidebar" : "Collapse sidebar"
+      );
+      btn.title = collapsedState ? "Expand sidebar" : "Collapse sidebar";
+    }
+    if (!opts || !opts.silent) send("sidebar-collapse:" + (collapsedState ? 1 : 0));
+  }
+  function toggleCollapsed() { applyCollapsed(!collapsedState); }
+  // Exposed so a keyboard shortcut registered elsewhere (or Python, via
+  // w.eval) can drive the same toggle as the button.
+  window.__baToggleSidebar = toggleCollapsed;
+  window.__baSetSidebarCollapsed = function (collapsed) {
+    applyCollapsed(collapsed, { silent: true });
+  };
   // The sync row drives a small state machine:
   //
   //   idle  ──click──▶  active  ──result(ok)──▶  reveal-ok   ──▶  idle
@@ -461,6 +526,7 @@
     if (pending.standing) applyStanding(pending.standing);
     if (pending.active)   applyActive(pending.active);
     if (pending.sync)     applySync(pending.sync);
+    applyCollapsed(!!window.__baSidebarCollapsed, { silent: true });
   }
 
   // ---- public hooks ---------------------------------------------------- //
@@ -497,6 +563,16 @@
   // Decks while Browse was still the thing on screen. Python seeds what it
   // actually is.
   pending.active = window.__baActiveItem || "decks";
+
+  // Stamp the collapse attribute on <html> immediately (before the aside
+  // even exists) so `--rf-side-w`-driven layout (body padding, congrats.css)
+  // is correct on the very first paint instead of jumping once inject()
+  // runs on DOMContentLoaded.
+  try {
+    if (window.__baSidebarCollapsed) {
+      document.documentElement.setAttribute("data-ba-sidebar", "collapsed");
+    }
+  } catch (e) {}
 
   if (document.readyState !== "loading") inject();
   else document.addEventListener("DOMContentLoaded", inject);

@@ -91,6 +91,24 @@ def _config() -> Dict[str, Any]:
     return mw.addonManager.getConfig(ADDON) or {}
 
 
+# Left nav rail width. Single Python-side source of truth for the four
+# *_embed.py Qt overlays (browse_embed / addcard_embed / settings_embed /
+# stats_embed all import this rather than keeping their own hardcoded
+# constant) — mirrors the web layer's `--rf-side-w` custom property
+# (web/theme.css), which web/sidebar.js swings between the same two
+# values via `:root[data-ba-sidebar="collapsed"]`. Both sides read the
+# same config key (`sidebar_collapsed`), so a toggle and a restart always
+# agree on which width is in effect.
+SIDEBAR_EXPANDED_W = 264
+SIDEBAR_COLLAPSED_W = 64
+
+
+def sidebar_w(cfg: Optional[Dict[str, Any]] = None) -> int:
+    """Current left-rail width in px, from the persisted collapse state."""
+    cfg = cfg if cfg is not None else _config()
+    return SIDEBAR_COLLAPSED_W if cfg.get("sidebar_collapsed") else SIDEBAR_EXPANDED_W
+
+
 # --------------------------------------------------------------------------- #
 # Returning from a modal, when the editor's "window" is a hidden shell
 # --------------------------------------------------------------------------- #

@@ -44,5 +44,8 @@
   "congrats_redesign": true,
   "silent_sync": true,
   "font_serif": "",
-  "font_sans": ""
+  "font_sans": "",
+  "sidebar_collapsed": false,
+  "browse_tree_collapsed": false,
+  "browse_table_collapsed": false
 }
