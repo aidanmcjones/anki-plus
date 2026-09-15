@@ -882,9 +882,9 @@ def _set_bottom_visible(visible: bool) -> None:
 
 def _update_title() -> None:
     # Anki sets "<profile> - Anki" late in profile load; collapse it to a
-    # clean "Anki" (we re-assert it after render so ours wins that race).
+    # clean "Anki+" (we re-assert it after render so ours wins that race).
     try:
-        mw.setWindowTitle("Anki")
+        mw.setWindowTitle("Anki+")
     except Exception:
         pass
 
