@@ -457,6 +457,57 @@ class _EmbedFilter(QObject):
 _state: dict = {"browser": None, "overlay": None, "filter": None}
 
 
+def _on_op_executed_embedded(changes: Any, handler: object | None) -> None:
+    """Force the table repaint that stock Browser skips for an embedded
+    instance.
+
+    Root cause (found investigating a report that Browse's card table
+    painted empty right after a sync): stock `Browser.on_operation_did_execute`
+    -> `Table.op_executed` only calls `redraw_cells()` (which emits
+    `dataChanged` and makes the QTableView actually repaint) when
+    `current_window() is self` — i.e. when Qt considers this Browser's
+    *own* top-level window the one holding focus. `current_window()` is
+    `QApplication.focusWidget().window()` (qt/aqt/utils.py). Our embedded
+    Browser is a permanently-hidden QMainWindow — `show()`/`activateWindow()`
+    are no-op'd and its real content lives reparented inside `mw`'s window
+    — so it can never be `current_window()`. Its `focused` is always
+    `False`, so `mark_cache_stale()` still runs (the row cache is
+    invalidated) but `redraw_cells()` never does: the table can end up
+    showing stale/blank cells until something else forces an unconditional
+    full model rebuild, e.g. the Cards/Notes toggle (`Table.toggle_state`).
+
+    This fires on every `operation_did_execute`, which notably includes
+    the synthesized op `mw.reset()` emits — and this add-on's own silent
+    sync wrapper (`__init__.py: on_collection_sync_finished`) calls
+    `mw.reset()` unconditionally, on a *failed* sync too. So: sync
+    (even one that errors out with no account configured) -> mw.reset()
+    -> operation_did_execute -> embedded Table.op_executed(focused=False)
+    -> cache invalidated, view never told to repaint -> empty-looking
+    table until the user forces a rebuild by hand.
+
+    Narrow, event-driven fix: whenever our embed is open, do the repaint
+    step ourselves. Stock's own listener (registered in Browser.setupHooks
+    at construction time) already ran and marked the cache stale by the
+    time this fires, since hooks run in registration order and we only
+    register after the embed is fully open — so redraw_cells() here is
+    sufficient, not a duplicate of the cache invalidation.
+
+    The Browser's own sidebar tree (`Sidebar.op_executed`, deck/tag counts)
+    has the identical `if focused: self.refresh_if_needed()` gate, so it's
+    fixed here too, for free."""
+    br = _state.get("browser")
+    if br is None:
+        return
+    try:
+        br.table.redraw_cells()
+    except Exception:
+        pass
+    try:
+        br.sidebar.refresh_if_needed()
+    except Exception:
+        pass
+
+
 def drop_curtain() -> None:
     """Tear down the anti-flash curtain. Safe to call multiple times."""
     c = _state.pop("curtain", None)
@@ -483,6 +534,13 @@ def close_inline() -> None:
     # outlives its window keeps answering theme_did_change and touches a
     # deleted page (the crash class upstream fixed in FindDuplicates).
     _teardown_preview()
+
+    # Stop forcing repaints (see _on_op_executed_embedded) now that the
+    # embed is going away.
+    try:
+        gui_hooks.operation_did_execute.remove(_on_op_executed_embedded)
+    except Exception:
+        pass
 
     # Clear state FIRST so anything that re-enters via a close callback
     # returns immediately.
@@ -816,6 +874,18 @@ def open_inline(parent_mw: Any = None) -> None:
         _state["browser"] = br
         _state["overlay"] = overlay
         _state["filter"] = flt
+
+        # See _on_op_executed_embedded: the embedded Browser can never be
+        # Qt's current_window(), so stock Table.op_executed's `if focused:
+        # self.redraw_cells()` never fires for us and the table can paint
+        # stale/blank after a reset (e.g. every sync attempt, success or
+        # failure — on_collection_sync_finished calls mw.reset()
+        # unconditionally). Force the repaint ourselves while open.
+        try:
+            gui_hooks.operation_did_execute.remove(_on_op_executed_embedded)
+        except Exception:
+            pass
+        gui_hooks.operation_did_execute.append(_on_op_executed_embedded)
 
         # Highlight "Browse" in the sidebar.
         try:
