@@ -25,7 +25,7 @@ moved in as-is first.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict
 
 from aqt import gui_hooks, mw
 from aqt.qt import (
@@ -42,15 +42,54 @@ from aqt.qt import (
     QPalette,
     QPushButton,
     QShortcut,
+    QSize,
     QSplitter,
     Qt,
     QTimer,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 
-SIDEBAR_W = 264  # px — matches --rf-side-w in web/theme.css; same as addcard_embed
+# Per-module config, same pattern as browse_preview.py / deadlines.py /
+# settings.py etc.
+ADDON = __name__.split(".")[0]
+
+
+def _pane_config() -> Dict[str, Any]:
+    try:
+        return mw.addonManager.getConfig(ADDON) or {}
+    except Exception:
+        return {}
+
+
+def _save_pane_collapse(*, tree: bool | None = None, table: bool | None = None) -> None:
+    """Persist the Browse pane collapse toggles to the add-on config —
+    survives restart, same storage as every other add-on setting."""
+    try:
+        cfg = mw.addonManager.getConfig(ADDON) or {}
+        if tree is not None:
+            cfg["browse_tree_collapsed"] = bool(tree)
+        if table is not None:
+            cfg["browse_table_collapsed"] = bool(table)
+        mw.addonManager.writeConfig(ADDON, cfg)
+    except Exception:
+        pass
+
+
+SIDEBAR_W = 264  # px fallback — see _sidebar_w() for the live value
+
+
+def _sidebar_w() -> int:
+    """Current left-rail width — 264px expanded, 64px collapsed (Item 2).
+    See addcard_embed._sidebar_w() for the full explanation; every
+    *_embed.py module goes through the same addcard.sidebar_w()."""
+    try:
+        from . import addcard as _addcard
+        return _addcard.sidebar_w()
+    except Exception:
+        return SIDEBAR_W
 
 # Browser sidebar (the tag/decks tree inside the embedded Browser). The
 # Anki default of ~240px gets visibly squeezed on small windows because
@@ -94,6 +133,11 @@ def _clamp_splitter(splitter: "QSplitter", central: Any) -> None:
             w = splitter.widget(i)
             if w is central:
                 continue
+            if not w.isVisible():
+                # Collapsed via the Sidebar toggle (see _set_tree_collapsed)
+                # — leave it at 0 rather than clamping back up to MIN.
+                sizes[i] = 0
+                continue
             sizes[i] = max(SIDEBAR_DOCK_MIN, min(SIDEBAR_DOCK_MAX, sizes[i]))
             sidebar_total += sizes[i]
         for i in range(count):
@@ -121,6 +165,12 @@ def _apply_inner_split(inner: "QSplitter") -> None:
             avail = inner.width() - inner.handleWidth()
             if avail <= 0:
                 return
+            table_side = inner.widget(0)
+            if table_side is not None and not table_side.isVisible():
+                # Collapsed via the Table toggle — give the editor/preview
+                # side the room.
+                inner.setSizes([0, avail])
+                return
             editor_w = max(EDITOR_MIN, min(EDITOR_PREF, avail // 2))
             table_w = max(TABLE_MIN, avail - editor_w)
             inner.setSizes([table_w, editor_w])
@@ -130,31 +180,45 @@ def _apply_inner_split(inner: "QSplitter") -> None:
     QTimer.singleShot(0, _set)
 
 
+def _reflow_outer_splitter(splitter: "QSplitter", central: Any) -> None:
+    """Recompute [docks | central] sizes, giving 0 width to any collapsed
+    (hidden) dock and handing the freed space to central. Shared by the
+    initial layout pass (_apply_initial_splitter_sizes) and by the Sidebar
+    collapse toggle (_set_tree_collapsed) — same math, so toggling never
+    leaves a dead gap the way a plain clamp would."""
+    try:
+        count = splitter.count()
+        handles = max(0, count - 1) * splitter.handleWidth()
+        avail = max(0, splitter.width() - handles)
+        visible = [
+            i for i in range(count)
+            if splitter.widget(i) is not central and splitter.widget(i).isVisible()
+        ]
+        n = len(visible)
+        per = (
+            min(SIDEBAR_DOCK_PREF, max(SIDEBAR_DOCK_MIN, (avail - CENTRAL_MIN) // n))
+            if n else 0
+        )
+        central_w = max(CENTRAL_MIN, avail - per * n)
+        sizes = []
+        for i in range(count):
+            if splitter.widget(i) is central:
+                sizes.append(central_w)
+            elif i in visible:
+                sizes.append(per)
+            else:
+                sizes.append(0)
+        splitter.setSizes(sizes)
+    except Exception:
+        pass
+
+
 def _apply_initial_splitter_sizes(splitter: "QSplitter", central: Any) -> None:
     """Set initial splitter sizes from the overlay's actual width so a
     narrow window doesn't end up with a 100px sidebar after QSplitter
     proportionally scales setSizes(). Deferred via QTimer.singleShot(0)
     so the overlay has been laid out and width() is meaningful."""
-
-    def _set() -> None:
-        try:
-            count = splitter.count()
-            handles = max(0, count - 1) * splitter.handleWidth()
-            avail = max(0, splitter.width() - handles)
-            non_central = count - 1
-            sidebars = min(SIDEBAR_DOCK_PREF, max(SIDEBAR_DOCK_MIN, (avail - CENTRAL_MIN) // max(1, non_central)))
-            central_w = max(CENTRAL_MIN, avail - sidebars * non_central)
-            sizes = []
-            for i in range(count):
-                if splitter.widget(i) is central:
-                    sizes.append(central_w)
-                else:
-                    sizes.append(sidebars)
-            splitter.setSizes(sizes)
-        except Exception:
-            pass
-
-    QTimer.singleShot(0, _set)
+    QTimer.singleShot(0, lambda: _reflow_outer_splitter(splitter, central))
 
 
 # Pencil (read mode) and its "done" counterpart (edit mode). Drawn rather
@@ -170,6 +234,13 @@ _DONE_SVG = (
     'width="16" height="16" fill="none" stroke="{c}" stroke-width="1.9" '
     'stroke-linecap="round" stroke-linejoin="round">'
     '<path d="M5 12.5l4.5 4.5L19 7"/></svg>'
+)
+# Back arrow — the CARD panel's "leave Add, return to the card" affordance.
+_BACK_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
+    'width="16" height="16" fill="none" stroke="{c}" stroke-width="1.9" '
+    'stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M19 12H5"/><path d="M11 18l-6-6 6-6"/></svg>'
 )
 
 
@@ -240,6 +311,16 @@ def _install_preview(br: Any) -> None:
     edit_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
     edit_btn.setIconSize(QSize(16, 16))
     hrow.addWidget(edit_btn)
+    # Third mode — Add — hijacks the same header/stack pattern. Only one
+    # of edit_btn / back_btn is visible at a time (see _paint_header).
+    back_btn = QToolButton(header)
+    back_btn.setObjectName("ba-browse-pane-back")
+    back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    back_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+    back_btn.setIconSize(QSize(16, 16))
+    back_btn.setVisible(False)
+    back_btn.clicked.connect(lambda: _close_add_panel())
+    hrow.addWidget(back_btn)
 
     def _paint_header() -> None:
         """Icon + label for whichever mode we're in, in palette colours."""
@@ -247,6 +328,16 @@ def _install_preview(br: Any) -> None:
             from . import addcard as _addcard
 
             p, _dark = _addcard._resolve_palette()
+            if _state.get("pane_add_ac") is not None:
+                edit_btn.setVisible(False)
+                back_btn.setVisible(True)
+                back_btn.setIcon(_svg_icon(_BACK_SVG, p["ink_dim"]))
+                back_btn.setText("Back")
+                back_btn.setToolTip("Back to the card (Esc)")
+                label.setText("Add")
+                return
+            back_btn.setVisible(False)
+            edit_btn.setVisible(True)
             editing = stack.currentIndex() == 1
             edit_btn.setIcon(
                 _svg_icon(_DONE_SVG if editing else _PENCIL_SVG, p["ink_dim"])
@@ -261,6 +352,10 @@ def _install_preview(br: Any) -> None:
             pass
 
     def _set_mode(editing: bool) -> None:
+        if _state.get("pane_add_ac") is not None:
+            # Add is showing — edit_btn is hidden and shouldn't be able to
+            # drive the stack, but guard anyway (e.g. a queued signal).
+            return
         stack.setCurrentIndex(1 if editing else 0)
         if edit_btn.isChecked() != editing:
             edit_btn.setChecked(editing)
@@ -289,6 +384,11 @@ def _install_preview(br: Any) -> None:
         # Anki's editor calls `widget.show()` on every load_note. Rather
         # than fight that, follow it: a header that says "Card" over the
         # fields editor is worse than either mode.
+        if _state.get("pane_add_ac") is not None:
+            # Add's page is being shown/hidden — _paint_header already
+            # knows to read pane_add_ac, not the raw index.
+            _paint_header()
+            return
         editing = index == 1
         if edit_btn.isChecked() != editing:
             edit_btn.blockSignals(True)
@@ -345,6 +445,7 @@ def _install_preview(br: Any) -> None:
     _state["pane_stack"] = stack
     _state["pane_head"] = header
     _state["pane_edit_btn"] = edit_btn
+    _state["pane_back_btn"] = back_btn
     _state["pane_paint"] = _paint_header
     _paint_header()
     # First paint: the webview needs a beat to finish loading reviewer.js
@@ -353,6 +454,14 @@ def _install_preview(br: Any) -> None:
 
 
 def _teardown_preview() -> None:
+    # If the Add panel is open, close it (and its AddCards instance) first
+    # — otherwise closing Browse would leave a live AddCards with no
+    # parent stack, and note-save hooks would go on firing at nothing.
+    if _state.get("pane_add_ac") is not None:
+        try:
+            _close_add_panel()
+        except Exception:
+            pass
     hook = _state.pop("preview_hook", None)
     if hook is not None:
         try:
@@ -366,7 +475,7 @@ def _teardown_preview() -> None:
             sc.deleteLater()
         except Exception:
             pass
-    for key in ("pane_stack", "pane_head", "pane_edit_btn", "pane_paint"):
+    for key in ("pane_stack", "pane_head", "pane_edit_btn", "pane_back_btn", "pane_paint"):
         _state.pop(key, None)
     pane = _state.pop("preview", None)
     if pane is not None:
@@ -419,11 +528,46 @@ def refresh_palette() -> None:
             )
         except Exception:
             pass
+    toolbar = _state.get("toolbar")
+    if toolbar is not None:
+        try:
+            toolbar.setStyleSheet(
+                "QWidget#ba-browse-toolbar { background: " + palette["paper"]
+                + "; border-bottom: 1px solid " + palette["line"] + "; }"
+                "QWidget#ba-browse-toolbar QToolButton { color: "
+                + palette["ink_dim"] + "; background: transparent; border: 1px "
+                "solid " + palette["line2"] + "; border-radius: 6px; padding: "
+                "3px 10px; font-size: 9.5pt; }"
+                "QWidget#ba-browse-toolbar QToolButton:checked { color: "
+                + palette["ink"] + "; border-color: " + palette["ink_faint"] + "; }"
+                "QWidget#ba-browse-toolbar QToolButton:hover { background: "
+                + palette["hover"] + "; }"
+                "QWidget#ba-browse-toolbar QToolButton:disabled { opacity: 0.4; }"
+            )
+        except Exception:
+            pass
     try:
         cw = mw.form.centralwidget
         cw_pal = cw.palette()
         cw_pal.setColor(QPalette.ColorRole.Window, paper)
         cw.setPalette(cw_pal)
+    except Exception:
+        pass
+
+
+def reflow() -> None:
+    """Reposition the open overlay/curtain to the current sidebar width.
+
+    Called from __init__.py's `ba:sidebar-collapse` pycmd handler right
+    after the config flip, so Browse (if open) doesn't sit at the old
+    offset until the next window resize."""
+    try:
+        cw = mw.form.centralwidget
+        w = _sidebar_w()
+        for key in ("overlay", "curtain"):
+            widget = _state.get(key)
+            if widget is not None:
+                widget.setGeometry(w, 0, cw.width() - w, cw.height())
     except Exception:
         pass
 
@@ -441,10 +585,11 @@ class _EmbedFilter(QObject):
         if event.type() == QEvent.Type.Resize:
             try:
                 cw = mw.form.centralwidget
+                w = _sidebar_w()
                 self._overlay.setGeometry(
-                    SIDEBAR_W,
+                    w,
                     0,
-                    cw.width() - SIDEBAR_W,
+                    cw.width() - w,
                     cw.height(),
                 )
             except Exception:
@@ -532,21 +677,183 @@ def _on_add_note_embedded(note: Any) -> None:
         pass
 
 
+def _open_add_in_panel(parent_mw: Any) -> None:
+    """Turn the CARD panel (the right-hand pane that normally shows the
+    selected row's rendered question/answer, or its fields in Edit mode)
+    into the add-a-note form, in place — no overlay stacked on top of the
+    table or the sidebar.
+
+    This is the "+ Add" button's normal path now. It reuses `addcard_-
+    embed.create_inline` — the exact same AddCards construction that
+    backs the standalone Add screen, so the inline notetype/deck pickers
+    and the save button (`ac._ba_safe_add`) are identical, not a second
+    implementation. Only the mounting differs: instead of an overlay
+    QFrame positioned over the table, `ac.centralWidget()` becomes a new
+    page on the CARD panel's existing QStackedWidget (`_state["pane_-
+    stack"]`, built by `_install_preview` for the Card/Editing modes) and
+    the header swaps its pencil/Done toggle for a single "Back" button.
+
+    Falls back to the old stacked-overlay Add (`_open_add_in_browse`,
+    kept for the dev screenshot harness and for the case where the
+    preview pane isn't installed at all) if the panel isn't available or
+    construction fails."""
+    stack = _state.get("pane_stack")
+    if stack is None:
+        # browse_preview disabled, or _install_preview hasn't run for some
+        # other reason — nowhere to mount the panel. Old behaviour.
+        _open_add_in_browse(parent_mw)
+        return
+    if _state.get("pane_add_ac") is not None:
+        # Already open — just bring its page forward.
+        idx = _state.get("pane_add_index")
+        if idx is not None:
+            try:
+                stack.setCurrentIndex(idx)
+            except Exception:
+                pass
+        return
+
+    from . import addcard_embed
+    ac = addcard_embed.create_inline(parent_mw)
+    if ac is None:
+        _open_add_in_browse(parent_mw)
+        return
+
+    try:
+        central = ac.centralWidget()
+        central.setParent(stack)
+        central.setWindowFlags(Qt.WindowType.Widget)
+        idx = stack.addWidget(central)
+
+        # Chain onto AddCards' own _close so any internal close path also
+        # clears our bookkeeping (mirrors addcard_embed.open_inline's own
+        # wrap-and-chain of the same method).
+        try:
+            orig_close = ac._close  # type: ignore[attr-defined]
+
+            def _wrapped_close(orig=orig_close) -> None:
+                try:
+                    orig()
+                finally:
+                    if _state.get("pane_add_ac") is ac:
+                        _state["pane_add_ac"] = None
+            ac._close = _wrapped_close  # type: ignore[assignment]
+        except Exception:
+            pass
+
+        _state["pane_add_ac"] = ac
+        _state["pane_add_widget"] = central
+        _state["pane_add_index"] = idx
+        stack.setCurrentIndex(idx)
+
+        # Cmd/Ctrl+Return and Cmd/Ctrl+Enter submit the note. AddCards'
+        # own shortcuts targeted its now-orphaned buttonBox, so rebuild
+        # them here exactly like addcard_embed.open_inline does for the
+        # full-overlay case.
+        try:
+            safe_add = getattr(ac, "_ba_safe_add", None) or ac.add_current_note
+            shortcuts = []
+            for keys in ("Ctrl+Return", "Ctrl+Enter"):
+                sc = QShortcut(QKeySequence(keys), central)
+                sc.setAutoRepeat(False)
+                sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+                sc.activated.connect(safe_add)
+                shortcuts.append(sc)
+            _state["pane_add_shortcuts"] = shortcuts
+        except Exception:
+            pass
+
+        try:
+            ac.editor.web.setFocus()
+        except Exception:
+            pass
+    except Exception as e:
+        import traceback
+        print(
+            f"[anki-design.browse_embed] add-in-panel failed: {e}\n"
+            f"{traceback.format_exc()}",
+            flush=True,
+        )
+        _state.pop("pane_add_ac", None)
+        _state.pop("pane_add_widget", None)
+        _state.pop("pane_add_index", None)
+        try:
+            addcard_embed.teardown_inline(ac)
+        except Exception:
+            pass
+        _open_add_in_browse(parent_mw)
+        return
+
+    _paint_header_safe()
+
+
+def _paint_header_safe() -> None:
+    paint = _state.get("pane_paint")
+    if paint is not None:
+        try:
+            paint()
+        except Exception:
+            pass
+
+
+def _close_add_panel() -> None:
+    """Leave Add mode and return the CARD panel to showing the selected
+    row. Called by the header's Back button, by Escape (see open_inline's
+    shortcut wiring below), and from _teardown_preview when Browse itself
+    is closing while Add is still open."""
+    ac = _state.pop("pane_add_ac", None)
+    widget = _state.pop("pane_add_widget", None)
+    idx = _state.pop("pane_add_index", None)
+    for sc in _state.pop("pane_add_shortcuts", None) or []:
+        try:
+            sc.setParent(None)
+            sc.deleteLater()
+        except Exception:
+            pass
+    stack = _state.get("pane_stack")
+    if stack is not None:
+        try:
+            stack.setCurrentIndex(0)
+        except Exception:
+            pass
+        if widget is not None:
+            try:
+                stack.removeWidget(widget)
+            except Exception:
+                pass
+    if ac is not None:
+        try:
+            from . import addcard_embed
+            addcard_embed.teardown_inline(ac)
+        except Exception:
+            pass
+    _paint_header_safe()
+    # Card may have changed underneath (e.g. the note just added) — make
+    # sure the read pane reflects the current row rather than a stale one.
+    pane = _state.get("preview")
+    if pane is not None:
+        try:
+            pane.render(force=True)
+        except Exception:
+            pass
+
+
 def _open_add_in_browse(parent_mw: Any) -> None:
-    """Add-card button inside the embedded Browse's search row.
+    """Fallback / dev-tool path: stack the full-overlay Add screen on top
+    of Browse (the original implementation, before Add moved into the
+    CARD panel). Still used when the CARD panel isn't available, and by
+    `__init__.py`'s `_dev_screenshot` smoke-test harness which looks for
+    `addcard_embed._state["overlay"]`.
 
     Reuses `addcard_embed.open_inline` wholesale — no parallel Add
-    implementation. This is the only way to reach Add now: there is no
-    standalone "Add" rail item any more (see `__init__.py`'s `_open_add`,
-    which the "A" shortcut still calls — it lands here too, opening
-    Browse first if it isn't already open). This opens the Add panel
-    stacked on top of Browse's own overlay: both are QFrames positioned
-    at the same geometry on `parent_mw.form.centralwidget`, so the Add
-    panel visually covers the table without destroying Browse underneath.
-    Closing Add (Esc / save-and-close) reveals Browse exactly as it was —
-    same search, same selection — and `addcard_embed.close_inline`'s
-    sidebar-tab restore is taught (see below) to land back on "browse"
-    instead of "decks" when this embed is still open underneath.
+    implementation. This opens the Add panel stacked on top of Browse's
+    own overlay: both are QFrames positioned at the same geometry on
+    `parent_mw.form.centralwidget`, so the Add panel visually covers the
+    table without destroying Browse underneath. Closing Add (Esc /
+    save-and-close) reveals Browse exactly as it was — same search, same
+    selection — and `addcard_embed.close_inline`'s sidebar-tab restore is
+    taught (see below) to land back on "browse" instead of "decks" when
+    this embed is still open underneath.
 
     One thing stacking breaks that a straight reuse-call can't fix by
     itself: Browse's own Esc shortcut (closes Browse) and AddCards' Esc
@@ -636,6 +943,11 @@ def close_inline() -> None:
     _state.pop("splitter", None)
     _state.pop("central", None)
     _state.pop("esc_shortcut", None)
+    for key in (
+        "left_docks", "table_side", "inner_splitter", "toolbar",
+        "tree_toggle_btn", "table_toggle_btn",
+    ):
+        _state.pop(key, None)
     cw_palette = _state.pop("cw_palette", None)
     curtain = _state.pop("curtain", None)
     if curtain is not None:
@@ -682,6 +994,74 @@ def close_inline() -> None:
         pass
 
 
+def _set_tree_collapsed(collapsed: bool, *, persist: bool = True) -> None:
+    """Show/hide the Browser's left DECKS/TAGS dock(s) (Item 3).
+
+    The dock widgets are hidden, not removed: QSplitter treats a hidden
+    child as zero-width and _reflow_outer_splitter hands its space to
+    central, so this is fully reversible via the toolbar's Sidebar button
+    and disturbs nothing live inside the dock (its tree state, scroll
+    position, selection all survive untouched)."""
+    docks = _state.get("left_docks") or []
+    for w in docks:
+        try:
+            w.setVisible(not collapsed)
+        except Exception:
+            pass
+    sp = _state.get("splitter")
+    c = _state.get("central")
+    if sp is not None and c is not None:
+        _reflow_outer_splitter(sp, c)
+    btn = _state.get("tree_toggle_btn")
+    if btn is not None:
+        try:
+            btn.blockSignals(True)
+            btn.setChecked(not collapsed)
+            btn.blockSignals(False)
+        except Exception:
+            pass
+    if persist:
+        _save_pane_collapse(tree=collapsed)
+
+
+def _set_table_collapsed(collapsed: bool, *, persist: bool = True) -> None:
+    """Show/hide the card-list table (Item 3), handing its space to the
+    editor/CARD pane. Only visibility changes — the QTableView's model
+    and selection are untouched by hiding the pane, so the CARD panel
+    keeps showing the same row (and the preview stays correct) whether
+    the table is visible or not; nothing about "collapsing the table"
+    here can break selection."""
+    table_side = _state.get("table_side")
+    if table_side is not None:
+        try:
+            table_side.setVisible(not collapsed)
+        except Exception:
+            pass
+    inner = _state.get("inner_splitter")
+    if inner is not None:
+        try:
+            avail = inner.width() - inner.handleWidth()
+            if avail > 0:
+                if collapsed:
+                    inner.setSizes([0, avail])
+                else:
+                    editor_w = max(EDITOR_MIN, min(EDITOR_PREF, avail // 2))
+                    table_w = max(TABLE_MIN, avail - editor_w)
+                    inner.setSizes([table_w, editor_w])
+        except Exception:
+            pass
+    btn = _state.get("table_toggle_btn")
+    if btn is not None:
+        try:
+            btn.blockSignals(True)
+            btn.setChecked(not collapsed)
+            btn.blockSignals(False)
+        except Exception:
+            pass
+    if persist:
+        _save_pane_collapse(table=collapsed)
+
+
 def open_inline(parent_mw: Any = None) -> None:
     """Open the Browser embedded in the main window's content area.
 
@@ -714,7 +1094,7 @@ def open_inline(parent_mw: Any = None) -> None:
     curtain.setStyleSheet(
         "QFrame#ba-browse-curtain { background: " + palette["paper"] + "; }"
     )
-    curtain.setGeometry(SIDEBAR_W, 0, cw.width() - SIDEBAR_W, cw.height())
+    curtain.setGeometry(_sidebar_w(), 0, cw.width() - _sidebar_w(), cw.height())
     curtain.show()
     curtain.raise_()
     _state["curtain"] = curtain
@@ -813,7 +1193,7 @@ def open_inline(parent_mw: Any = None) -> None:
                 }}
             """)
             add_btn.clicked.connect(
-                lambda _checked=False, pm=parent_mw: _open_add_in_browse(pm)
+                lambda _checked=False, pm=parent_mw: _open_add_in_panel(pm)
             )
             br.form.gridLayout.addWidget(add_btn, 0, 2)
         except Exception as e:
@@ -865,6 +1245,8 @@ def open_inline(parent_mw: Any = None) -> None:
                     w.setVisible = _keep_visible  # type: ignore[assignment]
                     w.setVisible(True)
                 _apply_inner_split(inner)
+                _state["inner_splitter"] = inner
+                _state["table_side"] = table_side
         except Exception:
             pass
 
@@ -900,6 +1282,7 @@ def open_inline(parent_mw: Any = None) -> None:
                 # bottom, no-area) as left, matching the Browser's stock
                 # placement of the sidebar.
                 left_docks.append(inner)
+        _state["left_docks"] = left_docks
 
         overlay = QFrame(parent_mw.form.centralwidget)
         overlay.setObjectName("ba-browse-embed")
@@ -912,6 +1295,60 @@ def open_inline(parent_mw: Any = None) -> None:
         v = QVBoxLayout(overlay)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
+
+        # Slim, always-visible toolbar above the panes it controls —
+        # deliberately OUTSIDE the splitter/central pane, so collapsing
+        # either the tree or the table can never make its own re-expand
+        # control disappear along with it (the "+ Add" button and search
+        # box, by contrast, live inside table_side — collapsing the table
+        # hides them too, which is fine, they're not how you get the
+        # table back).
+        toolbar = QWidget(overlay)
+        toolbar.setObjectName("ba-browse-toolbar")
+        trow = QHBoxLayout(toolbar)
+        trow.setContentsMargins(10, 5, 10, 5)
+        trow.setSpacing(6)
+
+        def _mk_pane_toggle(text: str, tip: str) -> "QToolButton":
+            b = QToolButton(toolbar)
+            b.setCheckable(True)
+            b.setChecked(True)
+            b.setText(text)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            b.setToolTip(tip)
+            return b
+
+        tree_btn = _mk_pane_toggle(
+            "Sidebar", "Show/hide the Decks & Tags panel"
+        )
+        tree_btn.setEnabled(bool(left_docks))
+        table_btn = _mk_pane_toggle(
+            "Table", "Show/hide the card list — frees space for the editor"
+        )
+        trow.addWidget(tree_btn)
+        trow.addWidget(table_btn)
+        trow.addStretch(1)
+        try:
+            toolbar.setStyleSheet(
+                "QWidget#ba-browse-toolbar { background: " + palette["paper"]
+                + "; border-bottom: 1px solid " + palette["line"] + "; }"
+                "QWidget#ba-browse-toolbar QToolButton { color: "
+                + palette["ink_dim"] + "; background: transparent; border: 1px "
+                "solid " + palette["line2"] + "; border-radius: 6px; padding: "
+                "3px 10px; font-size: 9.5pt; }"
+                "QWidget#ba-browse-toolbar QToolButton:checked { color: "
+                + palette["ink"] + "; border-color: " + palette["ink_faint"] + "; }"
+                "QWidget#ba-browse-toolbar QToolButton:hover { background: "
+                + palette["hover"] + "; }"
+                "QWidget#ba-browse-toolbar QToolButton:disabled { opacity: 0.4; }"
+            )
+        except Exception:
+            pass
+        v.addWidget(toolbar)
+        _state["toolbar"] = toolbar
+        _state["tree_toggle_btn"] = tree_btn
+        _state["table_toggle_btn"] = table_btn
 
         # Layout: [left docks] | [centralwidget: search+table | editor] |
         # [right docks], wrapped in a QSplitter so each boundary stays
@@ -959,6 +1396,25 @@ def open_inline(parent_mw: Any = None) -> None:
             central.setParent(overlay)
             v.addWidget(central, 1)
 
+        tree_btn.toggled.connect(lambda checked: _set_tree_collapsed(not checked))
+        table_btn.toggled.connect(lambda checked: _set_table_collapsed(not checked))
+
+        # Restore persisted collapse state (Item 3). Deferred like the
+        # sizing calls above (_apply_inner_split / _apply_initial_splitter_-
+        # sizes) so real widths are available, and scheduled after both of
+        # them so this has the final say over how space is distributed.
+        def _restore_pane_collapse() -> None:
+            try:
+                pcfg = _pane_config()
+                if left_docks and bool(pcfg.get("browse_tree_collapsed", False)):
+                    _set_tree_collapsed(True, persist=False)
+                if bool(pcfg.get("browse_table_collapsed", False)):
+                    _set_table_collapsed(True, persist=False)
+            except Exception:
+                pass
+
+        QTimer.singleShot(0, _restore_pane_collapse)
+
         # Hide the original Browser QMainWindow.
         br.setVisible(False)
 
@@ -971,8 +1427,9 @@ def open_inline(parent_mw: Any = None) -> None:
         except Exception:
             pass
 
+        _ow = _sidebar_w()
         overlay.setGeometry(
-            SIDEBAR_W, 0, cw.width() - SIDEBAR_W, cw.height()
+            _ow, 0, cw.width() - _ow, cw.height()
         )
         overlay.show()
         overlay.raise_()
@@ -997,14 +1454,24 @@ def open_inline(parent_mw: Any = None) -> None:
         flt = _EmbedFilter(overlay)
         cw.installEventFilter(flt)
 
-        # Esc closes the embed. Browser binds its own Esc inside
-        # keyPressEvent on the QMainWindow, but our QMainWindow is
+        # Esc closes the embed — or, if the CARD panel is showing the Add
+        # form, leaves Add first and reveals the card again (mirrors the
+        # old stacked-overlay Add's Esc behaviour, without needing the
+        # ambiguous-shortcut workaround that path required: there's only
+        # ever one WindowShortcut Escape now). Browser binds its own Esc
+        # inside keyPressEvent on the QMainWindow, but our QMainWindow is
         # hidden so it never gets focus events.
+        def _on_escape() -> None:
+            if _state.get("pane_add_ac") is not None:
+                _close_add_panel()
+            else:
+                close_inline()
+
         try:
             esc = QShortcut(QKeySequence("Escape"), overlay)
             esc.setAutoRepeat(False)
             esc.setContext(Qt.ShortcutContext.WindowShortcut)
-            esc.activated.connect(close_inline)
+            esc.activated.connect(_on_escape)
             # Stashed so _open_add_in_browse can disable it while an Add
             # panel is stacked on top — two WindowShortcut QShortcuts on
             # the same key in the same top-level window are ambiguous to
