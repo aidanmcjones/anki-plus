@@ -41,6 +41,13 @@ it survives restarts without touching the collection schema:
     "deck_deadlines": {
         "<did>": {
             "date": "2026-09-15",     # ISO, local dates throughout
+            "time": "16:30",          # optional, 24h "HH:MM"; absent means
+                                       # "that date's collection rollover
+                                       # hour" — the meaning every entry had
+                                       # before the time picker existed, and
+                                       # what old entries with no "time" key
+                                       # keep meaning forever (see
+                                       # `_deadline_moment`)
             "orig_conf": 1,           # preset to restore on clear
             "cloned_conf": 173…,      # preset we made (0 = none)
             "orig_max_ivl": 36500     # ceiling to restore on clear
@@ -138,29 +145,38 @@ def _rollover_hour() -> int:
         return 4
 
 
-def _deadline_moment(deadline: datetime.date) -> datetime.datetime:
+def _deadline_moment(
+    deadline: datetime.date, time_of_day: Optional[datetime.time] = None
+) -> datetime.datetime:
     """A deadline as a point in time, not just a calendar square.
 
-    The "Memorize by" picker only collects a date — there's no time-of-day
-    control — so the date alone has no inherent clock time. What it means
-    for scheduling, though, is concrete: a card is either seen before that
-    date's rollover or it isn't, since rollover is the instant Anki's
-    "today" changes. So "known by <date>" is read as "known by that date's
-    rollover", the same boundary `_today()` already uses to decide which
-    calendar day we're on.
+    `time_of_day` is the value stored in a `deck_deadlines` entry's
+    optional "time" key (see `get_time`). When it's absent — every entry
+    created before the time picker existed, and any entry the user never
+    touches the time control on — the date alone has no inherent clock
+    time, and what it means for scheduling is concrete: a card is either
+    seen before that date's rollover or it isn't, since rollover is the
+    instant Anki's "today" changes. So "known by <date>" with no explicit
+    time is read as "known by that date's rollover", the same boundary
+    `_today()` already uses to decide which calendar day we're on. This
+    fallback is permanent, not a migration step — old entries keep this
+    meaning forever unless the user opens the dialog and picks a time.
     """
-    return datetime.datetime.combine(deadline, datetime.time(hour=_rollover_hour()))
+    return datetime.datetime.combine(
+        deadline, time_of_day or datetime.time(hour=_rollover_hour())
+    )
 
 
-def _stamp(deadline: datetime.date) -> str:
+def _stamp(deadline: datetime.date, time_of_day: Optional[datetime.time] = None) -> str:
     """Compact local timestamp for deck-list display: "Sep 16, 4:00 AM".
 
-    Time of day comes from the collection's actual rollover hour (see
+    Time of day comes from the stored `time_of_day` when the entry has
+    one, else the collection's actual rollover hour (see
     `_deadline_moment`), not a hardcoded midnight/4am, so it tracks the
     user's real day-cutoff preference and stays consistent with `_today()`.
     """
     try:
-        moment = _deadline_moment(deadline)
+        moment = _deadline_moment(deadline, time_of_day)
         return moment.strftime("%b %-d, %-I:%M %p")
     except Exception:
         return deadline.strftime("%b %-d") if hasattr(deadline, "strftime") else str(deadline)
@@ -173,11 +189,38 @@ def parse(value: str) -> Optional[datetime.date]:
         return None
 
 
+def _parse_time(value: Any) -> Optional[datetime.time]:
+    """Tolerant "HH:MM" (24h) parse for the optional "time" entry key.
+
+    Anything that isn't a clean two-field 0-23 / 0-59 string — missing,
+    malformed, corrupted by hand-editing meta.json — falls back to None,
+    which callers treat as "no stored time" (i.e. the rollover-hour
+    default), never as an error.
+    """
+    if not isinstance(value, str) or ":" not in value:
+        return None
+    try:
+        hh, mm = value.split(":", 1)
+        return datetime.time(hour=int(hh), minute=int(mm))
+    except Exception:
+        return None
+
+
 def get(did: int) -> Optional[datetime.date]:
     entry = _state().get(str(did))
     if not isinstance(entry, dict):
         return None
     return parse(str(entry.get("date", "")))
+
+
+def get_time(did: int) -> Optional[datetime.time]:
+    """The stored time-of-day for a deck's deadline, or None if the entry
+    predates the time picker (or never had its time touched) — in which
+    case the deadline still means "that date's rollover hour"."""
+    entry = _state().get(str(did))
+    if not isinstance(entry, dict):
+        return None
+    return _parse_time(entry.get("time"))
 
 
 def get_mode(did: int) -> str:
@@ -188,14 +231,33 @@ def get_mode(did: int) -> str:
 
 
 def label_for(did: int) -> str:
-    """Gear-menu label: the date (with time of day, from the rollover) plus
-    how long is left."""
+    """Gear-menu label: the date (with time of day, from the stored time or
+    the rollover) plus how long is left.
+
+    `left` (calendar-day difference from `days_left`) stays the single
+    source of truth for the "Nd" countdown and for whether a *past*
+    calendar date is passed — unchanged from before the time picker, and
+    still exactly what `_apply`/`pacing`/`refresh_all` use to size the
+    interval cap, so this label can never disagree with the scheduling
+    side about a date that isn't today.
+
+    The one case a bare date can't resolve is *today*: a 9:00 AM deadline
+    on a day that's now 3:00 PM has genuinely already happened, even
+    though its calendar date hasn't changed yet. So only for `left == 0`
+    do we additionally check the real deadline moment against wall-clock
+    now, and only to decide "passed" vs. "today" — the countdown number
+    itself, and every scheduling function, stay day-based (see
+    `_deadline_moment`'s docstring and `_apply`).
+    """
     deadline = get(did)
     if deadline is None:
         return "Memorize by…"
     left = days_left(deadline)
-    stamp = _stamp(deadline)
-    if left < 0:
+    time_of_day = get_time(did)
+    stamp = _stamp(deadline, time_of_day)
+    moment_passed = _deadline_moment(deadline, time_of_day) <= datetime.datetime.now()
+    passed = left < 0 or (left == 0 and moment_passed)
+    if passed:
         # Past tense on purpose: the deck was memorized by that date, and
         # the row should read as an achievement rather than a miss.
         if get_mode(did) == MODE_PAUSE:
@@ -543,13 +605,20 @@ def _apply(col: Any, did: int, entry: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def set_deadline(did: int, deadline: datetime.date,
-                 mode: Optional[str] = None) -> None:
+                 mode: Optional[str] = None,
+                 time_of_day: Optional[datetime.time] = None) -> None:
     col = getattr(mw, "col", None)
     if col is None:
         return
     state = _state()
     entry = dict(state.get(str(did)) or {})
     entry["date"] = deadline.isoformat()
+    if time_of_day is not None:
+        # Written as 24h "HH:MM" — see module docstring. Only written when
+        # the dialog actually hands one over (i.e. every save made through
+        # the new picker); an entry this call never touches keeps whatever
+        # "time" key (or absence of one) it already had.
+        entry["time"] = f"{time_of_day.hour:02d}:{time_of_day.minute:02d}"
     if mode in (MODE_MAINTAIN, MODE_PAUSE):
         entry["mode"] = mode
     entry.setdefault("mode", MODE_MAINTAIN)
@@ -716,6 +785,8 @@ def show_dialog(did: int) -> None:
         QHBoxLayout,
         QLabel,
         QPushButton,
+        QTime,
+        QTimeEdit,
         QVBoxLayout,
         Qt,
     )
@@ -755,6 +826,29 @@ def show_dialog(did: int) -> None:
     if current:
         cal.setSelectedDate(QDate(current.year, current.month, current.day))
     root.addWidget(cal)
+
+    # Time of day, right under the calendar. Defaults to whatever this
+    # deadline already means: the stored time if there is one, else the
+    # collection's rollover hour on the hour — so opening and re-saving an
+    # existing entry (or a fresh one, which has no meaning yet beyond "the
+    # rollover") shows the same moment it already stood for, and Save
+    # doesn't silently move it unless the user actually turns the dial.
+    stored_time = get_time(did)
+    default_time = stored_time or datetime.time(hour=_rollover_hour())
+
+    time_row = QHBoxLayout()
+    time_row.setSpacing(8)
+    time_label = QLabel("at")
+    time_label.setProperty("role", "sub")
+    time_row.addWidget(time_label)
+    time_edit = QTimeEdit()
+    time_edit.setObjectName("ba-deadline-time")
+    time_edit.setDisplayFormat("h:mm AP")
+    time_edit.setTime(QTime(default_time.hour, default_time.minute))
+    time_edit.setAccelerated(True)
+    time_row.addWidget(time_edit)
+    time_row.addStretch(1)
+    root.addLayout(time_row)
 
     note = QLabel("")
     note.setProperty("role", "note")
@@ -799,6 +893,10 @@ def show_dialog(did: int) -> None:
     def chosen_date() -> datetime.date:
         sel = cal.selectedDate()
         return datetime.date(sel.year(), sel.month(), sel.day())
+
+    def chosen_time() -> datetime.time:
+        t = time_edit.time()
+        return datetime.time(hour=t.hour(), minute=t.minute())
 
     def refresh_note() -> None:
         chosen = chosen_date()
@@ -880,13 +978,13 @@ def show_dialog(did: int) -> None:
         refresh_note()
 
     def on_save() -> None:
-        sel = cal.selectedDate()
-        chosen = datetime.date(sel.year(), sel.month(), sel.day())
+        chosen = chosen_date()
+        time_val = chosen_time()
         past = (chosen - _today()).days < 0
         mode = (MODE_PAUSE if rb_pause.isChecked() else MODE_MAINTAIN) if past else None
-        set_deadline(did, chosen, mode=mode)
+        set_deadline(did, chosen, mode=mode, time_of_day=time_val)
         dlg.accept()
-        stamp = sel.toString("MMM d")
+        stamp = _stamp(chosen, time_val)
         if past:
             if mode == MODE_PAUSE:
                 _tooltip(f"“{name}” memorized by {stamp} — reviews paused")
@@ -929,6 +1027,7 @@ def _refresh_deck_browser() -> None:
 
 def _dialog_qss(p: Dict[str, str], accent: str) -> str:
     from . import addcard as _addcard
+    from . import settings as _settings
 
     return f"""
 QDialog#ba-deadline {{ background: {p['paper']}; }}
@@ -977,6 +1076,40 @@ QDialog#ba-deadline QCalendarWidget QToolButton:hover {{ background: {p['hover']
 QDialog#ba-deadline QCalendarWidget QMenu {{ background: {p['panel']}; color: {p['ink']}; }}
 QDialog#ba-deadline QCalendarWidget QSpinBox {{
     background: {p['field_bg']}; color: {p['ink']}; border: 1px solid {p['line']};
+}}
+QDialog#ba-deadline QTimeEdit {{
+    background: {p['field_bg']};
+    color: {p['ink']};
+    border: 1px solid {p['line2']};
+    border-radius: 8px;
+    padding: 6px 26px 6px 10px;
+    font-family: {_addcard.SANS};
+    font-size: 11pt;
+    selection-background-color: {accent};
+    selection-color: {p['paper']};
+}}
+QDialog#ba-deadline QTimeEdit:focus {{ border-color: {accent}; }}
+QDialog#ba-deadline QTimeEdit::up-button {{
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 18px;
+    border: 0;
+    background: transparent;
+}}
+QDialog#ba-deadline QTimeEdit::down-button {{
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 18px;
+    border: 0;
+    background: transparent;
+}}
+QDialog#ba-deadline QTimeEdit::up-arrow {{
+    image: url({_settings._icon_url("chevron-up.svg")});
+    width: 10px; height: 6px;
+}}
+QDialog#ba-deadline QTimeEdit::down-arrow {{
+    image: url({_settings._icon_url("chevron-down.svg")});
+    width: 10px; height: 6px;
 }}
 QDialog#ba-deadline QPushButton[role="primary"] {{
     background: {p['ink']};
