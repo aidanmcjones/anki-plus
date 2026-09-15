@@ -120,6 +120,52 @@ def days_left(deadline: datetime.date) -> int:
     return (deadline - _today()).days
 
 
+def _rollover_hour() -> int:
+    """The collection's day-cutoff hour (0-23), e.g. 4 for a 4am rollover.
+
+    Reuses the package's own `_rollover_hour` (in `__init__.py`, already
+    relied on by the heatmap's `_day_shift_seconds`) rather than
+    re-deriving it — that one reads
+    `mw.col.get_preferences().scheduling.rollover` directly, with a
+    `col.conf` fallback for older collections. Importing it keeps this
+    module and the heatmap agreeing on the same rollover hour instead of
+    risking two derivations drifting apart."""
+    try:
+        from . import _rollover_hour as _pkg_rollover_hour
+
+        return _pkg_rollover_hour()
+    except Exception:
+        return 4
+
+
+def _deadline_moment(deadline: datetime.date) -> datetime.datetime:
+    """A deadline as a point in time, not just a calendar square.
+
+    The "Memorize by" picker only collects a date — there's no time-of-day
+    control — so the date alone has no inherent clock time. What it means
+    for scheduling, though, is concrete: a card is either seen before that
+    date's rollover or it isn't, since rollover is the instant Anki's
+    "today" changes. So "known by <date>" is read as "known by that date's
+    rollover", the same boundary `_today()` already uses to decide which
+    calendar day we're on.
+    """
+    return datetime.datetime.combine(deadline, datetime.time(hour=_rollover_hour()))
+
+
+def _stamp(deadline: datetime.date) -> str:
+    """Compact local timestamp for deck-list display: "Sep 16, 4:00 AM".
+
+    Time of day comes from the collection's actual rollover hour (see
+    `_deadline_moment`), not a hardcoded midnight/4am, so it tracks the
+    user's real day-cutoff preference and stays consistent with `_today()`.
+    """
+    try:
+        moment = _deadline_moment(deadline)
+        return moment.strftime("%b %-d, %-I:%M %p")
+    except Exception:
+        return deadline.strftime("%b %-d") if hasattr(deadline, "strftime") else str(deadline)
+
+
 def parse(value: str) -> Optional[datetime.date]:
     try:
         return datetime.date.fromisoformat(value)
@@ -142,12 +188,13 @@ def get_mode(did: int) -> str:
 
 
 def label_for(did: int) -> str:
-    """Gear-menu label: the date plus how long is left."""
+    """Gear-menu label: the date (with time of day, from the rollover) plus
+    how long is left."""
     deadline = get(did)
     if deadline is None:
         return "Memorize by…"
     left = days_left(deadline)
-    stamp = deadline.strftime("%b %-d") if hasattr(deadline, "strftime") else str(deadline)
+    stamp = _stamp(deadline)
     if left < 0:
         # Past tense on purpose: the deck was memorized by that date, and
         # the row should read as an achievement rather than a miss.
