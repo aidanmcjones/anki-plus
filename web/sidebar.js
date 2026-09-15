@@ -21,10 +21,6 @@
       '<g class="ba-i-decks-top"><path d="M3 7l9-4 9 4-9 4-9-4z"/></g>' +
       '<g class="ba-i-decks-mid"><path d="M3 12l9 4 9-4"/></g>' +
       '<g class="ba-i-decks-bot"><path d="M3 17l9 4 9-4"/></g>',
-    add:
-      '<g class="ba-i-plus">' +
-        '<path d="M12 5v14"/><path d="M5 12h14"/>' +
-      '</g>',
     browse:
       '<g class="ba-i-search-lens">' +
         '<circle cx="11" cy="11" r="6.5"/>' +
@@ -311,9 +307,12 @@
     // Primary nav
     var nav = document.createElement("nav");
     nav.className = "ba-side-nav";
+    // "Add" has no rail item of its own — adding cards lives inside
+    // Browse (its own "+ Add" button). The "A" shortcut still works (see
+    // __init__.py's _setup_sidebar_shortcuts / _open_add): it opens
+    // Browse with the Add panel already up, for muscle memory.
     [
       { cmd: "decks",  label: "Decks",  key: "D" },
-      { cmd: "add",    label: "Add",    key: "A" },
       { cmd: "browse", label: "Browse", key: "B" },
       { cmd: "stats",  label: "Stats",  key: "T" },
     ].forEach(function (it) { nav.appendChild(makeRow(it)); });

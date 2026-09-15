@@ -981,10 +981,20 @@ def _apply_chrome() -> None:
     _set_top_toolbar_visible(not _sidebar_on())
 
 
-# Which rail item each inline embed owns while its overlay is up. Only one
-# embed is ever open at a time, so the order here doesn't matter.
+# Which rail item each inline embed owns while its overlay is up.
+#
+# addcard_embed is deliberately absent: there is no "add" rail item any
+# more (Add lives inside Browse — see _open_add below), and addcard_embed's
+# overlay can now be open *stacked on top of* browse_embed's (see
+# browse_embed._open_add_in_browse) rather than instead of it. If
+# addcard_embed were listed here, an open Add-over-Browse would wrongly
+# try to highlight a rail item that no longer exists instead of falling
+# through to "browse" below, which is what should be lit while Add
+# covers it.
+#
+# Among the embeds listed here, only one is ever open at a time, so the
+# order doesn't matter.
 _EMBED_RAIL_CMDS = (
-    ("addcard_embed", "add"),
     ("browse_embed", "browse"),
     ("stats_embed", "stats"),
     ("settings_embed", "settings"),
@@ -1186,17 +1196,6 @@ def _on_js_message(handled, message, context):
                     pass
             if getattr(mw, "state", None) != "deckBrowser":
                 mw.moveToState("deckBrowser")
-        elif cmd == "add":
-            # Open AddCards inside the main window (over the deck area, to
-            # the right of the sidebar) — or Anki's own window when the
-            # inline embed is switched off. Tear other embeds down first.
-            for mod in ("browse_embed", "stats_embed", "settings_embed"):
-                try:
-                    from importlib import import_module
-                    import_module("." + mod, __name__).close_inline()
-                except Exception:
-                    pass
-            _open_add()
         elif cmd == "browse":
             for mod in ("addcard_embed", "stats_embed", "settings_embed"):
                 try:
@@ -3490,10 +3489,34 @@ def _embed_enabled(key: str) -> bool:
 
 
 def _open_add(*args: Any, **kwargs: Any) -> None:
-    """Add Cards — inline embed when enabled, else Anki's own window."""
+    """Add Cards — reached through Browse now, not a rail item of its own.
+
+    The left-nav no longer has a standalone "Add" entry; the "+ Add"
+    button inside Browse is the visible entry point. This function still
+    exists because it's what the "A" shortcut calls (see
+    `_setup_sidebar_shortcuts`) and what `mw.onAddCard` is patched to —
+    both are muscle-memory paths that should keep working, they just now
+    land the user in the same place the "+ Add" button does.
+
+    When both the Browse and Add embeds are enabled (the default), open
+    the embedded Browse and stack the embedded Add panel on top of it via
+    `browse_embed._open_add_in_browse` — the exact same call the "+ Add"
+    button makes, no parallel implementation. If Browse's embed is off
+    (but Add's isn't), there's nothing to stack Add onto, so fall back to
+    the old full-pane inline Add. If neither embed is enabled, fall back
+    to Anki's own Add Cards window."""
     if _embed_enabled("embed_add") and _config().get("restyle_addcard", True):
         try:
             from . import addcard_embed
+            if _embed_enabled("embed_browse"):
+                from . import browse_embed
+                browse_embed.open_inline(mw)
+                if browse_embed._state.get("overlay") is not None:
+                    browse_embed._open_add_in_browse(mw)
+                    return
+                # Browse's embed didn't come up for some reason — fall
+                # through to a plain full-pane Add rather than doing
+                # nothing.
             addcard_embed.open_inline(mw)
             return
         except Exception:

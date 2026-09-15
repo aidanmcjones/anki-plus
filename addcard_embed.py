@@ -5,8 +5,12 @@ like a tab in the main window: the sidebar (rendered inside `mw.web` by the
 deck browser HTML) stays visible, and the editor occupies the rest.
 
 How this works:
-  - We intercept the sidebar's `ba:add` pycmd in `__init__.py` to call
-    `open_inline(mw)` instead of `mw.onAddCard()`.
+  - There is no left-nav rail item for Add — it lives inside Browse (its
+    own "+ Add" button, `browse_embed._open_add_in_browse`, which calls
+    `open_inline(mw)` below). `__init__.py`'s `_open_add` — what the "A"
+    shortcut and `mw.onAddCard` are patched to call — routes through that
+    same path so it opens Browse with the Add panel already stacked on
+    top, rather than calling `open_inline(mw)` directly.
   - `open_inline` constructs an AddCards instance (which fires our normal
     `_redress` via `add_cards_did_init`).
   - We grab its `centralWidget` and reparent it onto a thin overlay frame

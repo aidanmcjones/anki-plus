@@ -536,17 +536,17 @@ def _open_add_in_browse(parent_mw: Any) -> None:
     """Add-card button inside the embedded Browse's search row.
 
     Reuses `addcard_embed.open_inline` wholesale — no parallel Add
-    implementation. Unlike the left-nav "Add" rail item (which tears this
-    Browse embed down first and swaps to a full-pane Add tab — see
-    `__init__.py`'s `ba:add` handling — and is left unchanged), this opens
-    the same Add panel stacked on top of Browse's own overlay: both are
-    QFrames positioned at the same geometry on `parent_mw.form.
-    centralwidget`, so the Add panel visually covers the table without
-    destroying Browse underneath. Closing Add (Esc / save-and-close)
-    reveals Browse exactly as it was — same search, same selection — and
-    `addcard_embed.close_inline`'s sidebar-tab restore is taught (see
-    below) to land back on "browse" instead of "decks" when this embed is
-    still open underneath.
+    implementation. This is the only way to reach Add now: there is no
+    standalone "Add" rail item any more (see `__init__.py`'s `_open_add`,
+    which the "A" shortcut still calls — it lands here too, opening
+    Browse first if it isn't already open). This opens the Add panel
+    stacked on top of Browse's own overlay: both are QFrames positioned
+    at the same geometry on `parent_mw.form.centralwidget`, so the Add
+    panel visually covers the table without destroying Browse underneath.
+    Closing Add (Esc / save-and-close) reveals Browse exactly as it was —
+    same search, same selection — and `addcard_embed.close_inline`'s
+    sidebar-tab restore is taught (see below) to land back on "browse"
+    instead of "decks" when this embed is still open underneath.
 
     One thing stacking breaks that a straight reuse-call can't fix by
     itself: Browse's own Esc shortcut (closes Browse) and AddCards' Esc

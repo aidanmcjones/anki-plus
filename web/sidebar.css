@@ -318,9 +318,9 @@ body.ba-with-side {
   transform: translateY(-0.5px);
 }
 
-/* ADD / CREATE (idle) — plus rotates 90° (briefly an "x"). */
-.ba-side-item[data-cmd="add"]:hover .ba-i-plus,
-.ba-side-item[data-cmd="add"]:focus-visible .ba-i-plus,
+/* CREATE (new-deck quick action, idle) — plus rotates 90° (briefly an "x").
+   There is no rail item bearing the "add" cmd/icon any more — adding
+   cards lives inside Browse — so this only ever targets the new-deck row. */
 .ba-side-newdeck[data-state="idle"]:hover .ba-i-plus,
 .ba-side-newdeck[data-state="idle"]:focus-visible .ba-i-plus {
   transform: rotate(90deg);
