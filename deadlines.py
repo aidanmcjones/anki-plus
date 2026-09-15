@@ -34,6 +34,19 @@ Two consequences fall out of that choice, and both are handled here:
     timer). `is_passed`/`has_passed` are the shared "is this deadline
     behind us right now" check both paths — and `label_for` — run through,
     so the label and the actual scheduling state can't disagree.
+  * **The flag that marks a crossing "handled" has to earn that.**
+    `notified_passed` gates both the one-time tooltip and, indirectly,
+    whether `check_due_transitions` bothers re-applying a deck it's
+    already looked at — so if it latched the moment the restore *code
+    path ran*, rather than the moment the restore was confirmed to have
+    actually landed on the collection, a write that silently didn't stick
+    would strand a deck capped forever while its own bookkeeping insisted
+    it was fine. `_apply` reports back whether it verified the restore
+    (`_verify_max_interval`, a re-read straight from the collection, not
+    the dict already in hand); `refresh_all` and `check_due_transitions`
+    only call `_announce_crossing` — the thing that sets the flag — when
+    that verification passed, and explicitly clear the flag otherwise so
+    the next cheap check retries instead of giving up silently.
 
 Pacing
 ------
@@ -408,6 +421,20 @@ def _set_max_interval(col: Any, conf: Dict[str, Any], days: int) -> None:
     col.decks.update_config(conf)
 
 
+def _verify_max_interval(col: Any, did: int, expected: int) -> bool:
+    """Re-reads the deck's *actual* preset straight back from the
+    collection — never trusting the dict `_set_max_interval` already had
+    in hand — so a write that silently didn't stick (wrong conf object,
+    stale id, an `update_config` whose effect never reached this deck)
+    is caught before a caller latches `notified_passed` and loses the
+    chance to retry. See `_apply`'s "passed" branch."""
+    try:
+        conf = col.decks.config_dict_for_deck_id(did)
+        return int(conf.get("rev", {}).get("maxIvl", -1)) == int(expected)
+    except Exception:
+        return False
+
+
 # --------------------------------------------------------------------------- #
 # Pacing
 # --------------------------------------------------------------------------- #
@@ -614,7 +641,7 @@ def _set_limits(col: Any, conf: Dict[str, Any], entry: Dict[str, Any],
         col.decks.update_config(conf)
 
 
-def _apply(col: Any, did: int, entry: Dict[str, Any]) -> Dict[str, Any]:
+def _apply(col: Any, did: int, entry: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
     """The single place that maps (deadline, mode) onto preset settings.
 
     Called by set_deadline, set_mode, and both refresh paths
@@ -629,10 +656,20 @@ def _apply(col: Any, did: int, entry: Dict[str, Any]) -> Dict[str, Any]:
     changes. The interval cap's *size* while still ahead is still the
     day-based `left`, since a ceiling in days smaller than 1 makes no
     sense before the deadline has actually arrived.
+
+    Returns `(entry, verified)`. `verified` only matters for the "passed"
+    branch: it's the result of reading the preset straight back from the
+    collection after the restore, so a caller can tell "the code path
+    that restores the ceiling ran" from "the ceiling is actually
+    restored" — those turned out to be different things once (see
+    `_verify_max_interval`), and a caller that only checks the former
+    before latching `notified_passed` can strand a deck capped forever
+    with its own bookkeeping insisting it was handled. The "still ahead"
+    branch always reports True; there's no restore to verify there.
     """
     deadline = parse(str(entry.get("date", "")))
     if deadline is None:
-        return entry
+        return entry, True
     time_of_day = _parse_time(entry.get("time"))
     left = days_left(deadline)
     conf = _ensure_own_preset(col, did, entry)
@@ -641,13 +678,15 @@ def _apply(col: Any, did: int, entry: Dict[str, Any]) -> Dict[str, Any]:
         _set_max_interval(col, conf, max(1, left))
         _set_limits(col, conf, entry, did, paused=False)
         entry.pop("notified_passed", None)
-        return entry
+        return entry, True
     # Passed. The cap has done its job and comes off either way — a card
     # answered after the deadline is memory upkeep, not a failure to hit
     # the date.
-    _set_max_interval(col, conf, int(entry.get("orig_max_ivl") or DEFAULT_MAX_IVL))
+    target = int(entry.get("orig_max_ivl") or DEFAULT_MAX_IVL)
+    _set_max_interval(col, conf, target)
     _set_limits(col, conf, entry, did, paused=(entry.get("mode") == MODE_PAUSE))
-    return entry
+    verified = _verify_max_interval(col, did, max(1, target))
+    return entry, verified
 
 
 def set_deadline(did: int, deadline: datetime.date,
@@ -668,7 +707,9 @@ def set_deadline(did: int, deadline: datetime.date,
     if mode in (MODE_MAINTAIN, MODE_PAUSE):
         entry["mode"] = mode
     entry.setdefault("mode", MODE_MAINTAIN)
-    entry = _apply(col, did, entry)
+    entry, verified = _apply(col, did, entry)
+    if not verified:
+        _log(f"set_deadline {did}: preset restore did not verify")
     state[str(did)] = entry
     _save_state(state)
     _arm_next_deadline_timer()
@@ -684,7 +725,9 @@ def set_mode(did: int, mode: str) -> None:
     if not entry.get("date"):
         return
     entry["mode"] = mode
-    entry = _apply(col, did, entry)
+    entry, verified = _apply(col, did, entry)
+    if not verified:
+        _log(f"set_mode {did}: preset restore did not verify")
     state[str(did)] = entry
     _save_state(state)
     _arm_next_deadline_timer()
@@ -789,12 +832,19 @@ def refresh_all(force: bool = False) -> int:
         state = _state()
         entry = dict(state.get(did_s) or {})
         passed = is_passed(deadline, get_time(did))
-        entry = _apply(col, did, entry)
+        entry, verified = _apply(col, did, entry)
         if passed:
-            # Announce the crossing once, in the language of whichever
-            # mode the deck is in. A passed deadline is now a state the
-            # deck keeps, not something we quietly delete.
-            _announce_crossing(did, entry)
+            if verified:
+                # Announce the crossing once, in the language of whichever
+                # mode the deck is in. A passed deadline is now a state
+                # the deck keeps, not something we quietly delete.
+                _announce_crossing(did, entry)
+            else:
+                # The restore didn't stick — don't latch `notified_passed`,
+                # or nothing will ever retry it and the deck stays capped
+                # forever while its own bookkeeping insists it's fine.
+                entry.pop("notified_passed", None)
+                _log(f"refresh_all {did}: preset restore did not verify")
         state[did_s] = entry
         _save_state(state)
         touched += 1
@@ -856,9 +906,17 @@ def check_due_transitions() -> int:
         already_applied = bool(entry.get("notified_passed"))
         if passed == already_applied:
             continue
-        entry = _apply(col, did, entry)
+        entry, verified = _apply(col, did, entry)
         if passed:
-            _announce_crossing(did, entry)
+            if verified:
+                _announce_crossing(did, entry)
+            else:
+                # Leave `notified_passed` unset so `already_applied` stays
+                # False and the next cheap check (deck-list render, state
+                # change, the armed timer) tries the restore again instead
+                # of a failed write latching as permanently "handled".
+                entry.pop("notified_passed", None)
+                _log(f"check_due_transitions {did}: preset restore did not verify")
         state[did_s] = entry
         _save_state(state)
         touched += 1
@@ -866,6 +924,102 @@ def check_due_transitions() -> int:
     if rearm:
         _arm_next_deadline_timer()
     return touched
+
+
+# --------------------------------------------------------------------------- #
+# One-time legacy-corruption repair (2026-09-15)
+# --------------------------------------------------------------------------- #
+# Three decks — Microbiology::Exam 1 Content::Week 1/2/3 — already had
+# `deck_deadlines` bookkeeping whose `orig_conf` pointed at an already-capped
+# "<preset> — deadline" clone from an earlier, buggy deadline round (not the
+# deck's true pre-deadline preset), with `orig_max_ivl: 5` and 9999/9999
+# daily limits recorded alongside it. `_apply`'s restore path trusts those
+# `orig_*` numbers verbatim, so even a fully-working restore would leave
+# these three decks capped at a 5-day ceiling with absurd daily limits
+# forever — the bookkeeping itself was wrong, not just unapplied.
+#
+# The true original is recoverable with evidence, not a guess: every clone
+# here is named "Default — Week N — deadline" (cloned *from* "Default"), and
+# sibling decks under the very same parent (Exam 1 Content, Historical
+# Figures) that were *not* corrupted recorded `orig_conf: 1` — the stock
+# "Default" preset, currently maxIvl 36500 / new 200/day / rev 2000/day.
+#
+# This repairs exactly those three decks' already-identified clone presets
+# and bookkeeping, once (`_LEGACY_REPAIR_KEY` guards re-running), and
+# nothing else — it does not generalize into a heuristic that could "fix" a
+# preset it hasn't specifically been told is corrupt. It also removes one
+# confirmed-orphaned duplicate "Exam 1 Content — deadline" clone left over
+# from an earlier re-clone, but only because no deck references it.
+_LEGACY_REPAIR_KEY = "deck_deadlines_legacy_repair_20260915"
+_LEGACY_BAD_CONFS: Dict[int, int] = {
+    1788448366678: 1788996123168,  # Microbiology::Exam 1 Content::Week 1
+    1788448366681: 1788996116337,  # Microbiology::Exam 1 Content::Week 2
+    1788988170896: 1788996173074,  # Microbiology::Exam 1 Content::Week 3
+}
+_LEGACY_ORPHAN_CONF = 1789058167467  # duplicate "Exam 1 Content — deadline"
+_LEGACY_TRUE_ORIG_CONF = 1
+_LEGACY_TRUE_MAX_IVL = 36500
+_LEGACY_TRUE_NEW_PER_DAY = 200
+_LEGACY_TRUE_REV_PER_DAY = 2000
+
+
+def repair_legacy_corruption() -> None:
+    """Run the one-time repair described above. Safe to call on every
+    startup — the very first thing it does is check whether it already
+    ran, and each deck is only touched if it's still sitting on exactly
+    the conf id already identified as corrupt (if the user has since
+    changed that deck's preset by hand, this leaves it alone rather than
+    overwriting a newer, deliberate choice)."""
+    col = getattr(mw, "col", None)
+    if col is None:
+        return
+    cfg = _config()
+    if cfg.get(_LEGACY_REPAIR_KEY):
+        return
+    state = _state()
+    changed = False
+    for did, conf_id in _LEGACY_BAD_CONFS.items():
+        try:
+            deck = col.decks.get(did, default=False)
+            if not deck or int(deck.get("conf", -1)) != conf_id:
+                # Deck's gone, or its preset has moved on since diagnosis —
+                # don't second-guess whatever it's on now.
+                continue
+            conf = col.decks.get_config(conf_id)
+            conf["id"] = conf_id
+            conf.setdefault("rev", {})["maxIvl"] = _LEGACY_TRUE_MAX_IVL
+            conf.setdefault("new", {})["perDay"] = _LEGACY_TRUE_NEW_PER_DAY
+            conf.setdefault("rev", {})["perDay"] = _LEGACY_TRUE_REV_PER_DAY
+            col.decks.update_config(conf)
+            verified = _verify_max_interval(col, did, _LEGACY_TRUE_MAX_IVL)
+            if not verified:
+                _log(f"legacy repair {did}: preset write did not verify")
+                continue
+            entry = dict(state.get(str(did)) or {})
+            entry["orig_conf"] = _LEGACY_TRUE_ORIG_CONF
+            entry["orig_max_ivl"] = _LEGACY_TRUE_MAX_IVL
+            entry["orig_new_per_day"] = _LEGACY_TRUE_NEW_PER_DAY
+            entry["orig_rev_per_day"] = _LEGACY_TRUE_REV_PER_DAY
+            # The deck is already privately on this clone and nothing else
+            # uses it (checked below) — recording it as `cloned_conf`
+            # matches what Exam 1 Content / Historical Figures already do
+            # and lets a future deadline round on this deck reuse it
+            # instead of re-deriving bad "orig" numbers from it again.
+            entry["cloned_conf"] = conf_id
+            state[str(did)] = entry
+            changed = True
+        except Exception as exc:
+            _log(f"legacy repair {did}: {exc!r}")
+    try:
+        if not _decks_using(col, _LEGACY_ORPHAN_CONF, exclude=-1):
+            col.decks.remove_config(_LEGACY_ORPHAN_CONF)
+    except Exception as exc:
+        _log(f"legacy repair orphan clone {_LEGACY_ORPHAN_CONF}: {exc!r}")
+    if changed:
+        _save_state(state)
+    cfg = _config()
+    cfg[_LEGACY_REPAIR_KEY] = True
+    _write(cfg)
 
 
 # A single pending single-shot timer, re-armed for the soonest upcoming

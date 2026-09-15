@@ -3474,6 +3474,11 @@ try:
     from . import deadlines as _deadlines
 
     def _deadlines_on_profile_open() -> None:
+        # One-time repair of three decks' `deck_deadlines` bookkeeping that
+        # was already corrupted before today's fix (see the function's own
+        # docstring in deadlines.py) — must run before the two calls below,
+        # since it's what makes their "orig_*" restore targets correct.
+        _deadlines.repair_legacy_corruption()
         _deadlines.refresh_all()
         _deadlines.check_due_transitions()
 
