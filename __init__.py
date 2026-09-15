@@ -3827,6 +3827,22 @@ except Exception as _e:
         pass
 
 
+# Reversible cards — Browse toggle to present a card's back as the
+# question and its front as the answer. Registered BEFORE editreviewer
+# below so its card_will_show handler runs first in the chain: it swaps
+# in the other side's raw render, then editreviewer's field-wrap runs on
+# that (already-swapped) text, so inline editing still works on reversed
+# cards.
+try:
+    from . import card_reverse as _card_reverse
+    _card_reverse.register()
+except Exception as _e:
+    try:
+        print(f"[anki-design] card_reverse register failed: {_e}", flush=True)
+    except Exception:
+        pass
+
+
 # Inline reviewer editing — replaces the EditCurrent dialog.
 try:
     from . import editreviewer as _editreviewer
