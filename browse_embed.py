@@ -1320,11 +1320,11 @@ def open_inline(parent_mw: Any = None) -> None:
             return b
 
         tree_btn = _mk_pane_toggle(
-            "Sidebar", "Show/hide the Decks & Tags panel"
+            "Decks", "Show/hide the Decks & Tags panel"
         )
         tree_btn.setEnabled(bool(left_docks))
         table_btn = _mk_pane_toggle(
-            "Table", "Show/hide the card list — frees space for the editor"
+            "Cards", "Show/hide the card list — frees space for the editor"
         )
         trow.addWidget(tree_btn)
         trow.addWidget(table_btn)
