@@ -3456,21 +3456,39 @@ try:
 except Exception:
     pass
 
-# Per-deck memorization deadlines: recompute every deadlined deck's interval
-# ceiling once a day. Profile open covers the normal case (Anki restarted
-# overnight); the reviewer entry covers the app being left running across a
-# rollover, which is how most people use it. `refresh_all` no-ops when it has
-# already run for Anki's current day, so the second hook is nearly free.
+# Per-deck memorization deadlines. Two refresh paths, both idempotent:
+#
+#   * `refresh_all` recomputes every deadlined deck's interval ceiling once
+#     a day (it no-ops once it's already run for Anki's current day) —
+#     profile open covers the normal case (Anki restarted overnight); the
+#     reviewer entry covers the app being left running across a rollover.
+#   * `check_due_transitions` is the event-driven counterpart that makes a
+#     deadline's cap actually come off within moments of the deadline
+#     *moment* (not just the calendar date) — wired to every state change
+#     and every deck-list render, plus a single-shot QTimer (armed by the
+#     deadlines module itself for the next upcoming deadline) so it still
+#     fires even if the user never triggers either of those in between.
+#     It's cheap when nothing has crossed: a couple of dict lookups per
+#     deadlined deck, no config writes, no polling loop anywhere in it.
 try:
     from . import deadlines as _deadlines
 
-    gui_hooks.profile_did_open.append(lambda: _deadlines.refresh_all())
+    def _deadlines_on_profile_open() -> None:
+        _deadlines.refresh_all()
+        _deadlines.check_due_transitions()
+
+    gui_hooks.profile_did_open.append(_deadlines_on_profile_open)
 
     def _deadlines_on_state(new_state: str, old_state: str) -> None:
         if new_state == "review":
             _deadlines.refresh_all()
+        _deadlines.check_due_transitions()
 
     gui_hooks.state_did_change.append(_deadlines_on_state)
+
+    gui_hooks.deck_browser_will_render_content.append(
+        lambda _deck_browser, _content: _deadlines.check_due_transitions()
+    )
 except Exception:
     pass
 

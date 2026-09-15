@@ -23,7 +23,17 @@ Two consequences fall out of that choice, and both are handled here:
     the deadline puts the deck back on it.
   * **The cap has to shrink.** Days-left changes every night, so the
     ceiling is recomputed on profile open and on the first entry into the
-    reviewer each day.
+    reviewer each day (`refresh_all`).
+  * **The moment it's crossed has to fire promptly.** A deadline is a
+    point in time, not just a date (see `_deadline_moment`), so waiting
+    for the once-a-day `refresh_all` to notice would leave a deck capped
+    for hours after e.g. an 8am deadline on a day Anki was opened at 7am.
+    `check_due_transitions` is the cheap, event-driven counterpart that
+    handles that — wired to deck-list renders, app state changes, and a
+    single-shot timer armed for the next deadline moment (never a polling
+    timer). `is_passed`/`has_passed` are the shared "is this deadline
+    behind us right now" check both paths — and `label_for` — run through,
+    so the label and the actual scheduling state can't disagree.
 
 Pacing
 ------
@@ -230,24 +240,48 @@ def get_mode(did: int) -> str:
     return MODE_MAINTAIN
 
 
+def is_passed(deadline: datetime.date, time_of_day: Optional[datetime.time] = None) -> bool:
+    """Whether a deadline is behind us *right now*, as a moment in time —
+    not just a calendar date.
+
+    This is the single source of truth for "has this deadline passed".
+    `label_for`, `paused_deck_ids`, and the preset-restore transition in
+    `_apply` all route through it (directly or via `has_passed`), so the
+    label a user reads and what the scheduler actually does can never
+    disagree — which is exactly what went wrong before: the label used
+    `_deadline_moment` but `_apply`/`paused_deck_ids` still used bare
+    `days_left() >= 0`, so a deadline of "today at 8am" read as "passed"
+    in the gear menu for hours while the interval cap stayed on.
+
+    `days_left` stays calendar-date based and keeps driving interval-cap
+    *sizing* (`max(1, left)`) and the "Nd" countdown text — both only care
+    about whole days, and shrinking the cap a day at a time as the
+    deadline approaches is correct even before the deadline is passed.
+    This function only answers the go/no-go question of whether the
+    deadline has been crossed.
+    """
+    return _deadline_moment(deadline, time_of_day) <= datetime.datetime.now()
+
+
+def has_passed(did: int) -> bool:
+    """`is_passed` for a deck's stored deadline (False if it has none)."""
+    deadline = get(did)
+    if deadline is None:
+        return False
+    return is_passed(deadline, get_time(did))
+
+
 def label_for(did: int) -> str:
     """Gear-menu label: the date (with time of day, from the stored time or
     the rollover) plus how long is left.
 
-    `left` (calendar-day difference from `days_left`) stays the single
-    source of truth for the "Nd" countdown and for whether a *past*
-    calendar date is passed — unchanged from before the time picker, and
-    still exactly what `_apply`/`pacing`/`refresh_all` use to size the
-    interval cap, so this label can never disagree with the scheduling
-    side about a date that isn't today.
-
-    The one case a bare date can't resolve is *today*: a 9:00 AM deadline
-    on a day that's now 3:00 PM has genuinely already happened, even
-    though its calendar date hasn't changed yet. So only for `left == 0`
-    do we additionally check the real deadline moment against wall-clock
-    now, and only to decide "passed" vs. "today" — the countdown number
-    itself, and every scheduling function, stay day-based (see
-    `_deadline_moment`'s docstring and `_apply`).
+    `left` (calendar-day difference from `days_left`) is the single source
+    of truth for the "Nd" countdown text and for interval-cap *sizing* —
+    unchanged from before the time picker. Whether the deadline has been
+    crossed — the "passed"/"today" distinction here, and the scheduling
+    transition in `_apply` — is decided by `is_passed`, the real deadline
+    moment against wall-clock now, so this label can never disagree with
+    what `_apply`/`paused_deck_ids` actually do.
     """
     deadline = get(did)
     if deadline is None:
@@ -255,8 +289,7 @@ def label_for(did: int) -> str:
     left = days_left(deadline)
     time_of_day = get_time(did)
     stamp = _stamp(deadline, time_of_day)
-    moment_passed = _deadline_moment(deadline, time_of_day) <= datetime.datetime.now()
-    passed = left < 0 or (left == 0 and moment_passed)
+    passed = is_passed(deadline, time_of_day)
     if passed:
         # Past tense on purpose: the deck was memorized by that date, and
         # the row should read as an achievement rather than a miss.
@@ -288,7 +321,9 @@ def paused_deck_ids() -> List[int]:
         if entry.get("mode") != MODE_PAUSE:
             continue
         deadline = parse(str(entry.get("date", "")))
-        if deadline is None or days_left(deadline) >= 0:
+        if deadline is None:
+            continue
+        if not is_passed(deadline, _parse_time(entry.get("time"))):
             continue
         try:
             out.append(int(key))
@@ -582,15 +617,26 @@ def _set_limits(col: Any, conf: Dict[str, Any], entry: Dict[str, Any],
 def _apply(col: Any, did: int, entry: Dict[str, Any]) -> Dict[str, Any]:
     """The single place that maps (deadline, mode) onto preset settings.
 
-    Called by set_deadline, set_mode and the daily refresh, so a deck's
-    state can never depend on which of those last ran.
+    Called by set_deadline, set_mode, and both refresh paths
+    (`refresh_all`'s once-a-day pass and `check_due_transitions`'s
+    event-driven one), so a deck's state can never depend on which of
+    those last ran.
+
+    Whether the deck is "still ahead" or "passed" is decided by
+    `is_passed` — the real deadline moment, not just the calendar date —
+    which is what makes a same-day deadline (e.g. "today at 8am") take
+    effect at 8am instead of sitting capped until the calendar date
+    changes. The interval cap's *size* while still ahead is still the
+    day-based `left`, since a ceiling in days smaller than 1 makes no
+    sense before the deadline has actually arrived.
     """
     deadline = parse(str(entry.get("date", "")))
     if deadline is None:
         return entry
+    time_of_day = _parse_time(entry.get("time"))
     left = days_left(deadline)
     conf = _ensure_own_preset(col, did, entry)
-    if left >= 0:
+    if not is_passed(deadline, time_of_day):
         # Still ahead: cap intervals at the days remaining, normal limits.
         _set_max_interval(col, conf, max(1, left))
         _set_limits(col, conf, entry, did, paused=False)
@@ -625,6 +671,7 @@ def set_deadline(did: int, deadline: datetime.date,
     entry = _apply(col, did, entry)
     state[str(did)] = entry
     _save_state(state)
+    _arm_next_deadline_timer()
 
 
 def set_mode(did: int, mode: str) -> None:
@@ -640,6 +687,7 @@ def set_mode(did: int, mode: str) -> None:
     entry = _apply(col, did, entry)
     state[str(did)] = entry
     _save_state(state)
+    _arm_next_deadline_timer()
 
 
 def _drop_entry(did: int) -> None:
@@ -681,12 +729,39 @@ def clear_deadline(did: int, notify: bool = False) -> None:
             _set_limits(col, conf, entry, did, paused=False)
     except Exception as exc:
         _log(f"clear deadline {did}: {exc!r}")
+    _arm_next_deadline_timer()
     if notify:
         _tooltip(f"Deadline for “{_deck_name(did)}” has passed — limits restored")
 
 
+def _announce_crossing(did: int, entry: Dict[str, Any]) -> None:
+    """Tooltip the first time a deck's deadline is found passed. Guarded by
+    `notified_passed`, which `_apply`'s "still ahead" branch always clears
+    — so this fires exactly once per crossing, however many times a refresh
+    path notices it after that."""
+    if entry.get("notified_passed"):
+        return
+    entry["notified_passed"] = True
+    mode = entry.get("mode", MODE_MAINTAIN)
+    if mode == MODE_PAUSE:
+        _tooltip(f"“{_deck_name(did)}” reached its deadline — reviews paused")
+    else:
+        _tooltip(
+            f"“{_deck_name(did)}” reached its deadline — "
+            "interval cap lifted, upkeep continues"
+        )
+
+
 def refresh_all(force: bool = False) -> int:
-    """Recompute every deadlined deck's ceiling. Cheap, and idempotent."""
+    """Recompute every deadlined deck's ceiling. Cheap, and idempotent.
+
+    Gated to once per Anki-day (`LAST_CHECK_KEY`) because most of what it
+    does — shrinking the cap as calendar days tick by, the pacing "needs
+    N/day" tooltip — is inherently daily. Passing this gate is *not* what
+    makes a deadline's cap come off on time, though: `check_due_transitions`
+    (event-driven, below) handles that, since a deadline can be crossed at
+    any moment during a day this function has already run for.
+    """
     col = getattr(mw, "col", None)
     if col is None or not enabled():
         return 0
@@ -713,25 +788,17 @@ def refresh_all(force: bool = False) -> int:
             continue
         state = _state()
         entry = dict(state.get(did_s) or {})
-        left = days_left(deadline)
+        passed = is_passed(deadline, get_time(did))
         entry = _apply(col, did, entry)
-        if left < 0 and not entry.get("notified_passed"):
+        if passed:
             # Announce the crossing once, in the language of whichever
             # mode the deck is in. A passed deadline is now a state the
             # deck keeps, not something we quietly delete.
-            entry["notified_passed"] = True
-            mode = entry.get("mode", MODE_MAINTAIN)
-            if mode == MODE_PAUSE:
-                _tooltip(f"“{_deck_name(did)}” reached its deadline — reviews paused")
-            else:
-                _tooltip(
-                    f"“{_deck_name(did)}” reached its deadline — "
-                    "interval cap lifted, upkeep continues"
-                )
+            _announce_crossing(did, entry)
         state[did_s] = entry
         _save_state(state)
         touched += 1
-        if left < 0:
+        if passed:
             continue
         pace = pacing(did)
         if pace and pace["short"]:
@@ -743,7 +810,114 @@ def refresh_all(force: bool = False) -> int:
     cfg = _config()
     cfg[LAST_CHECK_KEY] = today
     _write(cfg)
+    _arm_next_deadline_timer()
     return touched
+
+
+def check_due_transitions() -> int:
+    """Event-driven counterpart to `refresh_all`: has any deadlined deck's
+    *moment* newly passed since we last applied it? Only those decks are
+    touched.
+
+    This is what makes the cap actually come off within moments of the
+    deadline instead of sitting applied until the next calendar day (which
+    is all the once-a-day `refresh_all` gate can promise). It is meant to
+    be called from cheap, frequent-but-not-continuous hooks — deck-list
+    render, app state changes, the single-shot timer armed by
+    `_arm_next_deadline_timer` — without becoming a poll: for any entry
+    whose passed/not-passed state hasn't changed since the last time we
+    looked (`is_passed(...) == bool(entry.get("notified_passed"))`, the
+    same flag `_apply`'s "still ahead" branch clears and the crossing
+    announcement sets), this does nothing but a couple of dict lookups —
+    no config write, no tooltip. Nothing here runs on a timer loop; the one
+    QTimer involved is single-shot and only ever armed for the next actual
+    deadline moment.
+    """
+    col = getattr(mw, "col", None)
+    if col is None or not enabled():
+        return 0
+    touched = 0
+    rearm = False
+    for did_s in list(_state().keys()):
+        try:
+            did = int(did_s)
+        except Exception:
+            continue
+        state = _state()
+        entry = dict(state.get(did_s) or {})
+        deadline = parse(str(entry.get("date", "")))
+        if deadline is None:
+            continue
+        if not col.decks.get(did, default=False):
+            _drop_entry(did)
+            continue
+        time_of_day = _parse_time(entry.get("time"))
+        passed = is_passed(deadline, time_of_day)
+        already_applied = bool(entry.get("notified_passed"))
+        if passed == already_applied:
+            continue
+        entry = _apply(col, did, entry)
+        if passed:
+            _announce_crossing(did, entry)
+        state[did_s] = entry
+        _save_state(state)
+        touched += 1
+        rearm = True
+    if rearm:
+        _arm_next_deadline_timer()
+    return touched
+
+
+# A single pending single-shot timer, re-armed for the soonest upcoming
+# deadline moment every time a deadline is set/cleared or a check runs.
+# Never a recurring/polling timer, and never more than one pending.
+_next_deadline_timer: Any = None
+
+
+def _arm_next_deadline_timer() -> None:
+    global _next_deadline_timer
+    try:
+        from aqt.qt import QTimer
+    except Exception:
+        return
+    if mw is None:
+        return
+    now = datetime.datetime.now()
+    soonest: Optional[datetime.datetime] = None
+    for entry in _state().values():
+        if not isinstance(entry, dict):
+            continue
+        deadline = parse(str(entry.get("date", "")))
+        if deadline is None:
+            continue
+        moment = _deadline_moment(deadline, _parse_time(entry.get("time")))
+        if moment <= now:
+            continue
+        if soonest is None or moment < soonest:
+            soonest = moment
+    if _next_deadline_timer is not None:
+        try:
+            _next_deadline_timer.stop()
+        except Exception:
+            pass
+        _next_deadline_timer = None
+    if soonest is None:
+        return
+    # A little slack so we fire just after, never just before, the moment;
+    # capped at a day out (and re-armed every time this runs, including
+    # from that fired timer's own callback) rather than trusting a huge
+    # single delay — QTimer's interval is a 32-bit ms count and multi-day
+    # deadlines are common here.
+    delay_ms = int((soonest - now).total_seconds() * 1000) + 1000
+    delay_ms = max(1000, min(delay_ms, 24 * 60 * 60 * 1000))
+    try:
+        timer = QTimer(mw)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: check_due_transitions())
+        timer.start(delay_ms)
+        _next_deadline_timer = timer
+    except Exception:
+        _next_deadline_timer = None
 
 
 # --------------------------------------------------------------------------- #
