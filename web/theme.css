@@ -1108,3 +1108,98 @@ body::before {
 }
 .ba-over #study:hover { filter: brightness(1.08); }
 .ba-over #study:active { transform: scale(0.98); }
+
+/* ===================== AURORA BACKDROP =====================
+   A slow, living wash behind the deck list and overview: two sets of
+   soft accent blooms drifting on different periods, so the page feels
+   lit from behind rather than painted flat. Deliberately scoped to
+   .ba-home / .ba-over — the reviewer keeps its calm flat paper, since
+   motion behind a card you are trying to recall is a distraction.
+
+   Both layers ride on transform (compositor-only) rather than
+   background-position, and sit on the existing negative-z-index plane,
+   so nothing here repaints the UI above them. */
+@keyframes ba-aurora-a {
+  0%   { transform: translate3d(-4%, -2%, 0) scale(1.06) rotate(0deg); }
+  50%  { transform: translate3d(4%,  3%, 0) scale(1.14) rotate(5deg); }
+  100% { transform: translate3d(-2%, 4%, 0) scale(1.08) rotate(-4deg); }
+}
+@keyframes ba-aurora-b {
+  0%   { transform: translate3d(3%, 2%, 0) scale(1.10) rotate(2deg); }
+  50%  { transform: translate3d(-5%, -3%, 0) scale(1.04) rotate(-5deg); }
+  100% { transform: translate3d(2%, -4%, 0) scale(1.12) rotate(3deg); }
+}
+
+/* The backdrop layers sit at z-index -1. Body is normally not a stacking
+   context, so those layers would join the ROOT stacking context and get
+   painted over by body's own opaque paper background (in-flow block
+   backgrounds paint after negative-z children). Isolating body makes the
+   layers paint inside it: body's paper first, blooms above it, UI above
+   those. This is also why the original --rf-glow never showed. */
+body:has(.ba-home), body:has(.ba-over) { isolation: isolate; }
+
+/* Far layer: keeps the original top glow, adds two counter-drifting
+   blooms underneath it. */
+body:has(.ba-home)::before,
+body:has(.ba-over)::before {
+  inset: -25%;
+  /* Positions are percentages of THIS element, which overscans the
+     viewport by 25% on every side; viewport fraction v sits at
+     (v + 0.25) / 1.5. The numbers below aim the blooms at the lower
+     left and lower right of the visible page. */
+  background:
+    var(--rf-glow),
+    radial-gradient(34% 30% at 25% 58%,
+      color-mix(in oklab, var(--rf-accent, #6c8cff) 34%, transparent), transparent 72%),
+    radial-gradient(38% 32% at 75% 65%,
+      color-mix(in oklab, #7c3aed 30%, transparent), transparent 74%);
+  filter: blur(60px);
+  animation: ba-aurora-b 64s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+/* Near layer: brighter, faster, tinted toward the accent and cyan. */
+body:has(.ba-home)::after,
+body:has(.ba-over)::after {
+  content: "";
+  position: fixed;
+  inset: -25%;
+  pointer-events: none;
+  z-index: -1;
+  opacity: .88;
+  /* First gradient wins the stacking order, so the scrim sits over the
+     blooms: it pulls the middle of the page back toward paper so deck
+     rows, the hour chart and the heatmap keep their contrast while the
+     colour still breathes around them. */
+  background:
+    radial-gradient(46% 40% at 50% 46%,
+      color-mix(in oklab, var(--rf-paper) 62%, transparent), transparent 72%),
+    radial-gradient(34% 30% at 33% 35%,
+      color-mix(in oklab, var(--rf-accent, #6c8cff) 58%, transparent), transparent 70%),
+    radial-gradient(30% 26% at 69% 29%,
+      color-mix(in oklab, #22d3ee 42%, transparent), transparent 70%),
+    radial-gradient(40% 34% at 53% 65%,
+      color-mix(in oklab, #7c3aed 32%, transparent), transparent 72%);
+  filter: blur(70px) saturate(115%);
+  animation: ba-aurora-a 44s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+/* Light mode gets the same motion at lower intensity: the blooms have to
+   sit under dark ink instead of glowing out of a near-black page. */
+:root[data-rf-theme="light"] body:has(.ba-home)::after,
+:root[data-rf-theme="light"] body:has(.ba-over)::after { opacity: .42; }
+:root[data-rf-theme="light"] body:has(.ba-home)::before,
+:root[data-rf-theme="light"] body:has(.ba-over)::before { opacity: .55; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-rf-theme="dark"]) body:has(.ba-home)::after,
+  :root:not([data-rf-theme="dark"]) body:has(.ba-over)::after { opacity: .42; }
+  :root:not([data-rf-theme="dark"]) body:has(.ba-home)::before,
+  :root:not([data-rf-theme="dark"]) body:has(.ba-over)::before { opacity: .55; }
+}
+
+/* Motion is decoration here, so it is the first thing to go. */
+@media (prefers-reduced-motion: reduce) {
+  body:has(.ba-home)::before, body:has(.ba-over)::before,
+  body:has(.ba-home)::after,  body:has(.ba-over)::after { animation: none; }
+}
