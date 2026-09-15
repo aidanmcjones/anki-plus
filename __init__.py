@@ -751,14 +751,23 @@ def build_heatmap_html(weeks: int = 53) -> str:
             )
         cells.append('<div class="rf-hm-col">' + "".join(col_cells) + "</div>")
 
-    # Only label months wide enough to fit the text without colliding.
+    # Only label months wide enough to fit the text without colliding —
+    # EXCEPT the last (rightmost) span, which is always labelled even when
+    # narrow. That span is always the current, in-progress month (it's the
+    # one containing `today_idx`), and it starts out just 1-3 columns wide
+    # for most of every month — hiding it left the previous month's label
+    # as the last visible one, right next to this month's (unlabelled)
+    # cells, which read as if that activity belonged to last month.
+    last_span_idx = len(month_spans) - 1
     months_html = "".join(
         f'<span class="rf-hm-mon" style="width:{span * 14}px">'
-        f'{label if span >= 4 else ""}</span>'
-        for label, span in month_spans
+        f'{label if (span >= 4 or i == last_span_idx) else ""}</span>'
+        for i, (label, span) in enumerate(month_spans)
     )
+    # Single-letter weekday labels (M / W / F) on the usual every-other-row
+    # cadence — same rows as before, just shorter text.
     weekdays_html = "".join(
-        f'<span class="rf-hm-wd">{_WEEKDAYS[i] if i in (1, 3, 5) else ""}</span>'
+        f'<span class="rf-hm-wd">{_WEEKDAYS[i][0] if i in (1, 3, 5) else ""}</span>'
         for i in range(7)
     )
 
