@@ -700,6 +700,58 @@ def _heatmap_level_fn(counts: Dict[int, int]):
     return lambda n: 0 if n <= 0 else min(4, 1 + int(n * 4 / (peak + 0.0001)))
 
 
+# Empty columns of lead-in room to the left of a young history, so the grid
+# never looks flush-clipped against the edge while it's still small. Kept to
+# a single week — any more and a brand-new user's 1-day-old grid would be
+# mostly dead space again, the exact thing this whole feature exists to fix.
+_HEATMAP_LEAD_IN_WEEKS = 1
+
+
+def _heatmap_dow(idx: int) -> int:  # 0 = Sunday .. 6 = Saturday
+    return (idx + 4) % 7
+
+
+def _heatmap_window(
+    today_idx: int,
+    earliest_idx: Optional[int],
+    weeks: int,
+    lead_in_weeks: int = _HEATMAP_LEAD_IN_WEEKS,
+) -> Tuple[int, int, int]:
+    """Pick the Sunday-aligned window to render: (grid_start, start_idx,
+    columns).
+
+    The grid grows with the user's history instead of always paying out a
+    fixed `weeks`-wide window:
+      * `grid_start` is anchored to the user's first-ever review (Sunday of
+        that week), pulled back by `lead_in_weeks` so it doesn't look
+        clipped, then clamped so the grid never exceeds `weeks` columns —
+        past that cap it becomes a rolling window of the most recent
+        `weeks` weeks, same as a long-time user sees today.
+      * `start_idx` is the first day that may show real data; days before it
+        (but still inside `grid_start..today_idx`, i.e. the lead-in) render
+        as blank placeholder cells rather than data.
+      * `columns` is exact: at the cap it works out to precisely `weeks`
+        (verified in tests/test_heatmap_window.py) because both boundaries
+        are anchored to `today`'s own Sunday, not to each other.
+
+    No reviews yet (`earliest_idx is None`) renders "this week" — a couple
+    of columns, not an empty year.
+    """
+    today_sunday = today_idx - _heatmap_dow(today_idx)
+    cap_start = today_sunday - (weeks - 1) * 7  # oldest Sunday the cap allows
+
+    if earliest_idx is None:
+        earliest_idx = today_idx  # no history: show just the current week
+
+    earliest_sunday = earliest_idx - _heatmap_dow(earliest_idx)
+    wanted_start = earliest_sunday - lead_in_weeks * 7
+    grid_start = max(wanted_start, cap_start)  # never wider than the cap
+    start_idx = max(earliest_idx, cap_start)
+
+    columns = (today_idx - grid_start) // 7 + 1
+    return grid_start, start_idx, columns
+
+
 def build_heatmap_html(weeks: int = 53) -> str:
     col = mw.col
     if not col:
@@ -713,21 +765,14 @@ def build_heatmap_html(weeks: int = 53) -> str:
     def date_for(idx: int) -> datetime.date:
         return today_date - datetime.timedelta(days=today_idx - idx)
 
-    def dow(idx: int) -> int:  # 0 = Sunday .. 6 = Saturday
-        return (idx + 4) % 7
+    dow = _heatmap_dow
 
-    # Render the full history so you can scroll back through past years, but
-    # never fewer than `weeks` columns so a fresh collection still looks full.
-    floor_idx = today_idx - (weeks * 7 - 1)
-    earliest = min(counts) if counts else floor_idx
-    start_idx = min(earliest, floor_idx)
-    grid_start = start_idx - dow(start_idx)  # back up to a Sunday
+    earliest = min(counts) if counts else None
+    grid_start, start_idx, columns = _heatmap_window(today_idx, earliest, weeks)
 
     nonzero = [c for c in counts.values() if c > 0]
     peak = max(nonzero) if nonzero else 1
     level = _heatmap_level_fn(counts)
-
-    columns = (today_idx - grid_start) // 7 + 1
 
     cells = []
     month_spans = []  # [label, span_in_columns]
@@ -807,8 +852,10 @@ def build_heatmap_html(weeks: int = 53) -> str:
           {weekdays_html}
         </div>
         <div class="rf-hm-scroll">
-          <div class="rf-hm-months">{months_html}</div>
-          <div class="rf-hm-grid">{''.join(cells)}</div>
+          <div class="rf-hm-inner">
+            <div class="rf-hm-months">{months_html}</div>
+            <div class="rf-hm-grid">{''.join(cells)}</div>
+          </div>
         </div>
       </div>
     </div>

@@ -73,6 +73,16 @@
   background: var(--rf-text-dim, #5a6172);
 }
 
+/* Shrink-to-fit wrapper around the months row + grid. A young history's
+   narrow grid centers under `.rf-hm-scroll` via the auto margins instead of
+   hugging the left edge like a clipped fragment; once the content is wider
+   than the scroll viewport `margin: auto` contributes nothing and the
+   existing overflow-x scrolling takes over unchanged. */
+.rf-hm-inner {
+  width: fit-content;
+  margin: 0 auto;
+}
+
 .rf-hm-months {
   display: flex;
   height: 15px;
@@ -89,6 +99,33 @@
   flex: none;          /* keep 11px under overflow so the grid scrolls */
   width: 11px;
   margin-right: 3px;
+}
+
+/* A newly-earned column (grid grew because another week rolled in): starts
+   collapsed to nothing and grows/fades/scales into place. heatmap.js toggles
+   `.rf-hm-col-enter-in` a frame after adding this class so the transition
+   fires; both classes are stripped once it finishes. Width growing from 0
+   doubles as the "grid expands" cue the reduced-motion query below turns off. */
+.rf-hm-col-enter {
+  overflow: hidden;
+  width: 0;
+  margin-right: 0;
+  opacity: 0;
+  transform: scale(.92);
+  transition: width 260ms ease, margin-right 260ms ease,
+    opacity 220ms ease, transform 260ms ease;
+}
+.rf-hm-col-enter.rf-hm-col-enter-in {
+  width: 11px;
+  margin-right: 3px;
+  opacity: 1;
+  transform: scale(1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rf-hm-col-enter,
+  .rf-hm-col-enter.rf-hm-col-enter-in {
+    transition: none;
+  }
 }
 
 .rf-hm-cell {

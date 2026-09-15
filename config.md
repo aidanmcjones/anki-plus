@@ -25,8 +25,10 @@ in this file are the raw form the settings page writes.
 - **show_today** — the today panel (cards · minutes + per-hour bars).
 - **show_streak** — the streak counter above the heatmap.
 - **show_heatmap**, **heatmap_weeks**, **heatmap_palette** — the review
-  heatmap, its minimum width in weeks (`53` ≈ a year), and its colour
-  (`"accent"`, `"green"`, `"teal"`, `"violet"`, `"rose"`, `"amber"`).
+  heatmap, its maximum width in weeks (`53` ≈ a year — the grid starts at
+  your first review and grows week by week until it hits this cap, then
+  rolls forward), and its colour (`"accent"`, `"green"`, `"teal"`,
+  `"violet"`, `"rose"`, `"amber"`).
 - **hide_bottom_on_decks** / **hide_bottom_on_overview** — hide Anki's
   native bottom strip on those screens.
 
