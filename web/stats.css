@@ -170,36 +170,53 @@ table, td, th {
    Anki's defaults key column count off `100vw` — but our embed loses
    ~264px to the sidebar, so its breakpoints fire too early and the
    page collapses to a single column at typical window widths. Re-key
-   the grid off the embed's container so 1 / 2 / 3 columns track the
-   space the graphs actually have. Container queries would be cleaner
-   but require the .graphs-container itself to be the container; just
-   override the existing widths instead. */
+   the column count off the embed's container so 1 / 2 / 3 columns
+   track the space the graphs actually have. Container queries would be
+   cleaner but require the .graphs-container itself to be the
+   container; just override the existing widths instead.
+
+   Layout model: CSS grid (Anki's default here) sizes every ROW to its
+   tallest item. These cards vary wildly in height (a 4-line "Today"
+   card vs. the histogram+table "Future Due" card), so a short card
+   sharing a row with a tall one leaves a large dead void beneath it —
+   `align-items: start` only stops the short card from *stretching*, it
+   can't shrink the row. The cards are independent widgets with no
+   adjacency requirement to each other, so we pack them with CSS
+   multi-column ("masonry") instead: each card flows into the
+   shortest-so-far column, closing that void. `break-inside: avoid`
+   below (plus TitledContainer's own `page-break-inside: avoid` in the
+   Svelte source) keeps a single card from being split across columns;
+   `margin-bottom` supplies the vertical spacing multi-column has no
+   row-gap for. Column-count keeps the original 3 / 2 / 1 breakpoints,
+   so only the packing algorithm changes, not the responsive shape. */
 .graphs-container,
 [class*="graphs-container"] {
+  display: block !important;
   padding: 12px 36px 56px !important;
   width: auto !important;
   margin: 0 !important;
-  gap: 28px 36px !important;
-  align-items: start !important;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  column-gap: 36px !important;
+  column-count: 3 !important;
 }
 @media only screen and (max-width: 1500px) {
   .graphs-container,
   [class*="graphs-container"] {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    column-count: 2 !important;
   }
 }
 @media only screen and (max-width: 1000px) {
   .graphs-container,
   [class*="graphs-container"] {
-    grid-template-columns: 1fr !important;
+    column-count: 1 !important;
   }
 }
 
 /* Each individual graph card — a quiet panel tint (--rf-panel sits a
    few percent above --rf-paper in both themes) with a hairline border
    so cards lift off the page without shouting. No drop shadow; the
-   contrast does the work. */
+   contrast does the work. break-inside/margin-bottom make the card the
+   atomic unit the column-packing algorithm above moves as a whole,
+   with the same visual spacing the old grid `gap` gave it. */
 .graphs-container > div,
 [class*="graphs-container"] > div {
   background: var(--rf-panel) !important;
@@ -207,6 +224,8 @@ table, td, th {
   box-shadow: none !important;
   border-radius: 12px !important;
   padding: 20px 24px !important;
+  break-inside: avoid;
+  margin-bottom: 28px;
 }
 
 /* The .graph area inside each card defaults to flex-grow:1 +
