@@ -8,6 +8,7 @@
   "backdrop_intensity": "cinematic",
   "scene": "shuffle",
   "scene_shuffle_seconds": 10,
+  "backdrop_motion": "always",
   "sidebar_nav": true,
   "show_today": true,
   "show_streak": true,

@@ -184,6 +184,26 @@ def _scene_shuffle_seconds(cfg: Dict[str, Any]) -> int:
     return max(_SCENE_SECONDS_MIN, min(_SCENE_SECONDS_MAX, secs))
 
 
+def _backdrop_motion_mode(cfg: Dict[str, Any]) -> str:
+    """Which "reduce motion" signals the backdrop obeys.
+
+    "always" (the default) obeys the OS-level `prefers-reduced-motion` only,
+    which is what every other motion gate in this add-on does. "auto" also
+    obeys Anki's own Preferences > Reduce motion.
+
+    Default is "always" rather than "auto" because Anki's own flag defaults
+    to ON (`ProfileManager.reduce_motion` returns True when unset), so
+    honouring it by default would freeze the backdrop for essentially every
+    user who never opened that preference, including the people who install
+    this add-on precisely for the backdrop. Opting in keeps the accessible
+    behaviour available without silently switching the feature off. The
+    OS-level query is obeyed in both modes and is not configurable: that one
+    is a deliberate statement by the user, not a default they inherited.
+    """
+    choice = str(cfg.get("backdrop_motion", "always") or "always")
+    return choice if choice in ("always", "auto") else "always"
+
+
 def _scene_list(cfg: Dict[str, Any]) -> list:
     """What the page is allowed to cycle through. A pinned scene collapses
     this to a single entry, which is how scene-shuffle.js learns to stand
@@ -258,6 +278,7 @@ def _js_opts(cfg: Dict[str, Any]) -> Dict[str, Any]:
         # treats as nothing to cycle.
         "scene": {
             "list": _scene_list(cfg),
+            "motion": _backdrop_motion_mode(cfg),
             "shuffleSeconds": _scene_shuffle_seconds(cfg),
         },
         "deckList": {
@@ -421,6 +442,7 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
     # the page. Emitted on every surface (not just the home page) so the
     # attributes are already correct if a screen later grows a backdrop.
     extras += f"d.dataset.rfBackdrop='{_backdrop_mode(cfg)}';"
+    extras += f"d.dataset.rfMotion='{_backdrop_motion_mode(cfg)}';"
     extras += f"d.dataset.rfIntensity='{_backdrop_intensity(cfg)}';"
     extras += f"d.dataset.rfSky='{_sky_phase(datetime.datetime.now().hour)}';"
     # The landscape itself, rotated by date unless the user pinned one. Set

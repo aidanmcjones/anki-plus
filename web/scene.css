@@ -475,3 +475,21 @@
     animation: none !important;
   }
 }
+
+/* Anki has its own Reduce motion preference, separate from the OS one, and
+   it puts `reduce-motion` on the page body (aqt/webview.py toggles the class
+   from `ProfileManager.reduce_motion`). Obeying it is opt-in through
+   `backdrop_motion: "auto"`, because that preference defaults to ON when it
+   has never been opened, and defaulting to obey would switch this backdrop
+   off for nearly everyone who installed the add-on to get it. See
+   `_backdrop_motion_mode`.
+
+   Stopping the animations is only half the job: the scene swap is an
+   attribute change driven from scene-shuffle.js, not a CSS animation, so no
+   rule here can hold it still. The script checks the same two signals. */
+:root[data-rf-motion="auto"] body.reduce-motion .ba-scene,
+:root[data-rf-motion="auto"] body.reduce-motion .ba-scene *,
+:root[data-rf-motion="auto"] body.reduce-motion .ba-scene *::before,
+:root[data-rf-motion="auto"] body.reduce-motion .ba-scene *::after {
+  animation: none !important;
+}

@@ -40,6 +40,16 @@ in this file are the raw form the settings page writes.
   Ignored when **scene** pins a single scene, when **backdrop** is not
   `"scene"`, and when the system asks for reduced motion, in which case the
   first scene simply stays up.
+- **backdrop_motion**: which "reduce motion" settings the backdrop obeys.
+  `"always"` (the default) obeys your operating system's reduced-motion
+  setting only, which is what every other animation in this add-on does.
+  `"auto"` additionally obeys Anki's own Preferences > Reduce motion, which
+  stops both the animation and the scene cycling and leaves one still
+  landscape up. It is opt-in rather than the default because Anki turns that
+  preference on unless you have explicitly turned it off, so obeying it by
+  default would switch the backdrop off for nearly everybody. Your operating
+  system's setting is obeyed either way and is not configurable here: that
+  one you chose, where Anki's you probably inherited.
 - **font_serif** / **font_sans** — optional display fonts prepended to the
   built-in stacks (e.g. `"Iowan Old Style"`). `""` uses the defaults.
 
