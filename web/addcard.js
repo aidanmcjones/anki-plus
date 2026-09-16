@@ -117,6 +117,49 @@
     return true;
   }
 
+  // Stock Anki caps a field image's default (and "shrink to fit") display
+  // size at 250x125 (`ImageOverlay maxWidth={250} maxHeight={125}` in
+  // ts/routes/editor/NoteEditor.svelte) — a thumbnail meant for old-style
+  // "paste a screenshot into a field" workflows. It bears no relation to
+  // how big the image actually renders on the card (that's the note type's
+  // own CSS, applied only in Preview/Reviewer, never in the editor), so a
+  // card whose image is meant to fill most of the card shows as a postage
+  // stamp here — you can't judge the real size until you review it.
+  //
+  // ImageOverlay sets four CSS custom properties as an *inline* style on
+  // <html> once, when it mounts (`document.documentElement.style.setProperty`
+  // in its <script> block) — not reactively, so there's no store to hook.
+  // We can't change the 250/125 constants without touching ts/, but the
+  // constants only reach the page as these four custom properties, and
+  // inline styles set later win over inline styles set earlier for the
+  // same property. Re-setting them after Anki's own script has run raises
+  // the cap for every image in every field, in both the "shrunk to fit"
+  // state (`--editor-shrink-max-*`) and the freshly-inserted default state
+  // (`--editor-default-max-*`) — same mechanism Anki itself uses, just a
+  // bigger number. A per-image explicit width/height (or an explicit
+  // `data-editor-shrink="false"`, i.e. "Actual size" already chosen) is
+  // unaffected: this only changes what "fit to a sane size" means.
+  //
+  // 640x480 is a rough stand-in for "roughly how big images look once a
+  // note type is done constraining them" — most reasonably-sized card
+  // images render close to their natural size at that cap, without an
+  // oversized paste turning a field into a giant unscrollable image. It
+  // isn't the note type's actual CSS (that varies per note type and isn't
+  // reachable from this webview), so it's a relative-size improvement,
+  // not a pixel-exact match to the reviewer.
+  var IMG_DEFAULT_MAX_W = "640px";
+  var IMG_DEFAULT_MAX_H = "480px";
+  function raiseImageSizeCap() {
+    var root = document.documentElement;
+    var cur = root.style.getPropertyValue("--editor-default-max-width");
+    if (cur === IMG_DEFAULT_MAX_W) return true; // already applied, nothing to redo
+    root.style.setProperty("--editor-shrink-max-width", IMG_DEFAULT_MAX_W);
+    root.style.setProperty("--editor-shrink-max-height", IMG_DEFAULT_MAX_H);
+    root.style.setProperty("--editor-default-max-width", IMG_DEFAULT_MAX_W);
+    root.style.setProperty("--editor-default-max-height", IMG_DEFAULT_MAX_H);
+    return true;
+  }
+
   function poll(fn, max) {
     if (fn()) return;
     var n = 0;
@@ -150,6 +193,7 @@
     ok = cleanFieldsCardsLabels() && ok;
     ok = keepTagsOpen() && ok;
     ok = moveTagsIntoFields() && ok;
+    raiseImageSizeCap(); // cosmetic only — never gates reveal
     if (ok) reveal();
     return ok;
   }
@@ -171,5 +215,27 @@
       keepTagsOpen();
       moveTagsIntoFields();
     }).observe(document.body, { childList: true, subtree: true });
+  } catch (_) {}
+
+  // ImageOverlay is a *component*, not a page-load-once script: switching
+  // Browse between Preview/Edit re-shows the pane without a page reload,
+  // but the editor's Svelte tree (and this fork's NoteEditor instance)
+  // gets torn down and remounted, so ImageOverlay's mount effect reruns
+  // and stomps our --editor-*-max-* overrides back to 250/125 — confirmed
+  // live (measured a field image at 192x125 again after Card→Edit→Card→
+  // Edit, despite raiseImageSizeCap() having already run once on initial
+  // load). The body-mutation observer above doesn't catch this: Anki
+  // writes the reset directly onto <html>'s style attribute, which is
+  // outside document.body entirely. Watch that attribute directly and
+  // reapply whenever it drifts from ours; raiseImageSizeCap()'s own
+  // early-return (cur === IMG_DEFAULT_MAX_W) stops this from looping
+  // against its own writes.
+  try {
+    new MutationObserver(function () {
+      raiseImageSizeCap();
+    }).observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["style"],
+    });
   } catch (_) {}
 })();

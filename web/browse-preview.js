@@ -28,6 +28,45 @@
     if (old && old.parentNode) old.parentNode.removeChild(old);
   } catch (_) {}
 
+  // Collapsed <details> ("extra info" disclosures some note types wrap
+  // around a secondary explanation) default to closed — that's the right
+  // call in study, where the disclosure asks a small amount of extra
+  // recall of you, but wrong here: this pane's whole premise is "the card
+  // as you'll see it, right now, no clicking" (see the file header), and a
+  // collapsed triangle reads as unfinished content. Force every <details>
+  // in the rendered card open on this pane specifically; native toggling
+  // still works afterward if someone wants to re-collapse it while
+  // skimming. `#qa`'s innerHTML is replaced wholesale on every re-render
+  // (`_showAnswer`), not the element itself, so a MutationObserver on it
+  // catches every card without needing a Python-side hook.
+  function expandDetails(root) {
+    if (!root) return;
+    try {
+      var list = root.querySelectorAll("details:not([open])");
+      for (var i = 0; i < list.length; i++) {
+        list[i].setAttribute("open", "");
+      }
+    } catch (_) {}
+  }
+
+  function watchQA() {
+    var qa = document.getElementById("qa");
+    if (!qa) return;
+    expandDetails(qa);
+    try {
+      var mo = new MutationObserver(function () {
+        expandDetails(qa);
+      });
+      mo.observe(qa, { childList: true, subtree: true });
+    } catch (_) {}
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", watchQA);
+  } else {
+    watchQA();
+  }
+
   function ensureTags() {
     var el = document.getElementById("ba-pv-tags");
     if (el) return el;

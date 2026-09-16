@@ -97,6 +97,27 @@ html[data-ba-preview] body {
   max-width: 30ch;
 }
 
+/* ---------------- Collapsible "extra" disclosures ----------------
+ * browse-preview.js force-opens every <details> on this pane (see its
+ * header comment) — a collapsed triangle has no business in a view whose
+ * whole point is showing the card as-is. Once forced open, whatever
+ * margin a note type's own CSS puts around the block reads as a gap
+ * "waiting to be clicked" rather than normal card spacing, so it's
+ * compressed here to sit close under the answer, same spirit as the
+ * padding above: more card, less air. Scoped to the pane only — study
+ * keeps whatever spacing the note type designed for a collapsed-by-
+ * default disclosure. */
+html[data-ba-preview] #qa details {
+  margin-block: 6px !important;
+}
+html[data-ba-preview] #qa details summary {
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+html[data-ba-preview] #qa details > *:not(summary) {
+  margin-top: 2px !important;
+}
+
 /* Images and tables inside a narrow pane: never let a card push a
  * horizontal scrollbar onto the page — scroll the element instead. */
 html[data-ba-preview] #qa img,
