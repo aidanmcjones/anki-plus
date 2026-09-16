@@ -171,6 +171,36 @@ def test_normalize_selection_drops_deleted_file():
     assert nature.normalize_selection("ocean/deleted.webm", _VIDEOS) == "shuffle"
 
 
+def test_normalize_selection_custom_keeps_valid_files():
+    raw = {"mode": "custom", "files": ["ocean/whale.webm", "forest/deer.webm"]}
+    assert nature.normalize_selection(raw, _VIDEOS) == {
+        "mode": "custom",
+        "files": ["ocean/whale.webm", "forest/deer.webm"],
+    }
+
+
+def test_normalize_selection_custom_drops_missing_files_but_keeps_rest():
+    raw = {"mode": "custom", "files": ["ocean/whale.webm", "ocean/deleted.webm"]}
+    assert nature.normalize_selection(raw, _VIDEOS) == {
+        "mode": "custom",
+        "files": ["ocean/whale.webm"],
+    }
+
+
+def test_normalize_selection_custom_empty_files_falls_back_to_shuffle():
+    assert nature.normalize_selection({"mode": "custom", "files": []}, _VIDEOS) == "shuffle"
+
+
+def test_normalize_selection_custom_all_files_missing_falls_back_to_shuffle():
+    raw = {"mode": "custom", "files": ["nowhere/gone.webm"]}
+    assert nature.normalize_selection(raw, _VIDEOS) == "shuffle"
+
+
+def test_normalize_selection_custom_non_list_files_falls_back_to_shuffle():
+    assert nature.normalize_selection({"mode": "custom", "files": "not-a-list"}, _VIDEOS) == "shuffle"
+    assert nature.normalize_selection({"mode": "custom"}, _VIDEOS) == "shuffle"
+
+
 # --------------------------------------------------------------------------- #
 # filtered_for_selection()
 # --------------------------------------------------------------------------- #
@@ -203,6 +233,34 @@ def test_filtered_for_selection_exact_file_match():
 def test_filtered_for_selection_exact_file_no_match_falls_back_to_full_library():
     out = nature.filtered_for_selection(_VIDEOS, "ocean/deleted.webm")
     assert out == _VIDEOS
+
+
+def test_filtered_for_selection_custom_returns_only_checked_files():
+    selection = {"mode": "custom", "files": ["forest/deer.webm"]}
+    assert nature.filtered_for_selection(_VIDEOS, selection) == [_VIDEOS[1]]
+
+
+def test_filtered_for_selection_custom_preserves_videos_order_not_files_order():
+    # Order comes from the library (index.json / videos), not from the
+    # order files were listed in the selection — so rotation order stays
+    # stable regardless of how the checkbox list happened to serialize.
+    selection = {"mode": "custom", "files": ["forest/deer.webm", "ocean/whale.webm"]}
+    assert nature.filtered_for_selection(_VIDEOS, selection) == _VIDEOS
+
+
+def test_filtered_for_selection_custom_empty_files_falls_back_to_full_library():
+    out = nature.filtered_for_selection(_VIDEOS, {"mode": "custom", "files": []})
+    assert out == _VIDEOS
+
+
+def test_filtered_for_selection_custom_missing_files_dropped_rest_kept():
+    selection = {"mode": "custom", "files": ["ocean/whale.webm", "nowhere/gone.webm"]}
+    assert nature.filtered_for_selection(_VIDEOS, selection) == [_VIDEOS[0]]
+
+
+def test_filtered_for_selection_custom_all_files_missing_falls_back_to_full_library():
+    selection = {"mode": "custom", "files": ["nowhere/gone.webm"]}
+    assert nature.filtered_for_selection(_VIDEOS, selection) == _VIDEOS
 
 
 # --------------------------------------------------------------------------- #

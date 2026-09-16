@@ -70,44 +70,98 @@
   opacity: 1;
 }
 
-/* Same treatment scene.css gives `.ba-scene-scrim`: a paper-tinted wash so
-   deck rows and the heatmap keep their contrast over moving footage.
-   Reads `--rf-paper` for the same reason — a background override should
-   drag the scrim along with it rather than leaving text stranded on a
-   scrim tuned for the paper the user replaced. */
+/* Same treatment scene.css gives `.ba-scene-scrim`, but stronger: a scene
+   is drawn in fixed, known-dim colours, while a nature clip can hand the
+   page anything from a night dive to a snowfield — the brightest frames
+   in the library (arctic ice, tropical shoreline) are most of the way to
+   white. `--rf-paper` (light theme) is itself pale, so the scrim below
+   used to lean on `color-mix` percentages tuned for scene.css's fixed
+   palette; over a white frame those same percentages left the text
+   column sitting on something closer to the clip's own brightness than
+   to a wash. Bumped stops (78/58/86% vs. scene's 82/58/68 — see
+   scene.css's `.ba-scene-scrim`) and a taller top-to-bottom gradient
+   reach so deck rows two-thirds down the page still sit on real
+   coverage, not the tail of the fade. */
 .ba-video-scrim {
   position: absolute;
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(64% 54% at 50% 32%,
-      color-mix(in oklab, var(--rf-paper) 82%, transparent),
-      transparent 78%),
+    radial-gradient(70% 60% at 50% 30%,
+      color-mix(in oklab, var(--rf-paper) 92%, transparent),
+      transparent 82%),
     linear-gradient(to bottom,
-      color-mix(in oklab, var(--rf-paper) 58%, transparent) 0%,
-      color-mix(in oklab, var(--rf-paper) 22%, transparent) 30%,
-      transparent 46%);
+      color-mix(in oklab, var(--rf-paper) 78%, transparent) 0%,
+      color-mix(in oklab, var(--rf-paper) 58%, transparent) 30%,
+      color-mix(in oklab, var(--rf-paper) 30%, transparent) 58%,
+      transparent 86%);
 }
 
 @media (max-height: 820px) {
   .ba-video-scrim {
     background:
-      radial-gradient(78% 66% at 50% 34%,
-        color-mix(in oklab, var(--rf-paper) 88%, transparent),
-        transparent 84%),
+      radial-gradient(82% 70% at 50% 32%,
+        color-mix(in oklab, var(--rf-paper) 94%, transparent),
+        transparent 86%),
       linear-gradient(to bottom,
-        color-mix(in oklab, var(--rf-paper) 68%, transparent) 0%,
-        color-mix(in oklab, var(--rf-paper) 32%, transparent) 44%,
-        transparent 64%);
+        color-mix(in oklab, var(--rf-paper) 84%, transparent) 0%,
+        color-mix(in oklab, var(--rf-paper) 62%, transparent) 40%,
+        color-mix(in oklab, var(--rf-paper) 34%, transparent) 66%,
+        transparent 90%);
   }
 }
 
 /* Light mode: the same footage has to sit under dark ink instead of
    glowing out of a near-black page, so it's damped rather than recoloured
-   — same bargain scene.css makes for `.ba-scene`. */
-:root[data-rf-theme="light"] .ba-video { opacity: .46; }
+   — same bargain scene.css makes for `.ba-scene`. Dropped from .46 to .34:
+   the brightest clips (arctic, tropical shoreline — mostly-white frames)
+   still pushed the deck column past comfortable contrast at .46, even
+   with the strengthened scrim above; text legibility wins over how much
+   of the clip stays visible. */
+:root[data-rf-theme="light"] .ba-video { opacity: .34; }
 @media (prefers-color-scheme: light) {
-  :root:not([data-rf-theme="dark"]) .ba-video { opacity: .46; }
+  :root:not([data-rf-theme="dark"]) .ba-video { opacity: .34; }
+}
+
+/* Video backdrop forces its own scrim + dimming for contrast, but the ink
+   tokens (theme.css's --rf-ink family, tokens.css's --fg family Anki's
+   own chrome reads) are theme-driven, not backdrop-driven — so a
+   light-themed profile still renders dark ink (#1f1d18-class colors) as
+   its deck-list text. Over a bright frame (snowfield, tropical shoreline)
+   even the scrim and dimming above aren't a reliable enough floor: a dark
+   ink drawn straight onto near-white footage can still read as low
+   contrast for a fraction of a second mid-crossfade, whereas light ink
+   over the same frame (helped by the scrim and the text-shadow below)
+   stays legible through the full brightness range the library can
+   produce. Force both ink families to their dark-theme values exactly
+   the way scene.css does for pure-black backdrop — see that file's
+   `:root:root[data-rf-backdrop="black"]` for the full rationale on the
+   doubled `:root` (bumps this to (0,3,0) specificity so it beats
+   tokens.css's same-specificity, same-!important theme rules regardless
+   of stylesheet load order). */
+:root:root[data-rf-backdrop="video"] {
+  --rf-ink: #eceae2 !important;
+  --rf-ink-strong: #ffffff !important;
+  --rf-ink-dim: #9b978a !important;
+  --rf-ink-faint: #5d5a51 !important;
+  --fg: #eceae2 !important;
+  --fg-subtle: #9b978a !important;
+  --fg-faint: #5d5a51 !important;
+  --fg-disabled: #45433d !important;
+}
+
+/* A subtle shadow under the deck names themselves, on top of the forced
+   ink tokens and the scrim — belt and suspenders for the one moment those
+   two aren't quite enough: the instant a crossfade lands on a bright new
+   frame, before the scrim's own transition has caught up. Scoped to
+   video mode only (never scene/aurora/black, which don't have this
+   problem) and to the deck-row and hero-heading text specifically, not
+   every label on the page, so it reads as "text sitting on footage" and
+   not as a global style change. */
+:root[data-rf-backdrop="video"] .ba-home tr.deck a.deck,
+:root[data-rf-backdrop="video"] .ba-home .ba-deck-name,
+:root[data-rf-backdrop="video"] .ba-over .ba-deck-name {
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .55), 0 0 1px rgba(0, 0, 0, .4);
 }
 
 /* In video mode the aurora becomes the page's own base glow and has to

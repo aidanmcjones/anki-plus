@@ -110,12 +110,29 @@ def biomes(videos: List[Dict[str, str]]) -> List[str]:
     return seen
 
 
-def normalize_selection(raw: Any, videos: List[Dict[str, str]]) -> str:
+def normalize_selection(raw: Any, videos: List[Dict[str, str]]) -> Any:
     """Reduce the raw `video_selection` config value to one this library
     can honour right now: `"shuffle"`, `"biome:<name>"` for a biome the
-    index actually has, or an exact file path the index actually has.
-    Anything else — a deleted clip, a biome curation dropped, a typo —
-    falls back to `"shuffle"` rather than rendering nothing."""
+    index actually has, an exact file path the index actually has, or —
+    the explicit multi-pick form — `{"mode": "custom", "files": [...]}`.
+    Anything else — a deleted clip, a biome curation dropped, a typo, a
+    custom list that named nothing still present — falls back to
+    `"shuffle"` rather than rendering nothing.
+
+    The custom form's return type is the dict itself (not a string), so
+    callers that only ever handled strings before still work: they either
+    thread it straight into `filtered_for_selection` (which understands
+    it) or use it purely for equality/logging, and Python's dict/str
+    values are never confused for one another by `==`."""
+    if isinstance(raw, dict) and raw.get("mode") == "custom":
+        valid = {v["file"] for v in videos}
+        files = raw.get("files")
+        kept = (
+            [f for f in files if isinstance(f, str) and f in valid]
+            if isinstance(files, list)
+            else []
+        )
+        return {"mode": "custom", "files": kept} if kept else "shuffle"
     choice = str(raw or "shuffle").strip() or "shuffle"
     if choice == "shuffle":
         return "shuffle"
@@ -126,14 +143,28 @@ def normalize_selection(raw: Any, videos: List[Dict[str, str]]) -> str:
 
 
 def filtered_for_selection(
-    videos: List[Dict[str, str]], selection: str
+    videos: List[Dict[str, str]], selection: Any
 ) -> List[Dict[str, str]]:
     """The subset `selection` allows. Never empty when `videos` isn't: an
     unmatched filter (shouldn't happen once normalize_selection has run,
     but config can be hand-edited between renders) falls back to the full
-    library rather than to nothing."""
+    library rather than to nothing.
+
+    `selection` is usually a string (`"shuffle"`, `"biome:<name>"`, an
+    exact file path) but may also be the custom multi-pick form,
+    `{"mode": "custom", "files": [...]}` — checked first, and ahead of
+    any `str` handling, since a dict has no `.startswith`. An empty (or
+    entirely stale — every named file since deleted) `files` list matches
+    nothing and falls back to the full library, the same rule every other
+    unmatched selection already gets; files that no longer exist simply
+    fail to match rather than raising, since `videos` only ever contains
+    entries `read_index` already confirmed are on disk."""
     if not videos:
         return []
+    if isinstance(selection, dict) and selection.get("mode") == "custom":
+        files = set(selection.get("files") or [])
+        matched = [v for v in videos if v.get("file") in files]
+        return matched or list(videos)
     if selection == "shuffle":
         return list(videos)
     if selection.startswith("biome:"):

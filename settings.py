@@ -991,28 +991,19 @@ class AnkiDesignSettingsPage(QWidget):
             "Scene",
             "Which illustrated landscape shows when Backdrop is Scenes.",
         )
-        video_choices, video_hint = self._video_choices()
-        video_row, _video_combo = self._combo_row(
-            "video_selection", "shuffle", video_choices,
-            "Nature video", video_hint,
-        )
-        rotate_row, _rotate_combo = self._combo_row(
+        video_section = self._video_selection_section()
+        rotate_row = self._duration_row(
             "video_rotate_seconds", 300,
-            [
-                (60, "Every minute"),
-                (300, "Every 5 minutes"),
-                (900, "Every 15 minutes"),
-                (3600, "Hourly"),
-                (0, "Never (loop one clip)"),
-            ],
             "Rotate video every",
-            "How often the nature-video backdrop crossfades to the next clip.",
-            formatter=lambda s: f"Every {s}s",
+            "How often the nature-video backdrop crossfades to the next "
+            "clip. Values below 5 seconds are rounded up to 5 — anything "
+            "faster reads as a glitch rather than a change of scene. "
+            "Choose “Never” to loop a single clip without rotating.",
         )
 
         def _sync_backdrop_deps(mode: str) -> None:
             scene_row.setEnabled(mode == "scene")
-            video_row.setEnabled(mode == "video")
+            video_section.setEnabled(mode == "video")
             rotate_row.setEnabled(mode == "video")
 
         v.addWidget(self._radio_row(
@@ -1032,7 +1023,7 @@ class AnkiDesignSettingsPage(QWidget):
         ))
         _sync_backdrop_deps(self._g("backdrop", "scene"))
         v.addWidget(scene_row)
-        v.addWidget(video_row)
+        v.addWidget(video_section)
         v.addWidget(rotate_row)
 
         def feature_row(key: str, label: str, default: bool, hint: str) -> QWidget:
@@ -1497,6 +1488,77 @@ class AnkiDesignSettingsPage(QWidget):
         )
         return _field_row(label, combo, hint), combo
 
+    def _duration_row(self, key: str, default: int, label: str,
+                       hint: Optional[str] = None) -> QWidget:
+        """A real duration input — value spinbox + seconds/minutes/hours
+        unit combo — plus a "Never" checkbox for the 0-means-loop-forever
+        case, replacing what used to be a fixed preset dropdown so any
+        value the user actually wants (47s, 90min, …) is reachable, not
+        just the five presets that shipped. Written to config as a plain
+        integer count of seconds; the floor/ceiling clamp itself lives in
+        nature.rotate_seconds, not here, so this only has to keep the
+        spinbox+combo product in Int32 range and let the render-time
+        clamp do the rest (documented in `hint`, not silently enforced
+        here, so a typed 2 shows as 2 until it's actually used)."""
+        current = self._g(key, default)
+        try:
+            current = int(current)
+        except (TypeError, ValueError):
+            current = default
+        is_never = current <= 0
+
+        box = QWidget()
+        h = QHBoxLayout(box)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(8)
+
+        spin = QSpinBox()
+        spin.setRange(1, 86400)
+        unit = QComboBox()
+        unit.addItem("Seconds", 1)
+        unit.addItem("Minutes", 60)
+        unit.addItem("Hours", 3600)
+        never_cb = QCheckBox("Never (loop one clip)")
+
+        # Pick the coarsest unit that divides the current value evenly, so
+        # a config of 3600 shows as "1 Hour" rather than "3600 Seconds" —
+        # purely a display nicety; the stored value is always in seconds.
+        basis = current if not is_never else default
+        if basis % 3600 == 0 and basis // 3600 >= 1:
+            val, mult_idx = basis // 3600, 2
+        elif basis % 60 == 0 and basis // 60 >= 1:
+            val, mult_idx = basis // 60, 1
+        else:
+            val, mult_idx = basis, 0
+        spin.setValue(max(1, min(86400, val)))
+        unit.setCurrentIndex(mult_idx)
+        never_cb.setChecked(is_never)
+        spin.setEnabled(not is_never)
+        unit.setEnabled(not is_never)
+
+        def _commit() -> None:
+            if never_cb.isChecked():
+                self._set(key, 0)
+            else:
+                mult = int(unit.currentData())
+                self._set(key, int(spin.value()) * mult)
+
+        def _toggle_never(checked: bool) -> None:
+            spin.setEnabled(not checked)
+            unit.setEnabled(not checked)
+            _commit()
+
+        spin.valueChanged.connect(lambda _v: _commit())
+        unit.currentIndexChanged.connect(lambda _i: _commit())
+        never_cb.toggled.connect(_toggle_never)
+
+        h.addWidget(spin)
+        h.addWidget(unit)
+        h.addSpacing(12)
+        h.addWidget(never_cb)
+        h.addStretch(1)
+        return _field_row(label, box, hint)
+
     def _video_choices(self) -> Tuple[List[Tuple[Any, str]], str]:
         """Options + hint for the video-selection combo, built from
         ``user_files/nature/index.json`` at dialog-open time — a curation
@@ -1520,6 +1582,179 @@ class AnkiDesignSettingsPage(QWidget):
         for entry in videos:
             options.append((entry["file"], entry.get("title") or entry["file"]))
         return options, "Which clip(s) play when Backdrop is Nature video."
+
+    def _video_selection_section(self) -> QWidget:
+        """Quick-pick combo (shuffle / one biome / one file) plus a
+        scrollable checkbox list of every clip in the library, grouped
+        under biome headers. The two controls always agree with config
+        and with each other:
+
+        - Checking (or unchecking down to a non-empty subset of) any clip
+          switches `video_selection` to the explicit `{"mode": "custom",
+          "files": [...]}` form and flips the combo to a synthetic
+          "Custom (checked below)" entry, so the two never silently
+          disagree about which mode is actually active.
+        - Picking anything else from the combo clears every checkbox
+          (left checked, they'd look active but be ignored) and reverts
+          `video_selection` to that plain string.
+        - Unchecking every box falls back to "Shuffle all", matching
+          nature.filtered_for_selection's own empty-selection fallback.
+
+        Bulk toggles (Select all / a biome header) block each child
+        checkbox's `toggled` signal while setting it and commit once at
+        the end, so checking 40 clips writes config once, not 40 times."""
+        CUSTOM = "__custom__"
+        videos: List[Dict[str, str]] = []
+        if _nature is not None:
+            try:
+                videos = _nature.read_index()
+            except Exception:
+                videos = []
+
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 6, 0, 8)
+        outer.setSpacing(4)
+
+        lbl = QLabel("Nature video")
+        lbl.setProperty("role", "field")
+        outer.addWidget(lbl)
+
+        raw = self._g("video_selection", "shuffle")
+        normalized = (
+            _nature.normalize_selection(raw, videos)
+            if _nature is not None else "shuffle"
+        )
+        is_custom = isinstance(normalized, dict) and normalized.get("mode") == "custom"
+        custom_files = set(normalized.get("files") or []) if is_custom else set()
+
+        video_choices, video_hint = self._video_choices()
+        combo = QComboBox()
+        quick_current = "shuffle" if is_custom else normalized
+        opts = list(video_choices)
+        values = [o[0] for o in opts]
+        if quick_current not in values:
+            opts = opts + [(quick_current, str(quick_current))]
+        opts = opts + [(CUSTOM, "Custom (checked below)")]
+        for value, opt_label in opts:
+            combo.addItem(opt_label, value)
+        idx = combo.findData(CUSTOM if is_custom else quick_current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        outer.addWidget(combo)
+
+        hint = QLabel(
+            video_hint + " Check specific clips below to build an exact "
+            "rotation; picking an option above clears the checkboxes."
+        )
+        hint.setProperty("role", "hint")
+        hint.setWordWrap(True)
+        outer.addWidget(hint)
+
+        if not videos:
+            return container
+
+        by_biome: Dict[str, List[Dict[str, str]]] = {}
+        for entry in videos:
+            key = entry.get("biome") or "other"
+            by_biome.setdefault(key, []).append(entry)
+
+        checkboxes: List[QCheckBox] = []
+        biome_groups: List[Tuple[QCheckBox, List[QCheckBox]]] = []
+
+        list_widget = QWidget()
+        lv = QVBoxLayout(list_widget)
+        lv.setContentsMargins(4, 4, 4, 4)
+        lv.setSpacing(6)
+
+        select_all_cb = QCheckBox("Select all")
+        lv.addWidget(select_all_cb)
+
+        def _current_files() -> List[str]:
+            return [cb.property("file") for cb in checkboxes if cb.isChecked()]
+
+        def _sync_headers() -> None:
+            files = _current_files()
+            select_all_cb.blockSignals(True)
+            select_all_cb.setChecked(bool(files) and len(files) == len(checkboxes))
+            select_all_cb.blockSignals(False)
+            for header_cb, members in biome_groups:
+                header_cb.blockSignals(True)
+                checked = [cb for cb in members if cb.isChecked()]
+                header_cb.setChecked(bool(members) and len(checked) == len(members))
+                header_cb.blockSignals(False)
+
+        def _commit() -> None:
+            files = _current_files()
+            combo.blockSignals(True)
+            if files:
+                combo.setCurrentIndex(combo.findData(CUSTOM))
+                self._set("video_selection", {"mode": "custom", "files": files})
+            else:
+                idx = combo.findData("shuffle")
+                combo.setCurrentIndex(idx if idx >= 0 else 0)
+                self._set("video_selection", "shuffle")
+            combo.blockSignals(False)
+            _sync_headers()
+
+        def _bulk_set(members: List[QCheckBox], checked: bool) -> None:
+            for cb in members:
+                cb.blockSignals(True)
+                cb.setChecked(checked)
+                cb.blockSignals(False)
+            _commit()
+
+        def _on_combo_changed(_i: int) -> None:
+            value = combo.currentData()
+            if value == CUSTOM:
+                return
+            for cb in checkboxes:
+                cb.blockSignals(True)
+                cb.setChecked(False)
+                cb.blockSignals(False)
+            _sync_headers()
+            self._set("video_selection", value)
+
+        for biome in _nature.biomes(videos):
+            members = by_biome.get(biome, [])
+            header_cb = QCheckBox(biome.title())
+            header_cb.setProperty("role", "field")
+            lv.addWidget(header_cb)
+            member_boxes: List[QCheckBox] = []
+            for entry in members:
+                cb = QCheckBox(entry.get("title") or entry["file"])
+                cb.setProperty("file", entry["file"])
+                cb.setChecked(entry["file"] in custom_files)
+                indent = QWidget()
+                ih = QHBoxLayout(indent)
+                ih.setContentsMargins(20, 0, 0, 0)
+                ih.addWidget(cb)
+                lv.addWidget(indent)
+                checkboxes.append(cb)
+                member_boxes.append(cb)
+            biome_groups.append((header_cb, member_boxes))
+
+        # Wire signals only after every checkbox exists with its correct
+        # initial state, so building the list at dialog-open time never
+        # itself writes config.
+        for cb in checkboxes:
+            cb.toggled.connect(lambda _checked: _commit())
+        select_all_cb.toggled.connect(lambda checked: _bulk_set(checkboxes, checked))
+        for header_cb, members in biome_groups:
+            header_cb.toggled.connect(
+                lambda checked, m=members: _bulk_set(m, checked)
+            )
+        combo.currentIndexChanged.connect(_on_combo_changed)
+
+        _sync_headers()
+        lv.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFixedHeight(200)
+        scroll.setWidget(list_widget)
+        outer.addWidget(scroll)
+
+        return container
 
     def _bg_row(self, key: str, label: str,
                 presets: List[Tuple[str, str]], custom_default: str,

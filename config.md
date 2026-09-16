@@ -55,14 +55,24 @@ in this file are the raw form the settings page writes.
   `"file"` entries in `user_files/nature/index.json` (e.g.
   `"ocean/humpback-whale.webm"`) pins that single clip, which then just
   loops on its own — **video_rotate_seconds** has nothing to rotate to.
-  A biome no longer curated, or a file that's been deleted, falls back to
-  `"shuffle"` rather than rendering nothing.
+  An object of the form `{"mode": "custom", "files": ["ocean/x.webm",
+  "arctic/y.webm"]}` — what Settings' checkbox list writes — rotates
+  among exactly those clips, in library order, regardless of the order
+  they're listed here. A biome no longer curated, a file that's been
+  deleted, or a custom list whose files are all gone, falls back to
+  `"shuffle"` rather than rendering nothing; a custom list with some
+  files missing just drops those and keeps the rest.
 - **video_rotate_seconds**: how long each clip plays before crossfading to
-  the next, `300` (5 minutes) by default. Clamped to 5..86400 seconds;
-  `0` is the one exception — it means "never rotate," and plays the first
-  clip's own loop indefinitely. Ignored when **video_selection** pins a
-  single file, when **backdrop** is not `"video"`, or when only one clip
-  matches the current selection (nothing to rotate to either way).
+  the next, `300` (5 minutes) by default. Any positive integer of seconds
+  is accepted — Settings' duration field lets you type a value in
+  seconds, minutes or hours and stores the total in seconds — but it's
+  clamped to 5..86400 (a day) on use; `0` is the one exception — it means
+  "never rotate," and plays the first clip's own loop indefinitely. A
+  typed value below 5 is not rejected, just rounded up to 5 when the
+  backdrop reads it, so a `2` in this file behaves like a `5`. Ignored
+  when **video_selection** pins a single file, when **backdrop** is not
+  `"video"`, or when only one clip matches the current selection
+  (nothing to rotate to either way).
 - **backdrop_motion**: which "reduce motion" settings the backdrop obeys.
   `"always"` (the default) obeys your operating system's reduced-motion
   setting only, which is what every other animation in this add-on does.
