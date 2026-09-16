@@ -122,6 +122,63 @@ def _background_rules(cfg: Dict[str, Any]) -> str:
     return out
 
 
+_BACKDROP_CHOICES = ("off", "aurora", "scene")
+_BACKDROP_INTENSITIES = ("subtle", "cinematic")
+
+
+def _backdrop_mode(cfg: Dict[str, Any]) -> str:
+    """Which backdrop the home and overview screens get: nothing, the
+    abstract aurora wash, or the full layered landscape. Unknown values
+    fall back to the default rather than blanking the page."""
+    choice = str(cfg.get("backdrop", "scene") or "scene")
+    return choice if choice in _BACKDROP_CHOICES else "scene"
+
+
+def _backdrop_intensity(cfg: Dict[str, Any]) -> str:
+    choice = str(cfg.get("backdrop_intensity", "cinematic") or "cinematic")
+    return choice if choice in _BACKDROP_INTENSITIES else "cinematic"
+
+
+def _sky_phase(hour: int) -> str:
+    """Time of day as one of dawn/day/dusk/night, for the scene palette.
+
+    Computed here rather than in the page because the deck browser
+    re-renders on every state change, so the attribute is refreshed for
+    free — where JS would need a timer, and this add-on has no loop or
+    visibility-guard pattern to hang one off. Fixed hours rather than real
+    sunrise/sunset: no location data, and the point is a mood, not an
+    almanac. Hours outside 0-23 wrap, so a bad clock can't produce a
+    phase the stylesheet has no palette for.
+    """
+    h = int(hour) % 24
+    if 5 <= h < 9:
+        return "dawn"
+    if 9 <= h < 17:
+        return "day"
+    if 17 <= h < 21:
+        return "dusk"
+    return "night"
+
+
+# Layer order is paint order: sky glow and stars behind the ranges, the
+# scrim over all of them so deck rows and the heatmap keep their contrast.
+# Pure decoration with nothing to announce, so it leaves the a11y tree.
+# Contains no `<center>`, which the .ba-home / .ba-over tagging below finds
+# by string replacement.
+_SCENE_HTML = (
+    '<div class="ba-scene" aria-hidden="true">'
+    '<div class="ba-scene-stars"></div>'
+    '<div class="ba-scene-orb"></div>'
+    '<div class="ba-scene-clouds"></div>'
+    '<div class="ba-scene-haze"></div>'
+    '<div class="ba-scene-range ba-scene-far"></div>'
+    '<div class="ba-scene-range ba-scene-mid"></div>'
+    '<div class="ba-scene-range ba-scene-near"></div>'
+    '<div class="ba-scene-scrim"></div>'
+    '</div>'
+)
+
+
 def _js_opts(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Feature flags handed to the page scripts as `window.__baOpts`.
     Every key mirrors a Settings toggle; the JS treats a missing key as
@@ -288,6 +345,13 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
     if theme_pref in ("light", "dark"):
         extras += f"d.dataset.rfTheme='{theme_pref}';"
     extras += f"d.dataset.rfDensity='{density}';"
+    # Backdrop palette knobs. `data-rf-sky` is the time of day at render
+    # time; scene.css swaps the whole palette off it, so no clock runs in
+    # the page. Emitted on every surface (not just the home page) so the
+    # attributes are already correct if a screen later grows a backdrop.
+    extras += f"d.dataset.rfBackdrop='{_backdrop_mode(cfg)}';"
+    extras += f"d.dataset.rfIntensity='{_backdrop_intensity(cfg)}';"
+    extras += f"d.dataset.rfSky='{_sky_phase(datetime.datetime.now().hour)}';"
     if isinstance(context, Reviewer) or _is(context, _PreviewCtx):
         # "native" hands the card's typography/colours back to the note
         # type; reviewer.css gates every content-affecting rule on it.
@@ -371,6 +435,20 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             )
         except Exception:
             pass
+    # Scene backdrop — deck browser and overview only, the same boundary the
+    # aurora draws: motion behind a card you are trying to recall is a
+    # distraction, so the reviewer keeps its flat paper. The stylesheet is
+    # loaded in every mode because it also owns the "off" rules that put the
+    # aurora back to a plain static glow.
+    if isinstance(context, (DeckBrowser, Overview)):
+        web_content.css.append(f"{WEB}/scene.css")
+        if _backdrop_mode(cfg) == "scene":
+            # Prepended after the <center> tagging above, so the markup
+            # here can never intercept that replacement.
+            try:
+                web_content.body = _SCENE_HTML + web_content.body
+            except Exception:
+                pass
     # Sidebar nav — deck browser + overview only. The reviewer gets full
     # focus (no sidebar) so the card area isn't competing with chrome.
     if cfg.get("sidebar_nav", True) and isinstance(

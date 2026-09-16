@@ -4,6 +4,8 @@
   "background_light": "",
   "background_dark": "",
   "density": "comfortable",
+  "backdrop": "scene",
+  "backdrop_intensity": "cinematic",
   "sidebar_nav": true,
   "show_today": true,
   "show_streak": true,

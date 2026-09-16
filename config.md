@@ -12,6 +12,20 @@ in this file are the raw form the settings page writes.
   theme. `""` keeps the default paper (light) / ink (dark); a hex such as
   `"#ffffff"` replaces it.
 - **density** — `"compact"`, `"cozy"`, or `"comfortable"`.
+- **backdrop** — what sits behind the deck list and the deck overview.
+  `"scene"` (default) draws a layered landscape: sky, stars, moon, drifting
+  cloud bank and three mountain ranges, each on its own slow drift. Its
+  palette follows the clock, shifting between dawn, day, dusk and night.
+  `"aurora"` keeps just the older abstract wash of drifting colour.
+  `"off"` leaves the flat page glow and nothing else. The reviewer is never
+  given a backdrop in any mode, deliberately: motion behind a card you are
+  trying to recall is a distraction. Nothing is downloaded or bundled for
+  this — the whole scene is gradients and clip paths in `web/scene.css`.
+- **backdrop_intensity** — `"cinematic"` (default) or `"subtle"`, which
+  halves the backdrop's strength without changing what it draws. Ignored
+  when **backdrop** is `"off"`. Light themes are damped again on top of
+  this, since the scene has to sit under dark text rather than glow out of
+  a near-black page.
 - **font_serif** / **font_sans** — optional display fonts prepended to the
   built-in stacks (e.g. `"Iowan Old Style"`). `""` uses the defaults.
 
