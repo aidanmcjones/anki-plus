@@ -65,9 +65,14 @@ except Exception:
 
 ADDON_DIR = os.path.basename(os.path.dirname(__file__))
 WEB = f"/_addons/{ADDON_DIR}/web"
+# user_files/ is Anki's conventional per-addon data dir: it survives add-on
+# updates (unlike the rest of the tree, which gets replaced wholesale), so
+# it's where the nature-video library lives — curated separately from this
+# checkout and never bundled into the .ankiaddon. See nature.py.
+USER_FILES = f"/_addons/{ADDON_DIR}/user_files"
 
 # Let Anki serve our static files to the embedded web views.
-mw.addonManager.setWebExports(__name__, r"web/.*")
+mw.addonManager.setWebExports(__name__, r"(web|user_files)/.*")
 
 
 def _config() -> Dict[str, Any]:
@@ -122,7 +127,7 @@ def _background_rules(cfg: Dict[str, Any]) -> str:
     return out
 
 
-_BACKDROP_CHOICES = ("off", "aurora", "scene")
+_BACKDROP_CHOICES = ("off", "black", "aurora", "scene", "video")
 _BACKDROP_INTENSITIES = ("subtle", "cinematic")
 
 
@@ -261,6 +266,51 @@ _SCENE_HTML = (
     '</div>'
 )
 
+_VIDEO_EMPTY_WARNED = False
+
+
+def _video_state(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolves the nature-video library plus the `video_selection` /
+    `video_rotate_seconds` config into what both `_js_opts` and the
+    injection branch need — one call so index.json is read once per
+    render and the two agree exactly on what's playable."""
+    from . import nature as _nature
+    videos_all = _nature.read_index()
+    selection = _nature.normalize_selection(
+        cfg.get("video_selection"), videos_all
+    )
+    filtered = _nature.filtered_for_selection(videos_all, selection)
+    return {
+        "videos_all": videos_all,
+        "selection": selection,
+        "filtered": filtered,
+        "rotate_seconds": _nature.rotate_seconds(cfg.get("video_rotate_seconds")),
+    }
+
+
+# Layer order mirrors `_SCENE_HTML`: a fixed aria-hidden container behind
+# the UI, two stacked <video> elements so video-backdrop.js can crossfade
+# between clips (swap the hidden one's source, fade it up, swap which is
+# "front") without a black flash, then a scrim mirroring `.ba-scene-scrim`
+# so deck text keeps its contrast over whatever the clip is doing.
+#
+# The first clip's URL is set server-side, same reasoning as
+# `_scene_variant`: the very first paint should already show something
+# playing rather than wait on the page script to pick one.
+def _video_html(initial_url: str) -> str:
+    src_attr = (
+        f' src="{html.escape(initial_url, quote=True)}"' if initial_url else ""
+    )
+    return (
+        '<div class="ba-video" aria-hidden="true">'
+        f'<video class="ba-video-el ba-video-a" muted autoplay loop '
+        f'playsinline preload="auto"{src_attr}></video>'
+        '<video class="ba-video-el ba-video-b" muted autoplay loop '
+        'playsinline preload="auto"></video>'
+        '<div class="ba-video-scrim"></div>'
+        '</div>'
+    )
+
 
 def _js_opts(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Feature flags handed to the page scripts as `window.__baOpts`.
@@ -269,6 +319,7 @@ def _js_opts(cfg: Dict[str, Any]) -> Dict[str, Any]:
     startup = str(cfg.get("deck_tree_startup", "remember") or "remember")
     if startup not in ("remember", "expanded", "collapsed"):
         startup = "remember"
+    video_state = _video_state(cfg)
     return {
         "cmdk": bool(cfg.get("cmdk", True)),
         "skipOverview": bool(cfg.get("skip_overview", True)),
@@ -280,6 +331,23 @@ def _js_opts(cfg: Dict[str, Any]) -> Dict[str, Any]:
             "list": _scene_list(cfg),
             "motion": _backdrop_motion_mode(cfg),
             "shuffleSeconds": _scene_shuffle_seconds(cfg),
+        },
+        # video-backdrop.js reads this the same way scene-shuffle.js reads
+        # "scene" above: the filtered, resolved list IS the rotation —
+        # Python already applied `video_selection`, so the page never has
+        # to know what a biome or a pinned file even is.
+        "video": {
+            "videos": [
+                {
+                    "url": f"{USER_FILES}/nature/{v['file']}",
+                    "file": v["file"],
+                    "biome": v["biome"],
+                    "title": v["title"],
+                }
+                for v in video_state["filtered"]
+            ],
+            "rotateSeconds": video_state["rotate_seconds"],
+            "motion": _backdrop_motion_mode(cfg),
         },
         "deckList": {
             "startup": startup,
@@ -555,6 +623,43 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             # The only script the backdrop has, and only on these two
             # screens: the reviewer gets no backdrop and no motion at all.
             web_content.js.append(f"{WEB}/scene-shuffle.js")
+        elif _backdrop_mode(cfg) == "video":
+            video_state = _video_state(cfg)
+            filtered = video_state["filtered"]
+            if filtered:
+                web_content.css.append(f"{WEB}/video-backdrop.css")
+                try:
+                    day_idx = datetime.date.today().toordinal() % len(filtered)
+                    initial_url = (
+                        f"{USER_FILES}/nature/{filtered[day_idx]['file']}"
+                    )
+                    web_content.body = (
+                        _video_html(initial_url) + web_content.body
+                    )
+                except Exception:
+                    pass
+                web_content.js.append(f"{WEB}/video-backdrop.js")
+            else:
+                # No library yet (or index.json is unreadable — already
+                # logged once by nature.read_index). Nothing is injected,
+                # so the page falls back to whatever scene.css draws for
+                # a mode it has no rule for: the plain aurora wash, same
+                # as before this feature existed. Logged once, separately
+                # from the read-failure case, so choosing "Nature video"
+                # with an empty library says so specifically.
+                global _VIDEO_EMPTY_WARNED
+                if not _VIDEO_EMPTY_WARNED:
+                    _VIDEO_EMPTY_WARNED = True
+                    try:
+                        import sys
+                        print(
+                            "[anki-design] backdrop is set to \"video\" but "
+                            "user_files/nature has no clips; showing the "
+                            "default backdrop instead.",
+                            file=sys.stderr,
+                        )
+                    except Exception:
+                        pass
     # Sidebar nav — deck browser + overview only. The reviewer gets full
     # focus (no sidebar) so the card area isn't competing with chrome.
     if cfg.get("sidebar_nav", True) and isinstance(

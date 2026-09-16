@@ -1,0 +1,110 @@
+/* Anki Design — nature-video backdrop for the deck browser and overview.
+
+   Same stage convention as scene.css's `.ba-scene`: fixed, inset to the
+   viewport (not the document, so scrolling the deck list can't drag the
+   footage with it), z-index -1 so it sits behind the UI but in front of
+   the aurora. Only loaded when `__init__.py` has actually injected a
+   `.ba-video` container, which only happens when the nature-video library
+   has at least one usable clip — so this file never has to style an empty
+   state.
+
+   Two stacked <video> elements (`.ba-video-a` / `.ba-video-b`) rather than
+   one: video-backdrop.js crossfades between clips by loading the next one
+   into whichever element is currently hidden, then fading it in and the
+   old one out, which is what avoids the black flash a single-element
+   src-swap would cause. Both elements always fill the stage; only opacity
+   tells them apart. */
+
+.ba-video {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+  /* Near-black rather than pure #000: a video element with no frame
+     painted yet (still buffering, or its source 404ed and never got
+     replaced) shows this instead of a hard black hole. */
+  background: #05060a;
+}
+
+.ba-video-el {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  /* Compositor-only property, same reasoning as the scene drifts: a
+     crossfade that only ever touches `opacity` costs nothing to paint and
+     stops for free the moment the webview isn't painting at all. */
+  transition: opacity 900ms ease;
+}
+
+/* video-backdrop.js toggles this on whichever element is meant to be on
+   top. Both can be transiently "front" during a crossfade — that's the
+   point — so this is additive, not exclusive. */
+.ba-video-el.ba-video-front {
+  opacity: 1;
+}
+
+/* Same treatment scene.css gives `.ba-scene-scrim`: a paper-tinted wash so
+   deck rows and the heatmap keep their contrast over moving footage.
+   Reads `--rf-paper` for the same reason — a background override should
+   drag the scrim along with it rather than leaving text stranded on a
+   scrim tuned for the paper the user replaced. */
+.ba-video-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(64% 54% at 50% 32%,
+      color-mix(in oklab, var(--rf-paper) 82%, transparent),
+      transparent 78%),
+    linear-gradient(to bottom,
+      color-mix(in oklab, var(--rf-paper) 58%, transparent) 0%,
+      color-mix(in oklab, var(--rf-paper) 22%, transparent) 30%,
+      transparent 46%);
+}
+
+@media (max-height: 820px) {
+  .ba-video-scrim {
+    background:
+      radial-gradient(78% 66% at 50% 34%,
+        color-mix(in oklab, var(--rf-paper) 88%, transparent),
+        transparent 84%),
+      linear-gradient(to bottom,
+        color-mix(in oklab, var(--rf-paper) 68%, transparent) 0%,
+        color-mix(in oklab, var(--rf-paper) 32%, transparent) 44%,
+        transparent 64%);
+  }
+}
+
+/* Light mode: the same footage has to sit under dark ink instead of
+   glowing out of a near-black page, so it's damped rather than recoloured
+   — same bargain scene.css makes for `.ba-scene`. */
+:root[data-rf-theme="light"] .ba-video { opacity: .46; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-rf-theme="dark"]) .ba-video { opacity: .46; }
+}
+
+/* In video mode the aurora becomes the page's own base glow and has to
+   drop behind the footage, the same swap scene.css does for scene mode.
+   Without this it keeps the -1 it shares with the stage and, being body's
+   own ::after in tree order, paints after it — its blur and paper scrim
+   would wash straight over the video. */
+:root[data-rf-backdrop="video"] body:has(.ba-home)::before,
+:root[data-rf-backdrop="video"] body:has(.ba-over)::before,
+:root[data-rf-backdrop="video"] body:has(.ba-home)::after,
+:root[data-rf-backdrop="video"] body:has(.ba-over)::after {
+  z-index: -2;
+}
+
+/* Reduced motion (OS-level, or Anki's own when `backdrop_motion` is
+   "auto") is entirely video-backdrop.js's job, not this stylesheet's:
+   the script pauses playback and holds the first frame rather than
+   removing the element, so "reduce motion" still shows a landscape —
+   just a still one, same contract scene.css documents for the scene
+   drifts. There is no CSS rule for it here because pausing a <video> and
+   never arming the rotation timer are both script actions with nothing
+   for a selector to gate; the one-time crossfade into that first frame is
+   not the kind of motion these preferences exist to suppress. */

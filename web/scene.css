@@ -450,6 +450,22 @@
   display: none;
 }
 
+/* Black: genuinely black, not "off"'s flat theme glow. No scene markup and
+   no video markup are injected for this mode — it's the one backdrop that
+   is nothing at all — so this is the entire implementation: force the page
+   background itself to #000 and drop the aurora layers the same way "off"
+   does, so nothing paints over the black. */
+:root[data-rf-backdrop="black"] body:has(.ba-home),
+:root[data-rf-backdrop="black"] body:has(.ba-over) {
+  background: #000 !important;
+}
+:root[data-rf-backdrop="black"] body:has(.ba-home)::before,
+:root[data-rf-backdrop="black"] body:has(.ba-over)::before,
+:root[data-rf-backdrop="black"] body:has(.ba-home)::after,
+:root[data-rf-backdrop="black"] body:has(.ba-over)::after {
+  display: none;
+}
+
 /* Motion is the decoration here, not the scene. Everything stops; nothing
    disappears, so the landscape is still a landscape, just a still one.
 
