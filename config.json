@@ -8,6 +8,8 @@
   "backdrop_intensity": "cinematic",
   "scene": "shuffle",
   "scene_shuffle_seconds": 10,
+  "video_selection": "shuffle",
+  "video_rotate_seconds": 300,
   "backdrop_motion": "always",
   "sidebar_nav": true,
   "show_today": true,

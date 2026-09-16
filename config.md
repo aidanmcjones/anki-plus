@@ -17,10 +17,16 @@ in this file are the raw form the settings page writes.
   cloud bank and three mountain ranges, each on its own slow drift. Its
   palette follows the clock, shifting between dawn, day, dusk and night.
   `"aurora"` keeps just the older abstract wash of drifting colour.
-  `"off"` leaves the flat page glow and nothing else. The reviewer is never
-  given a backdrop in any mode, deliberately: motion behind a card you are
-  trying to recall is a distraction. Nothing is downloaded or bundled for
-  this — the whole scene is gradients and clip paths in `web/scene.css`.
+  `"video"` plays a looping nature clip from your `user_files/nature/`
+  library instead (see **video_selection** below); with no library present
+  it quietly falls back to the aurora wash rather than a blank page.
+  `"black"` is a flat `#000` background and nothing else — no glow, no
+  motion. `"off"` leaves the flat page glow and nothing else. The reviewer
+  is never given a backdrop in any mode, deliberately: motion behind a card
+  you are trying to recall is a distraction. Nothing is downloaded or
+  bundled for the scene backdrop — it's gradients and clip paths in
+  `web/scene.css`; the video backdrop plays whatever `.mp4` files you (or
+  a curation tool) put in `user_files/nature/`, and ships none itself.
 - **backdrop_intensity** — `"cinematic"` (default) or `"subtle"`, which
   halves the backdrop's strength without changing what it draws. Ignored
   when **backdrop** is `"off"`. Light themes are damped again on top of
@@ -40,6 +46,21 @@ in this file are the raw form the settings page writes.
   Ignored when **scene** pins a single scene, when **backdrop** is not
   `"scene"`, and when the system asks for reduced motion, in which case the
   first scene simply stays up.
+- **video_selection**: which clip(s) the **backdrop** plays when it is
+  `"video"`. `"shuffle"` (default) rotates through the whole
+  `user_files/nature/` library. `"biome:<name>"` (e.g. `"biome:ocean"`)
+  restricts the rotation to one biome. A bare value naming one of the
+  `"file"` entries in `user_files/nature/index.json` (e.g.
+  `"ocean/humpback-whale.mp4"`) pins that single clip, which then just
+  loops on its own — **video_rotate_seconds** has nothing to rotate to.
+  A biome no longer curated, or a file that's been deleted, falls back to
+  `"shuffle"` rather than rendering nothing.
+- **video_rotate_seconds**: how long each clip plays before crossfading to
+  the next, `300` (5 minutes) by default. Clamped to 5..86400 seconds;
+  `0` is the one exception — it means "never rotate," and plays the first
+  clip's own loop indefinitely. Ignored when **video_selection** pins a
+  single file, when **backdrop** is not `"video"`, or when only one clip
+  matches the current selection (nothing to rotate to either way).
 - **backdrop_motion**: which "reduce motion" settings the backdrop obeys.
   `"always"` (the default) obeys your operating system's reduced-motion
   setting only, which is what every other animation in this add-on does.
