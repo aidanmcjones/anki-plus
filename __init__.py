@@ -139,6 +139,60 @@ def _backdrop_intensity(cfg: Dict[str, Any]) -> str:
     return choice if choice in _BACKDROP_INTENSITIES else "cinematic"
 
 
+_SCENES = (
+    "peaks", "dunes", "forest", "canyon", "lake",
+    "volcano", "isles", "tundra", "spires", "ruins",
+)
+# Below 2s the swap reads as a strobe rather than a change of scene; above an
+# hour it has stopped being a rotation at all. The floor is the load-bearing
+# half: a hand-edited 0 would otherwise hand the page a setInterval that never
+# yields.
+_SCENE_SECONDS_DEFAULT = 10
+_SCENE_SECONDS_MIN = 2
+_SCENE_SECONDS_MAX = 3600
+
+
+def _scene_choice(cfg: Dict[str, Any]) -> str:
+    """The raw `scene` setting, reduced to either a known scene name or
+    `"shuffle"`. Junk and missing values land on shuffle rather than on a
+    name no stylesheet answers to, which would render the default peaks
+    silhouettes under a `data-rf-scene` nobody matches."""
+    choice = str(cfg.get("scene", "shuffle") or "shuffle")
+    return choice if choice in _SCENES else "shuffle"
+
+
+def _scene_variant(cfg: Dict[str, Any], day_ordinal: int) -> str:
+    """Which landscape the server renders first.
+
+    Pinned to the configured scene if there is one. Otherwise the pick is a
+    function of the date, not of the render: the deck browser re-renders on
+    every state change, and a backdrop that reshuffled each time you hit
+    Escape would be a fidget toy. The page script takes over the shuffling
+    from here; this only has to be stable and non-blank.
+    """
+    choice = _scene_choice(cfg)
+    if choice != "shuffle":
+        return choice
+    return _SCENES[int(day_ordinal) % len(_SCENES)]
+
+
+def _scene_shuffle_seconds(cfg: Dict[str, Any]) -> int:
+    try:
+        secs = int(cfg.get("scene_shuffle_seconds", _SCENE_SECONDS_DEFAULT))
+    except (TypeError, ValueError):
+        secs = _SCENE_SECONDS_DEFAULT
+    return max(_SCENE_SECONDS_MIN, min(_SCENE_SECONDS_MAX, secs))
+
+
+def _scene_list(cfg: Dict[str, Any]) -> list:
+    """What the page is allowed to cycle through. A pinned scene collapses
+    this to a single entry, which is how scene-shuffle.js learns to stand
+    still: one list to keep in sync instead of a list plus a flag that can
+    disagree with it."""
+    choice = _scene_choice(cfg)
+    return list(_SCENES) if choice == "shuffle" else [choice]
+
+
 def _sky_phase(hour: int) -> str:
     """Time of day as one of dawn/day/dusk/night, for the scene palette.
 
@@ -165,15 +219,24 @@ def _sky_phase(hour: int) -> str:
 # Pure decoration with nothing to announce, so it leaves the a11y tree.
 # Contains no `<center>`, which the .ba-home / .ba-over tagging below finds
 # by string replacement.
+#
+# `aux` and `motes` are unpainted and belong to whichever scene wants them:
+# aux behind the ridges (a lava glow, a floating mass), motes in front of
+# them but under the scrim (snow, embers, fireflies). They are here rather
+# than added per scene because every scene shares this one markup string,
+# and an empty div costs nothing to the scenes that ignore it. Every scene
+# in `web/scene.css` is one stylesheet away from depth without new DOM.
 _SCENE_HTML = (
     '<div class="ba-scene" aria-hidden="true">'
     '<div class="ba-scene-stars"></div>'
     '<div class="ba-scene-orb"></div>'
     '<div class="ba-scene-clouds"></div>'
+    '<div class="ba-scene-aux"></div>'
     '<div class="ba-scene-haze"></div>'
     '<div class="ba-scene-range ba-scene-far"></div>'
     '<div class="ba-scene-range ba-scene-mid"></div>'
     '<div class="ba-scene-range ba-scene-near"></div>'
+    '<div class="ba-scene-motes"></div>'
     '<div class="ba-scene-scrim"></div>'
     '</div>'
 )
@@ -189,6 +252,14 @@ def _js_opts(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "cmdk": bool(cfg.get("cmdk", True)),
         "skipOverview": bool(cfg.get("skip_overview", True)),
+        # scene-shuffle.js reads both rather than carrying its own copy, so
+        # a scene added to `_SCENES` reaches the page without touching the
+        # JS. A pinned scene arrives as a one-entry list, which the script
+        # treats as nothing to cycle.
+        "scene": {
+            "list": _scene_list(cfg),
+            "shuffleSeconds": _scene_shuffle_seconds(cfg),
+        },
         "deckList": {
             "startup": startup,
             "dragMove": bool(cfg.get("deck_drag_move", True)),
@@ -352,6 +423,13 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
     extras += f"d.dataset.rfBackdrop='{_backdrop_mode(cfg)}';"
     extras += f"d.dataset.rfIntensity='{_backdrop_intensity(cfg)}';"
     extras += f"d.dataset.rfSky='{_sky_phase(datetime.datetime.now().hour)}';"
+    # The landscape itself, rotated by date unless the user pinned one. Set
+    # server-side so the correct scene is up on the first paint; scene-
+    # shuffle.js only ever moves it on from here.
+    extras += (
+        "d.dataset.rfScene='"
+        f"{_scene_variant(cfg, datetime.date.today().toordinal())}';"
+    )
     if isinstance(context, Reviewer) or _is(context, _PreviewCtx):
         # "native" hands the card's typography/colours back to the note
         # type; reviewer.css gates every content-affecting rule on it.
@@ -435,20 +513,26 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             )
         except Exception:
             pass
-    # Scene backdrop — deck browser and overview only, the same boundary the
-    # aurora draws: motion behind a card you are trying to recall is a
-    # distraction, so the reviewer keeps its flat paper. The stylesheet is
-    # loaded in every mode because it also owns the "off" rules that put the
-    # aurora back to a plain static glow.
+    # Scene backdrop: deck browser and overview only, the same boundary the
+    # aurora draws. Motion behind a card you are trying to recall is a
+    # distraction, so the reviewer keeps its flat paper. The engine stylesheet
+    # is loaded in every mode because it also owns the "off" rules that put
+    # the aurora back to a plain static glow.
     if isinstance(context, (DeckBrowser, Overview)):
         web_content.css.append(f"{WEB}/scene.css")
         if _backdrop_mode(cfg) == "scene":
+            # The ten scenes are only worth their bytes when one is actually
+            # going to be drawn, so they load a step later than the engine.
+            web_content.css.append(f"{WEB}/scenes.css")
             # Prepended after the <center> tagging above, so the markup
             # here can never intercept that replacement.
             try:
                 web_content.body = _SCENE_HTML + web_content.body
             except Exception:
                 pass
+            # The only script the backdrop has, and only on these two
+            # screens: the reviewer gets no backdrop and no motion at all.
+            web_content.js.append(f"{WEB}/scene-shuffle.js")
     # Sidebar nav — deck browser + overview only. The reviewer gets full
     # focus (no sidebar) so the card area isn't competing with chrome.
     if cfg.get("sidebar_nav", True) and isinstance(

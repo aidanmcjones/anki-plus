@@ -26,6 +26,20 @@ in this file are the raw form the settings page writes.
   when **backdrop** is `"off"`. Light themes are damped again on top of
   this, since the scene has to sit under dark text rather than glow out of
   a near-black page.
+- **scene**: which landscape the **backdrop** draws when it is `"scene"`.
+  `"shuffle"` (default) rotates through all ten, starting on a scene picked
+  from the date so the page you open first is not the same one every
+  morning, then cycling while the screen stays open. Naming one instead
+  (`"peaks"`, `"dunes"`, `"forest"`, `"canyon"`, `"lake"`, `"volcano"`,
+  `"isles"`, `"tundra"`, `"spires"`, `"ruins"`) pins it and stops the
+  cycling entirely. Anything else falls back to `"shuffle"`. The hour still
+  sets the palette on top of whichever scene is up, so each of these looks
+  different at dawn, day, dusk and night.
+- **scene_shuffle_seconds**: how long each scene holds before the next one,
+  `10` by default. Clamped to 2..3600, so a hand-edited `0` cannot spin.
+  Ignored when **scene** pins a single scene, when **backdrop** is not
+  `"scene"`, and when the system asks for reduced motion, in which case the
+  first scene simply stays up.
 - **font_serif** / **font_sans** — optional display fonts prepended to the
   built-in stacks (e.g. `"Iowan Old Style"`). `""` uses the defaults.
 

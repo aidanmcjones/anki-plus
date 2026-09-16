@@ -1,9 +1,9 @@
-/* Anki Design — layered scene backdrop for the deck browser and overview.
+/* Anki Design - layered scene backdrop for the deck browser and overview.
 
    A fantasy landscape assembled out of gradients and clip paths: sky wash,
    star field, moon, cloud bank, haze, three mountain ranges, scrim. Each
    range is its own element drifting at its own rate, so the parallax comes
-   from the layers themselves rather than from a script — there is no JS
+   from the layers themselves rather than from a script. There is no JS
    here at all. Everything that moves moves on `transform` or `opacity`, the
    two properties the compositor can animate without repainting, which also
    means the webview stopping painting stops the animation for free. This
@@ -38,22 +38,50 @@
   --orb-size: 156px;
   --orb-x: 68%;
   /* Measured from the BOTTOM, so the orb hangs off the horizon rather than
-     off the top of the window. Composition is half the reason — an
+     off the top of the window. Composition is half the reason: an
      oversized moon low over the range is the whole look, and the bottom of
-     it tucking behind the far peaks is the point — but the other half is
+     it tucking behind the far peaks is the point. The other half is
      that the deck rows and heatmap grow downward from the top. Anchoring
      to the top put the disc straight through the middle of the heatmap;
      anchoring to the horizon leaves it where the sky is actually empty
      however tall the deck list happens to be. */
   --orb-b: 30%;
 
-  --range-far: #3a3f74;
-  --range-mid: #232a54;
-  --range-near: #0b0d20;
+  --phase-far: #3a3f74;
+  --phase-mid: #232a54;
+  --phase-near: #0b0d20;
 
   --haze: rgba(150, 140, 210, .34);
   --cloud: rgba(180, 170, 225, .18);
   --stars: 1;
+
+  /* The hour picks --phase-*; the scene then tints those into the colours
+     actually painted. Two names rather than one because a custom property
+     cannot be defined in terms of itself, and a forest still has to be
+     green at every hour rather than only at dusk. Default: no tint. */
+  --range-far: var(--phase-far);
+  --range-mid: var(--phase-mid);
+  --range-near: var(--phase-near);
+
+  /* Ridge heights and silhouettes, overridden per scene further down.
+     Defaults are "peaks": three jagged ranges stacked into the haze. */
+  --h-far: 46%;
+  --h-mid: 35%;
+  --h-near: 24%;
+  --clip-far: polygon(
+    0% 62%, 6% 47%, 12% 58%, 19% 35%, 26% 52%, 33% 39%, 41% 55%,
+    48% 29%, 56% 47%, 63% 37%, 71% 54%, 78% 41%, 86% 56%, 93% 44%,
+    100% 58%, 100% 100%, 0% 100%
+  );
+  --clip-mid: polygon(
+    0% 70%, 8% 51%, 15% 64%, 23% 43%, 31% 60%, 39% 37%, 47% 58%,
+    55% 45%, 63% 62%, 71% 41%, 80% 58%, 88% 47%, 100% 66%,
+    100% 100%, 0% 100%
+  );
+  --clip-near: polygon(
+    0% 76%, 10% 58%, 18% 71%, 28% 47%, 38% 67%, 48% 41%, 58% 63%,
+    68% 50%, 78% 69%, 88% 54%, 100% 73%, 100% 100%, 0% 100%
+  );
 
   /* Two independent dimmers multiplied together: one for the intensity
      setting, one for light mode. Kept as a product so choosing "subtle"
@@ -70,9 +98,9 @@
   --orb-core: #ffe9c4;
   --orb-edge: #f0a05a;
   --orb-halo: rgba(255, 170, 105, .34);
-  --range-far: #6a4a76;
-  --range-mid: #3d2a51;
-  --range-near: #150f26;
+  --phase-far: #6a4a76;
+  --phase-mid: #3d2a51;
+  --phase-near: #150f26;
   --haze: rgba(240, 150, 110, .34);
   --cloud: rgba(255, 190, 150, .22);
   --stars: .45;
@@ -87,9 +115,9 @@
   --orb-edge: #ffc98a;
   --orb-halo: rgba(255, 210, 150, .30);
   --orb-x: 26%;
-  --range-far: #6d5c93;
-  --range-mid: #3f3364;
-  --range-near: #161230;
+  --phase-far: #6d5c93;
+  --phase-mid: #3f3364;
+  --phase-near: #161230;
   --haze: rgba(250, 195, 150, .32);
   --cloud: rgba(255, 210, 180, .20);
   --stars: .35;
@@ -106,13 +134,31 @@
   --orb-size: 104px;
   /* A midday sun rides higher and smaller than a moon on the horizon. */
   --orb-b: 38%;
-  --range-far: #7fa5c8;
-  --range-mid: #4a6f9c;
-  --range-near: #24324f;
+  --phase-far: #7fa5c8;
+  --phase-mid: #4a6f9c;
+  --phase-near: #24324f;
   --haze: rgba(215, 235, 248, .40);
   --cloud: rgba(255, 255, 255, .30);
   --stars: 0;
 }
+
+/* ===================== SCENES =====================
+   The hour sets the palette; the scene sets the land. The two compose, so
+   ten silhouettes across four phases is forty distinct looks out of one
+   stylesheet and no art at all.
+
+   The scenes themselves live in `scenes.css`, loaded straight after this
+   file. That split is real rather than cosmetic: this file is the engine
+   and owns the stage, the layers and the rules, while a scene may only
+   override variables (`--clip-*`, `--h-*`, `--range-*`, and the palette)
+   and paint into the two free layers, `.ba-scene-aux` and
+   `.ba-scene-motes`.
+
+   `data-rf-scene` is set server-side by `_scene_variant` so the first paint
+   is already a real scene with no flash, then `scene-shuffle.js` cycles it.
+   Renaming a scene means touching `_SCENES` in `__init__.py` and its block
+   in `scenes.css` together. */
+
 
 /* ===================== STAGE =====================
    Fixed and inset so the scene is the window, not the document: scrolling
@@ -236,6 +282,17 @@
   to   { transform: translate3d(4%, 0, 0); }
 }
 
+/* ===================== AUX =====================
+   Unpainted, and deliberately so. Every scene shares one markup string in
+   `__init__.py`, so a scene that wants a lava glow, a floating island or a
+   second moon has nowhere to put it without either new DOM for all ten or
+   hijacking a layer that already means something. This is that nowhere: it
+   sits behind the haze and the ridges, and a scene that never mentions it
+   pays for one empty div. `::before` and `::after` are free too. */
+.ba-scene-aux {
+  inset: 0;
+}
+
 /* ===================== HAZE =====================
    The band where the ranges meet the sky. Distance reads as lost contrast
    far more than as lost detail, so this sits *under* the ranges and lets
@@ -266,34 +323,23 @@
 }
 
 .ba-scene-far {
-  height: 46%;
+  height: var(--h-far);
   background: linear-gradient(to bottom, var(--range-far), color-mix(in oklab, var(--range-far) 62%, var(--haze)));
-  clip-path: polygon(
-    0% 62%, 6% 47%, 12% 58%, 19% 35%, 26% 52%, 33% 39%, 41% 55%,
-    48% 29%, 56% 47%, 63% 37%, 71% 54%, 78% 41%, 86% 56%, 93% 44%,
-    100% 58%, 100% 100%, 0% 100%
-  );
+  clip-path: var(--clip-far);
   animation: ba-scene-drift-far 210s ease-in-out infinite alternate;
 }
 
 .ba-scene-mid {
-  height: 35%;
+  height: var(--h-mid);
   background: linear-gradient(to bottom, var(--range-mid), color-mix(in oklab, var(--range-mid) 78%, var(--haze)));
-  clip-path: polygon(
-    0% 70%, 8% 51%, 15% 64%, 23% 43%, 31% 60%, 39% 37%, 47% 58%,
-    55% 45%, 63% 62%, 71% 41%, 80% 58%, 88% 47%, 100% 66%,
-    100% 100%, 0% 100%
-  );
+  clip-path: var(--clip-mid);
   animation: ba-scene-drift-mid 155s ease-in-out infinite alternate;
 }
 
 .ba-scene-near {
-  height: 24%;
+  height: var(--h-near);
   background: linear-gradient(to bottom, var(--range-near), color-mix(in oklab, var(--range-near) 88%, var(--haze)));
-  clip-path: polygon(
-    0% 76%, 10% 58%, 18% 71%, 28% 47%, 38% 67%, 48% 41%, 58% 63%,
-    68% 50%, 78% 69%, 88% 54%, 100% 73%, 100% 100%, 0% 100%
-  );
+  clip-path: var(--clip-near);
   animation: ba-scene-drift-near 112s ease-in-out infinite alternate;
 }
 
@@ -308,6 +354,17 @@
 @keyframes ba-scene-drift-near {
   from { transform: translate3d(-3.2%, .4%, 0); }
   to   { transform: translate3d(3.2%, -.4%, 0); }
+}
+
+/* ===================== MOTES =====================
+   The other half of the free pair: in front of the ranges, still under the
+   scrim, for anything that reads as being between the viewer and the land
+   (snow, embers, fireflies, drifting mist). Under the scrim rather than over
+   it because the scrim is what keeps the deck rows readable, and a particle
+   field allowed to paint on top of it would undo exactly that. Empty by
+   default. */
+.ba-scene-motes {
+  inset: 0;
 }
 
 /* ===================== SCRIM =====================
@@ -334,7 +391,7 @@
 
 /* A short window has no spare sky. The deck list and heatmap grow downward
    from the top at a more or less fixed pixel height, so the shorter the
-   window the further down the page they reach — somewhere under ~820px they
+   window the further down the page they reach. Somewhere under ~820px they
    arrive in the band the orb hangs in, and a bright disc behind the heatmap
    costs more than a moon is worth. CSS cannot measure that content, so the
    orb steps aside instead of guessing, and the scrim reaches further down to
@@ -368,7 +425,7 @@
 
 /* In scene mode the aurora becomes the sky's own glow, so it drops behind
    the ranges. Without this it keeps the -1 it shares with the stage and,
-   being body's own ::after, paints after it in tree order — the blur and
+   being body's own ::after, paints after it in tree order, and the blur and
    its paper scrim would wash straight over the mountains. */
 :root[data-rf-backdrop="scene"] body:has(.ba-home)::before,
 :root[data-rf-backdrop="scene"] body:has(.ba-over)::before,
@@ -394,13 +451,27 @@
 }
 
 /* Motion is the decoration here, not the scene. Everything stops; nothing
-   disappears, so the landscape is still a landscape, just a still one. */
+   disappears, so the landscape is still a landscape, just a still one.
+
+   The reach is the whole subtree and both pseudo-elements rather than a list
+   of the selectors that animate today. Ten scenes add their own plumes,
+   snowfall and embers below, and a list would have to grow with every one of
+   them: the first scene whose author forgot to extend it would be the one
+   that kept moving for the person who asked the OS for stillness. Only
+   `animation` is touched, never `opacity` or `display`, because a reader who
+   cannot take the motion is not asking for a blank page.
+
+   `!important` because the specificity is stacked against this rule: a scene
+   animates through `:root[data-rf-scene="volcano"] .ba-scene-aux::before`,
+   which outranks `.ba-scene *::before` several times over, and the scene
+   rules may well be cascaded in after this block besides. Nothing else in
+   the backdrop uses `!important` and the scene contract forbids it outright,
+   so there is nothing for this to fight with. */
 @media (prefers-reduced-motion: reduce) {
-  .ba-scene-stars::before,
-  .ba-scene-stars::after,
-  .ba-scene-orb,
-  .ba-scene-clouds,
-  .ba-scene-range {
-    animation: none;
+  .ba-scene,
+  .ba-scene *,
+  .ba-scene *::before,
+  .ba-scene *::after {
+    animation: none !important;
   }
 }

@@ -1,6 +1,8 @@
 """Regression tests for the scene backdrop's pure logic in __init__.py:
-`_sky_phase` (which palette the landscape wears at a given hour) and the
-two config readers that pick the backdrop mode and intensity.
+`_sky_phase` (which palette the landscape wears at a given hour), the config
+readers that pick the backdrop mode and intensity, and the scene rotation
+(`_SCENES`, `_scene_variant`, `_scene_list`, `_scene_shuffle_seconds`) that
+decides which landscape is up and how fast the page may cycle them.
 
 Runs standalone (no Anki install needed): `python3 tests/test_sky_phase.py`.
 Stubs the aqt/anki modules before import, same approach as
@@ -174,6 +176,132 @@ def test_scene_markup_cannot_intercept_the_center_tagging():
     assert 'aria-hidden="true"' in mod._SCENE_HTML
 
 
+def test_scene_layers_are_in_paint_order():
+    """Paint order is document order inside `.ba-scene`, and the two free
+    layers only mean anything by where they sit: aux behind the ridges,
+    motes in front of them and still under the scrim. Reordering the markup
+    would silently move a scene's lava glow on top of its own mountains."""
+    order = [
+        "ba-scene-stars", "ba-scene-orb", "ba-scene-clouds", "ba-scene-aux",
+        "ba-scene-haze", "ba-scene-far", "ba-scene-mid", "ba-scene-near",
+        "ba-scene-motes", "ba-scene-scrim",
+    ]
+    html = mod._SCENE_HTML
+    positions = []
+    for cls in order:
+        idx = html.find(cls)
+        assert idx != -1, f"{cls} is missing from the scene markup"
+        positions.append(idx)
+    assert positions == sorted(positions), (
+        f"layers are out of paint order: {list(zip(order, positions))}"
+    )
+
+
+def test_scene_list_is_ten_unique_names():
+    """The daily rotation is `day_ordinal % len(_SCENES)`, so a duplicate
+    would quietly cost a day of the cycle to a scene already seen."""
+    assert len(mod._SCENES) == 10
+    assert len(set(mod._SCENES)) == 10, f"duplicates in {mod._SCENES}"
+    for name in mod._SCENES:
+        assert name and name.islower() and name.isalpha(), (
+            f"{name!r} is not a bare lowercase scene name"
+        )
+
+
+def test_every_scene_is_reachable_within_ten_days():
+    """Ten scenes, ten consecutive days: any off-by-one in the modulo would
+    strand one of them where nobody would ever notice by looking."""
+    variant = mod._scene_variant
+    base = 739000  # an arbitrary real ordinal, so the test isn't near zero
+    seen = [variant({}, base + d) for d in range(10)]
+    assert set(seen) == set(mod._SCENES), (
+        f"unreachable scenes: {set(mod._SCENES) - set(seen)}"
+    )
+    assert len(set(seen)) == 10, f"a scene repeated inside one cycle: {seen}"
+
+
+def test_scene_rotation_is_stable_within_a_day_and_moves_between_them():
+    """The deck browser re-renders on every state change. The scene has to
+    survive that untouched, or hitting Escape becomes a fidget toy."""
+    variant = mod._scene_variant
+    assert variant({}, 739000) == variant({}, 739000)
+    assert variant({}, 739000) != variant({}, 739001)
+
+
+def test_scene_falls_back_instead_of_rendering_blank():
+    """An unmatched `data-rf-scene` is not a crash, it is a silent loss of
+    the whole scene system: nothing would answer the attribute and every
+    landscape would look like the base peaks."""
+    variant = mod._scene_variant
+    for junk in ("", None, "shuffle", "PEAKS", "atlantis", 3, [], {}, True):
+        got = variant({"scene": junk}, 739000)
+        assert got in mod._SCENES, f"{junk!r} produced {got!r}"
+    # A missing key is the same case as junk: the default is the rotation.
+    assert variant({}, 739000) in mod._SCENES
+
+
+def test_a_pinned_scene_is_honoured_and_ignores_the_date():
+    """Pinning is the whole point of naming a scene: it must not drift onto
+    tomorrow's pick overnight."""
+    variant = mod._scene_variant
+    for name in mod._SCENES:
+        for day in (739000, 739001, 739005, 0):
+            assert variant({"scene": name}, day) == name
+
+
+def test_scene_list_for_the_page_collapses_when_pinned():
+    """scene-shuffle.js reads "nothing to cycle" off the list's length, so
+    a pinned scene has to arrive as exactly one entry."""
+    lst = mod._scene_list
+    assert lst({}) == list(mod._SCENES)
+    assert lst({"scene": "shuffle"}) == list(mod._SCENES)
+    assert lst({"scene": "volcano"}) == ["volcano"]
+    for junk in ("", None, "atlantis", 7):
+        assert lst({"scene": junk}) == list(mod._SCENES), f"{junk!r} pinned"
+
+
+def test_shuffle_interval_clamp_rejects_a_spinning_timer():
+    """The floor is the load-bearing end: a hand-edited 0 or a negative
+    would hand the page a setInterval that never yields the main thread."""
+    secs = mod._scene_shuffle_seconds
+    assert secs({}) == 10
+    assert secs({"scene_shuffle_seconds": 30}) == 30
+    assert secs({"scene_shuffle_seconds": 2}) == 2
+    assert secs({"scene_shuffle_seconds": 3600}) == 3600
+    for spin in (0, 1, -1, -99999):
+        assert secs({"scene_shuffle_seconds": spin}) >= 2, (
+            f"{spin!r} produced a spinning interval"
+        )
+    for absurd in (3601, 10 ** 9, 2 ** 62):
+        assert secs({"scene_shuffle_seconds": absurd}) == 3600, (
+            f"{absurd!r} leaked through"
+        )
+    # Junk lands on the default rather than raising inside a page render.
+    for junk in (None, "", "ten", [], {}, object()):
+        assert secs({"scene_shuffle_seconds": junk}) == 10, (
+            f"{junk!r} did not fall back"
+        )
+    # Strings that are numbers are still numbers, and still clamped.
+    assert secs({"scene_shuffle_seconds": "45"}) == 45
+    assert secs({"scene_shuffle_seconds": "0"}) == 2
+
+
+def test_js_opts_carries_the_scene_payload_the_script_reads():
+    """scene-shuffle.js reads `__baOpts.scene.list` and `.shuffleSeconds`.
+    Renaming either here breaks the page silently: the script would just
+    fall back to its own copy of the list and the default interval."""
+    opts = mod._js_opts({})
+    assert "scene" in opts, "the scene payload went missing from __baOpts"
+    assert opts["scene"]["list"] == list(mod._SCENES)
+    assert opts["scene"]["shuffleSeconds"] == 10
+    pinned = mod._js_opts({"scene": "tundra", "scene_shuffle_seconds": 0})
+    assert pinned["scene"]["list"] == ["tundra"]
+    assert pinned["scene"]["shuffleSeconds"] == 2
+    # It has to survive json.dumps: this is injected into a <script> tag.
+    import json
+    json.loads(json.dumps(opts))
+
+
 if __name__ == "__main__":
     test_every_hour_has_a_phase_the_stylesheet_knows()
     test_all_four_phases_are_reachable()
@@ -183,4 +311,13 @@ if __name__ == "__main__":
     test_backdrop_mode_falls_back_instead_of_blanking_the_page()
     test_backdrop_intensity_falls_back_too()
     test_scene_markup_cannot_intercept_the_center_tagging()
+    test_scene_layers_are_in_paint_order()
+    test_scene_list_is_ten_unique_names()
+    test_every_scene_is_reachable_within_ten_days()
+    test_scene_rotation_is_stable_within_a_day_and_moves_between_them()
+    test_scene_falls_back_instead_of_rendering_blank()
+    test_a_pinned_scene_is_honoured_and_ignores_the_date()
+    test_scene_list_for_the_page_collapses_when_pinned()
+    test_shuffle_interval_clamp_rejects_a_spinning_timer()
+    test_js_opts_carries_the_scene_payload_the_script_reads()
     print("PASS test_sky_phase")

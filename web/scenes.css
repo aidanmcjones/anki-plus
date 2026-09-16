@@ -1,0 +1,1534 @@
+/* Anki Design - the ten scene backdrops.
+
+   Shapes and colour only. The engine that draws them (stage, layers,
+   scrim, palette, reduced motion, the intensity and light-mode
+   dimmers) is `scene.css`, which loads first; this file just fills in
+   what each place looks like.
+
+   Every scene tints from the hour rather than hardcoding, so all ten
+   work at dawn, day, dusk and night. Anything a scene adds beyond the
+   three ridges rides on `.ba-scene-aux` (behind them) or
+   `.ba-scene-motes` (in front), both of which exist for exactly that.
+
+   No images, no network, no JavaScript: gradients and clip paths. */
+
+/* Peaks: a high alpine range with one dominant massif rather than an even
+   sawtooth. The default silhouettes in web/scene.css already sketch this
+   scene at low detail; this file replaces them with more ridge
+   articulation (subpeaks, asymmetric shoulders either side of the summit)
+   and adds snow.
+
+   Snowcaps are not a separate shape. The ridge is a clip-path silhouette
+   with a flat two-stop fill, so a snowline has to be a gradient painted
+   inside that fill, positioned in the same box-relative coordinates as the
+   clip-path points it is meant to sit on top of. A radial-gradient near the
+   top of each range's own box only ever reaches the tallest few percent of
+   that box, which is to say only the peaks actually poking up that high,
+   the same way real snow only holds above a real snowline. */
+:root[data-rf-scene="peaks"] .ba-scene {
+  --snow: color-mix(in oklab, white 82%, var(--sky-horizon) 18%);
+  --range-far: color-mix(in oklab, var(--phase-far) 62%, #67788c);
+  --range-mid: color-mix(in oklab, var(--phase-mid) 70%, #46586e);
+  --range-near: color-mix(in oklab, var(--phase-near) 86%, #202b3a);
+
+  --h-far: 50%;
+  --h-mid: 37%;
+  --h-near: 25%;
+
+  /* Backmost range carries the massif's true summit: one dominant point
+     near centre with a shallow, gradual left shoulder and a steeper,
+     jagged right shoulder, so it reads as one mountain rather than a
+     mirrored pair of slopes. */
+  --clip-far: polygon(
+    0% 58%, 5% 50%, 9% 55%, 13% 44%, 17% 49%, 21% 38%, 25% 43%,
+    29% 33%, 34% 30%, 38% 22%, 42% 15%, 46% 20%, 50% 12%, 54% 19%,
+    58% 27%, 62% 24%, 66% 33%, 70% 29%, 74% 38%, 78% 34%, 82% 42%,
+    86% 37%, 90% 46%, 94% 41%, 100% 50%, 100% 100%, 0% 100%
+  );
+  /* The same massif one step closer: its flank now fills most of the
+     frame, with a false summit and a notch before the true one so the
+     skyline is not a single clean triangle. */
+  --clip-mid: polygon(
+    0% 66%, 6% 58%, 11% 63%, 16% 52%, 21% 57%, 26% 46%, 31% 40%,
+    36% 32%, 41% 25%, 46% 34%, 51% 22%, 56% 30%, 61% 38%, 66% 33%,
+    71% 42%, 76% 37%, 81% 46%, 86% 41%, 91% 50%, 96% 45%, 100% 54%,
+    100% 100%, 0% 100%
+  );
+  /* Foothills: below the snowline, so the detail here is all rock, not
+     ice. Kept busier and lower so it sits under the legibility line. */
+  --clip-near: polygon(
+    0% 72%, 5% 62%, 10% 68%, 15% 56%, 20% 63%, 25% 50%, 30% 58%,
+    35% 44%, 40% 52%, 45% 38%, 50% 46%, 55% 33%, 60% 42%, 65% 50%,
+    70% 58%, 75% 52%, 80% 60%, 85% 55%, 90% 63%, 95% 58%, 100% 66%,
+    100% 100%, 0% 100%
+  );
+}
+
+/* Snow sits closest to the summit and thins as the boxes get shorter and
+   the terrain drops below the snowline. Far gets the most and largest
+   patches, mid a thinner cap on its own high point, near just a dusting on
+   its single tallest shoulder for continuity down the massif. */
+:root[data-rf-scene="peaks"] .ba-scene-far {
+  background:
+    radial-gradient(24% 26% at 50% 8%, var(--snow), transparent 68%),
+    radial-gradient(14% 16% at 42% 12%, color-mix(in oklab, var(--snow) 80%, transparent), transparent 72%),
+    radial-gradient(10% 12% at 66% 20%, color-mix(in oklab, var(--snow) 60%, transparent), transparent 74%),
+    linear-gradient(to bottom, var(--range-far), color-mix(in oklab, var(--range-far) 62%, var(--haze)));
+}
+:root[data-rf-scene="peaks"] .ba-scene-mid {
+  background:
+    radial-gradient(16% 18% at 51% 16%, color-mix(in oklab, var(--snow) 88%, transparent), transparent 70%),
+    radial-gradient(9% 10% at 41% 21%, color-mix(in oklab, var(--snow) 55%, transparent), transparent 74%),
+    linear-gradient(to bottom, var(--range-mid), color-mix(in oklab, var(--range-mid) 78%, var(--haze)));
+}
+:root[data-rf-scene="peaks"] .ba-scene-near {
+  background:
+    radial-gradient(8% 9% at 55% 28%, color-mix(in oklab, var(--snow) 40%, transparent), transparent 76%),
+    linear-gradient(to bottom, var(--range-near), color-mix(in oklab, var(--range-near) 88%, var(--haze)));
+}
+
+/* A faint alpenglow behind the far summit. Aux sits behind the haze and
+   ranges, so this only ever shows as a soft wash bleeding up past the
+   skyline, never a shape of its own. Same box-relative maths as the
+   snowcaps above, converted once to viewport space: the far range's box
+   starts at (100% - h-far) from the top, and its summit sits 12% down
+   into that box. */
+:root[data-rf-scene="peaks"] .ba-scene-aux::before {
+  content: "";
+  position: absolute;
+  left: 38%;
+  top: 53%;
+  width: 24%;
+  height: 16%;
+  background: radial-gradient(circle, color-mix(in oklab, var(--snow) 45%, transparent), transparent 72%);
+  filter: blur(20px);
+  animation: ba-peaks-alpenglow 48s ease-in-out infinite alternate;
+}
+@keyframes ba-peaks-alpenglow {
+  from { opacity: .35; }
+  to   { opacity: .8; }
+}
+
+/* Thin high cirrus dragged out by wind well above the ranges, plus a wisp
+   of spindrift blowing off the summit itself. Both are motes: painted in
+   front of the ranges, so they read as sky-level, not terrain. */
+:root[data-rf-scene="peaks"] .ba-scene-motes::before {
+  content: "";
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  top: 12%;
+  height: 10%;
+  background:
+    linear-gradient(100deg, transparent 0%, color-mix(in oklab, var(--haze) 70%, white) 46%, transparent 82%);
+  filter: blur(14px);
+  opacity: .4;
+  animation: ba-peaks-cirrus-drift 190s linear infinite alternate;
+  will-change: transform;
+}
+:root[data-rf-scene="peaks"] .ba-scene-motes::after {
+  content: "";
+  position: absolute;
+  left: 40%;
+  top: 50%;
+  width: 20%;
+  height: 10%;
+  background:
+    radial-gradient(60% 40% at 30% 50%, color-mix(in oklab, var(--snow) 70%, transparent), transparent 70%),
+    radial-gradient(50% 30% at 70% 40%, color-mix(in oklab, var(--snow) 55%, transparent), transparent 70%);
+  filter: blur(3px);
+  animation: ba-peaks-spindrift 26s ease-in-out infinite alternate;
+  will-change: transform, opacity;
+}
+@keyframes ba-peaks-cirrus-drift {
+  from { transform: translate3d(-3%, 0, 0); }
+  to   { transform: translate3d(5%, 0, 0); }
+}
+@keyframes ba-peaks-spindrift {
+  from { transform: translate3d(-2%, 0, 0); opacity: .25; }
+  to   { transform: translate3d(6%, -1.5%, 0); opacity: .6; }
+}
+
+/* Anki Design - scene: dunes.
+   Deep desert. The house `dunes` variant in web/scene.css draws its ridges
+   from the same sine-rolled clip-path family every other scene uses; a real
+   dune does not roll symmetrically. Wind piles sand up a long shallow
+   windward face and drops it down a short, steep slip face on the lee side,
+   so every silhouette here is built from that lopsided rhythm: roughly 80%
+   of each dune's width climbing gently, the last 20% falling off sharply.
+   Nearer dunes are fewer and bigger, same as the stock ranges get darker
+   and wider-swinging with distance from the horizon.
+
+   Extras: a lone butte on `.ba-scene-aux` (behind the ranges, so the near
+   and mid dunes correctly bury its base while its cap breaks the skyline),
+   a heat shimmer on the same layer, and a slow drift of blown sand on
+   `.ba-scene-motes` (in front of the ranges, low, where sand actually
+   scours). Everything tints off `--phase-*` / `--sky-*` so the desert reads
+   as noon glare or cold moonlit sand off the same rules. */
+
+:root[data-rf-scene="dunes"] .ba-scene {
+  --range-far: color-mix(in oklab, var(--phase-far) 62%, #d9a86b);
+  --range-mid: color-mix(in oklab, var(--phase-mid) 70%, #bd8750);
+  --range-near: color-mix(in oklab, var(--phase-near) 84%, #8f6335);
+  --h-far: 43%;
+  --h-mid: 34%;
+  --h-near: 27%;
+
+  /* Four dunes, period 25%: trough, three risers up the windward slope,
+     a crest at 80% of the period, then one point back down the slip face
+     before the next trough. Crest and trough heights drift a little from
+     dune to dune, because a real dune field is never perfectly regular. */
+  --clip-far: polygon(
+    0% 54%, 7% 50%, 13% 45%, 18% 40%, 20% 36%, 22% 46%,
+    25% 55%, 32% 51%, 38% 46%, 43% 41%, 45% 37%, 47% 48%,
+    50% 53%, 57% 49%, 63% 44%, 68% 39%, 70% 35%, 72% 45%,
+    75% 56%, 82% 52%, 88% 47%, 93% 41%, 95% 39%, 97% 49%,
+    100% 55%, 100% 100%, 0% 100%
+  );
+  /* Three dunes, period 33.3%, same 80/20 rhythm scaled up. */
+  --clip-mid: polygon(
+    0% 64%, 9% 58%, 17% 50%, 24% 43%, 27% 38%, 30% 52%,
+    33.3% 66%, 42.3% 60%, 50.3% 52%, 57.3% 44%, 60.3% 37%, 63.3% 53%,
+    66.6% 63%, 75.6% 57%, 83.6% 49%, 90.6% 42%, 93.6% 36%, 96.6% 51%,
+    100% 65%, 100% 100%, 0% 100%
+  );
+  /* Two big foreground dunes, period 50%. Wide and close enough that the
+     slip face reads as a genuinely steep drop, not a wiggle. */
+  --clip-near: polygon(
+    0% 70%, 12% 62%, 24% 52%, 34% 44%, 40% 38%, 45% 56%,
+    50% 72%, 62% 64%, 74% 54%, 84% 46%, 90% 40%, 95% 58%,
+    100% 71%, 100% 100%, 0% 100%
+  );
+}
+
+/* Each range's own gradient does double duty: a warm rim at the very top
+   of the box (which only crest pixels reach, since troughs sit lower and
+   get clipped away below them) reads as sunlit crest lines for free, and
+   a shallow repeating diagonal underneath breaks the fill into alternating
+   lit and shadowed bands roughly the width of one dune, standing in for
+   the windward/lee light split without hand-tracing every slope. */
+:root[data-rf-scene="dunes"] .ba-scene-far {
+  background:
+    repeating-linear-gradient(112deg,
+      color-mix(in oklab, var(--range-far) 60%, var(--sky-horizon)) 0%,
+      transparent 9%, transparent 17%,
+      color-mix(in oklab, var(--range-far) 70%, black) 22%,
+      transparent 29%
+    ),
+    linear-gradient(to bottom,
+      color-mix(in oklab, var(--range-far) 68%, var(--sky-horizon)) 0%,
+      var(--range-far) 16%,
+      color-mix(in oklab, var(--range-far) 60%, var(--haze)) 100%
+    );
+}
+:root[data-rf-scene="dunes"] .ba-scene-mid {
+  background:
+    repeating-linear-gradient(104deg,
+      color-mix(in oklab, var(--range-mid) 58%, var(--sky-horizon)) 0%,
+      transparent 10%, transparent 19%,
+      color-mix(in oklab, var(--range-mid) 72%, black) 25%,
+      transparent 33%
+    ),
+    linear-gradient(to bottom,
+      color-mix(in oklab, var(--range-mid) 66%, var(--sky-horizon)) 0%,
+      var(--range-mid) 18%,
+      color-mix(in oklab, var(--range-mid) 76%, var(--haze)) 100%
+    );
+}
+:root[data-rf-scene="dunes"] .ba-scene-near {
+  background:
+    repeating-linear-gradient(96deg,
+      color-mix(in oklab, var(--range-near) 55%, var(--sky-horizon)) 0%,
+      transparent 12%, transparent 24%,
+      color-mix(in oklab, var(--range-near) 75%, black) 30%,
+      transparent 40%
+    ),
+    linear-gradient(to bottom,
+      color-mix(in oklab, var(--range-near) 62%, var(--sky-horizon)) 0%,
+      var(--range-near) 20%,
+      color-mix(in oklab, var(--range-near) 86%, var(--haze)) 100%
+    );
+}
+
+/* A lone butte, far off to one side. `.ba-scene-aux` paints before the
+   ranges, so its base sits behind the far and mid dunes and only the cap
+   pokes into the haze above them: exactly what "breaking the horizon"
+   looks like on something miles away. Height is pinned above both --h-mid
+   and --h-near so it is never fully swallowed regardless of scene size. */
+:root[data-rf-scene="dunes"] .ba-scene-aux::before {
+  content: "";
+  position: absolute;
+  left: 79%;
+  bottom: 0;
+  width: 9%;
+  height: calc(var(--h-far) * .92);
+  background: linear-gradient(to bottom,
+    color-mix(in oklab, var(--phase-far) 55%, var(--sky-horizon)) 0%,
+    color-mix(in oklab, var(--phase-near) 78%, #4a2c14) 100%
+  );
+  /* Flat mesa cap, two eroded shoulders, base flared wider than the top. */
+  clip-path: polygon(
+    34% 0%, 66% 0%, 72% 9%, 64% 9%, 68% 22%, 84% 40%,
+    76% 58%, 90% 100%, 10% 100%, 24% 58%, 16% 40%, 32% 22%,
+    36% 9%, 28% 9%
+  );
+}
+/* Heat shimmer over the middle distance: a soft horizontal band that
+   breathes in scale and opacity. Kept to a hair of movement and low
+   opacity, per "particles may be faster but must not draw the eye". */
+:root[data-rf-scene="dunes"] .ba-scene-aux::after {
+  content: "";
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 22%;
+  height: 9%;
+  background: linear-gradient(to bottom,
+    transparent,
+    color-mix(in oklab, var(--sky-horizon) 55%, white) 50%,
+    transparent
+  );
+  opacity: .16;
+  filter: blur(7px);
+  animation: ba-dunes-shimmer 5s ease-in-out infinite alternate;
+  will-change: transform, opacity;
+}
+@keyframes ba-dunes-shimmer {
+  from { transform: scaleY(1); opacity: .12; }
+  to   { transform: scaleY(1.4); opacity: .22; }
+}
+
+/* Blown sand, low over the crests, in front of the ranges. Two bands at
+   different heights and opacities so the drift reads as depth rather than
+   a single sheet, both far slower than anything a "particle" implies. */
+:root[data-rf-scene="dunes"] .ba-scene-motes::before,
+:root[data-rf-scene="dunes"] .ba-scene-motes::after {
+  content: "";
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  height: 12%;
+  background: linear-gradient(to right,
+    transparent,
+    color-mix(in oklab, var(--phase-mid) 30%, #e8cfa0) 42%,
+    color-mix(in oklab, var(--phase-mid) 30%, #e8cfa0) 58%,
+    transparent
+  );
+  filter: blur(13px);
+  will-change: transform;
+}
+:root[data-rf-scene="dunes"] .ba-scene-motes::before {
+  bottom: 29%;
+  opacity: .17;
+  animation: ba-dunes-drift-a 200s linear infinite alternate;
+}
+:root[data-rf-scene="dunes"] .ba-scene-motes::after {
+  bottom: 19%;
+  opacity: .12;
+  animation: ba-dunes-drift-b 260s linear infinite alternate;
+}
+@keyframes ba-dunes-drift-a {
+  from { transform: translate3d(-6%, 0, 0); }
+  to   { transform: translate3d(6%, 0, 0); }
+}
+@keyframes ba-dunes-drift-b {
+  from { transform: translate3d(5%, 0, 0); }
+  to   { transform: translate3d(-5%, 0, 0); }
+}
+
+/* ---- forest : conifer wilderness ----
+
+   Two ranks instead of one repeated triangle: a thin, pale far line that
+   is barely more than texture in the haze, and a dense, dark near line
+   built from trees of different height and width so the skyline reads as
+   a real edge rather than a sawtooth. The near rank's base is not a flat
+   line either. It is cut with a handful of notches that dip toward the
+   ground and back up, the gaps daylight would find between trunks.
+
+   Life comes from two free layers rather than new DOM: motes carries
+   fireflies that only show themselves after dark, aux carries the ground
+   mist that pools low, behind the trees, and only shows through the
+   trunk gaps and the sliver of sky between the ranks. */
+:root[data-rf-scene="forest"] .ba-scene {
+  --range-far: color-mix(in oklab, var(--phase-far) 66%, #4d8f5f);
+  --range-mid: color-mix(in oklab, var(--phase-mid) 72%, #235830);
+  --range-near: color-mix(in oklab, var(--phase-near) 87%, #0a2415);
+  --h-far: 41%;
+  --h-mid: 32%;
+  --h-near: 25%;
+
+  /* Sparse, soft rolling crowns well back in the haze. Wide, uneven
+     segments so it thins out rather than repeating. */
+  --clip-far: polygon(
+    0% 60%, 5% 55%, 9% 58%, 14% 50%, 19% 56%, 25% 47%, 31% 54%,
+    37% 44%, 44% 52%, 51% 46%, 58% 53%, 65% 45%, 72% 51%, 79% 43%,
+    86% 50%, 93% 46%, 100% 52%, 100% 100%, 0% 100%
+  );
+  /* The transitional rank: taller, narrower crowns start to appear
+     between the wider ones, so density is already climbing here. */
+  --clip-mid: polygon(
+    0% 66%, 4% 60%, 7% 66%, 12% 52%, 16% 64%, 21% 46%, 26% 62%,
+    30% 50%, 35% 68%, 40% 44%, 46% 60%, 51% 48%, 57% 65%, 62% 42%,
+    68% 58%, 73% 50%, 79% 67%, 84% 45%, 90% 61%, 95% 49%, 100% 64%,
+    100% 100%, 0% 100%
+  );
+  /* Near canopy: tall narrow conifers next to short broad ones, no two
+     segments the same width. The bottom edge is not a straight close;
+     it zigzags up and back down four times, small rectangular notches
+     standing in for the gaps daylight finds between trunks. */
+  --clip-near: polygon(
+    0% 62%, 5% 44%, 9% 60%, 14% 50%, 17% 68%, 22% 46%, 27% 58%,
+    32% 40%, 36% 64%, 41% 52%, 46% 70%, 51% 45%, 55% 60%, 60% 38%,
+    65% 66%, 70% 54%, 74% 42%, 79% 62%, 84% 48%, 89% 68%, 93% 50%,
+    97% 58%, 100% 44%,
+    100% 100%, 90% 100%, 90% 88%, 86% 88%, 86% 100%,
+    70% 100%, 70% 90%, 66% 90%, 66% 100%,
+    48% 100%, 48% 87%, 44% 87%, 44% 100%,
+    26% 100%, 26% 90%, 22% 90%, 22% 100%,
+    8% 100%, 8% 88%, 4% 88%, 4% 100%,
+    0% 100%
+  );
+}
+
+/* ---- ground mist ----
+   A pair of soft, low bands behind the ranges. Most of each band sits
+   under opaque canopy and only reaches the eye through the trunk gaps
+   cut into --clip-near and the thin strip of sky between the far and
+   near treelines, which is what keeps it reading as mist under trees
+   rather than a fog bank painted over them. */
+:root[data-rf-scene="forest"] .ba-scene-aux {
+  inset: 0;
+}
+:root[data-rf-scene="forest"] .ba-scene-aux::before,
+:root[data-rf-scene="forest"] .ba-scene-aux::after {
+  content: "";
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in oklab, var(--sky-horizon) 55%, #cfe0d6) 45%,
+    transparent
+  );
+  filter: blur(14px);
+  will-change: transform;
+}
+:root[data-rf-scene="forest"] .ba-scene-aux::before {
+  bottom: 13%;
+  height: 12%;
+  opacity: .5;
+  animation: ba-forest-mist-a 130s ease-in-out infinite alternate;
+}
+:root[data-rf-scene="forest"] .ba-scene-aux::after {
+  bottom: 1%;
+  height: 9%;
+  opacity: .4;
+  animation: ba-forest-mist-b 100s ease-in-out infinite alternate;
+}
+@keyframes ba-forest-mist-a {
+  from { transform: translate3d(-4%, 0, 0); }
+  to   { transform: translate3d(4%, 0, 0); }
+}
+@keyframes ba-forest-mist-b {
+  from { transform: translate3d(3%, 0, 0); }
+  to   { transform: translate3d(-3%, 0, 0); }
+}
+
+/* ---- fireflies ----
+   Tiny, slow, and low, sitting in front of the ranges the way real
+   fireflies would hang at knee height among the trees. Opacity is driven
+   off --stars rather than a fixed value: that variable is already the
+   hour's own read on how dark it is, 0 at noon and 1 at night, so the
+   fireflies need no clock of their own and cannot glow in daylight. */
+:root[data-rf-scene="forest"] .ba-scene-motes {
+  inset: 0;
+}
+:root[data-rf-scene="forest"] .ba-scene-motes::before,
+:root[data-rf-scene="forest"] .ba-scene-motes::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: calc(var(--stars) * .85);
+  transition: opacity 900ms ease;
+  will-change: transform, opacity;
+}
+:root[data-rf-scene="forest"] .ba-scene-motes::before {
+  background-image:
+    radial-gradient(1.6px 1.6px at 12% 78%, #ffcf7a, transparent 65%),
+    radial-gradient(1.4px 1.4px at 34% 88%, #ffdb8f, transparent 65%),
+    radial-gradient(1.8px 1.8px at 58% 74%, #ffcf7a, transparent 65%),
+    radial-gradient(1.3px 1.3px at 77% 90%, #ffe1a0, transparent 65%),
+    radial-gradient(1.5px 1.5px at 91% 80%, #ffcf7a, transparent 65%);
+  background-repeat: no-repeat;
+  animation: ba-forest-firefly-a 22s ease-in-out infinite alternate;
+}
+:root[data-rf-scene="forest"] .ba-scene-motes::after {
+  background-image:
+    radial-gradient(1.3px 1.3px at 22% 62%, #ffd98a, transparent 65%),
+    radial-gradient(1.5px 1.5px at 45% 84%, #ffcf7a, transparent 65%),
+    radial-gradient(1.4px 1.4px at 68% 70%, #ffe1a0, transparent 65%),
+    radial-gradient(1.6px 1.6px at 86% 86%, #ffcf7a, transparent 65%);
+  background-repeat: no-repeat;
+  animation: ba-forest-firefly-b 27s ease-in-out infinite alternate;
+}
+@keyframes ba-forest-firefly-a {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(2%, -3%, 0); }
+}
+@keyframes ba-forest-firefly-b {
+  from { transform: translate3d(-1.5%, 1%, 0); }
+  to   { transform: translate3d(2.5%, -2%, 0); }
+}
+
+/* Canyon: desert mesa country. The stock canyon in scene.css is three flat
+   plateaus punched out of a rectangle; this one gives each range genuinely
+   different mesa widths and heights, steps the talus out from the base
+   instead of dropping a single cliff face, and stands one narrow spire free
+   in the mid gap so the skyline reads as eroded rather than extruded. */
+
+:root[data-rf-scene="canyon"] .ba-scene {
+  --range-far: color-mix(in oklab, var(--phase-far) 58%, #c9754a);
+  --range-mid: color-mix(in oklab, var(--phase-mid) 66%, #9d4f30);
+  --range-near: color-mix(in oklab, var(--phase-near) 84%, #5e2a1b);
+  --h-far: 44%;
+  --h-mid: 35%;
+  --h-near: 27%;
+
+  /* Far: a low skyline of buttes, each a different width and a different
+     plateau height, so the horizon reads as carved rather than stamped. */
+  --clip-far: polygon(
+    0% 82%, 6% 82%, 6% 60%, 12% 60%, 12% 70%, 18% 70%, 18% 38%, 27% 38%,
+    27% 70%, 33% 70%, 33% 58%, 39% 58%, 39% 84%, 46% 84%, 46% 64%, 54% 64%,
+    54% 46%, 62% 46%, 62% 66%, 69% 66%, 69% 86%, 77% 86%, 77% 68%, 83% 68%,
+    83% 52%, 90% 52%, 90% 72%, 96% 72%, 96% 80%, 100% 80%,
+    100% 100%, 0% 100%
+  );
+
+  /* Mid: two stepped buttes with proper talus (each riser meets a bench
+     before the next riser, widening toward the ground instead of a single
+     drop), and one narrow spire standing alone in the gap between them. */
+  --clip-mid: polygon(
+    0% 88%, 4% 88%, 4% 68%, 7% 68%, 7% 50%, 10% 50%, 10% 28%, 18% 28%,
+    18% 48%, 21% 48%, 21% 66%, 24% 66%, 24% 88%,
+    30% 88%, 31% 60%, 32.5% 20%, 34% 60%, 35% 88%,
+    44% 88%, 46% 74%, 49% 74%, 49% 58%, 60% 58%, 60% 74%, 63% 74%, 63% 88%,
+    70% 88%, 72% 70%, 75% 70%, 75% 52%, 78% 52%, 78% 32%, 88% 32%, 88% 54%,
+    91% 54%, 91% 74%, 94% 74%, 94% 88%,
+    100% 88%, 100% 100%, 0% 100%
+  );
+
+  /* Near: the closest wall, widest and tallest of the three, with a taller
+     narrower second butte for contrast and two-step talus at both flanks
+     of each. This is the layer that reads as "you could walk into it". */
+  --clip-near: polygon(
+    0% 84%, 6% 84%, 6% 68%, 9% 68%, 9% 52%, 13% 52%, 13% 32%, 34% 32%,
+    34% 52%, 38% 52%, 38% 84%,
+    50% 84%, 52% 66%, 55% 66%, 55% 48%, 59% 48%, 59% 28%, 72% 28%, 72% 46%,
+    76% 46%, 76% 62%, 80% 62%, 80% 84%,
+    100% 84%, 100% 100%, 0% 100%
+  );
+}
+
+/* Strata: a repeating band laid on top of the same fill scene.css already
+   paints, so the rock reads as sediment rather than a flat cutout. Each
+   layer gets its own band period; matching them would make three ridges
+   look like one striped sheet cut into pieces. */
+:root[data-rf-scene="canyon"] .ba-scene-far {
+  background-image:
+    repeating-linear-gradient(to bottom,
+      rgba(0, 0, 0, .10) 0%, rgba(0, 0, 0, .10) 3%,
+      transparent 3%, transparent 10%),
+    linear-gradient(to bottom, var(--range-far), color-mix(in oklab, var(--range-far) 62%, var(--haze)));
+}
+:root[data-rf-scene="canyon"] .ba-scene-mid {
+  background-image:
+    repeating-linear-gradient(to bottom,
+      rgba(0, 0, 0, .13) 1%, rgba(0, 0, 0, .13) 5%,
+      transparent 5%, transparent 13%),
+    linear-gradient(to bottom, var(--range-mid), color-mix(in oklab, var(--range-mid) 78%, var(--haze)));
+}
+:root[data-rf-scene="canyon"] .ba-scene-near {
+  background-image:
+    repeating-linear-gradient(to bottom,
+      rgba(255, 255, 255, .05) 2%, rgba(255, 255, 255, .05) 4%,
+      transparent 4%, transparent 11%),
+    repeating-linear-gradient(to bottom,
+      rgba(0, 0, 0, .16) 0%, rgba(0, 0, 0, .16) 6%,
+      transparent 6%, transparent 17%),
+    linear-gradient(to bottom, var(--range-near), color-mix(in oklab, var(--range-near) 88%, var(--haze)));
+}
+
+/* Aux: dust hanging in the canyon gaps, behind the ranges. Built from the
+   hour's own haze and horizon colours so it warms at dusk and pales at
+   noon instead of sitting there as one fixed grey smear. */
+:root[data-rf-scene="canyon"] .ba-scene-aux {
+  overflow: hidden;
+}
+:root[data-rf-scene="canyon"] .ba-scene-aux::before,
+:root[data-rf-scene="canyon"] .ba-scene-aux::after {
+  content: "";
+  position: absolute;
+  left: -10%;
+  right: -10%;
+  bottom: 6%;
+  height: 22%;
+  filter: blur(20px);
+  animation: ba-canyon-dust-breathe 46s ease-in-out infinite alternate;
+}
+:root[data-rf-scene="canyon"] .ba-scene-aux::before {
+  background:
+    radial-gradient(30% 70% at 20% 60%, color-mix(in oklab, var(--haze) 70%, var(--sky-horizon)), transparent 72%),
+    radial-gradient(24% 60% at 58% 50%, color-mix(in oklab, var(--haze) 60%, var(--sky-horizon)), transparent 70%);
+  opacity: .55;
+}
+:root[data-rf-scene="canyon"] .ba-scene-aux::after {
+  background:
+    radial-gradient(26% 65% at 82% 55%, color-mix(in oklab, var(--haze) 65%, var(--sky-horizon)), transparent 74%),
+    radial-gradient(20% 50% at 40% 65%, color-mix(in oklab, var(--haze) 55%, var(--sky-horizon)), transparent 68%);
+  opacity: .4;
+  animation-duration: 61s;
+  animation-direction: alternate-reverse;
+}
+@keyframes ba-canyon-dust-breathe {
+  from { opacity: .3; transform: translate3d(0, 0, 0); }
+  to   { opacity: .7; transform: translate3d(1.5%, -1%, 0); }
+}
+
+/* Motes: a few dust grains lifted off the canyon floor by thermals, plus
+   one or two birds riding them, well clear of the deck list below. */
+:root[data-rf-scene="canyon"] .ba-scene-motes::before,
+:root[data-rf-scene="canyon"] .ba-scene-motes::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: .5;
+}
+:root[data-rf-scene="canyon"] .ba-scene-motes::before {
+  background-image:
+    radial-gradient(1.6px 1.6px at 22% 78%, color-mix(in oklab, var(--haze) 70%, #fff), transparent 70%),
+    radial-gradient(1.2px 1.2px at 47% 70%, color-mix(in oklab, var(--haze) 60%, #fff), transparent 70%),
+    radial-gradient(2px 1.4px at 71% 74%, rgba(20, 14, 10, .55), transparent 70%);
+  animation: ba-canyon-motes-drift 130s ease-in-out infinite alternate;
+}
+:root[data-rf-scene="canyon"] .ba-scene-motes::after {
+  background-image:
+    radial-gradient(1.4px 1.4px at 33% 82%, color-mix(in oklab, var(--haze) 55%, #fff), transparent 70%),
+    radial-gradient(2px 1.3px at 84% 76%, rgba(20, 14, 10, .5), transparent 70%);
+  animation: ba-canyon-motes-drift 174s ease-in-out infinite alternate-reverse;
+}
+@keyframes ba-canyon-motes-drift {
+  from { transform: translate3d(-2%, 1.5%, 0); }
+  to   { transform: translate3d(2.5%, -2%, 0); }
+}
+
+/* ---- lake ----
+   Two ranges of real rock, then a water plane standing in for the near
+   ridge. What sells a lake over a flat blue band is the far range showing
+   up twice: once as rock, once upside down and drowned a shade darker.
+   That mirrored ridge lives on `.ba-scene-near::before`, banded by
+   horizontal ripple stripes so it reads as a reflection on moving water
+   rather than a second mountain. The orb throws its own streak down the
+   middle on `::after`, widening as it nears the shore closest to the
+   viewer, which is the one perspective cue a flat gradient can't fake. */
+:root[data-rf-scene="lake"] .ba-scene {
+  --range-far: color-mix(in oklab, var(--phase-far) 68%, #6a86a0);
+  --range-mid: color-mix(in oklab, var(--phase-mid) 74%, #465e74);
+  --h-far: 46%;
+  --h-mid: 34%;
+  --h-near: 30%;
+  --clip-far: polygon(
+    0% 58%, 7% 40%, 14% 54%, 22% 28%, 30% 48%, 38% 34%, 47% 52%,
+    55% 26%, 63% 46%, 71% 36%, 80% 54%, 88% 40%, 100% 56%,
+    100% 100%, 0% 100%
+  );
+  --clip-mid: polygon(
+    0% 74%, 12% 64%, 25% 70%, 38% 60%, 52% 68%, 65% 58%, 78% 66%,
+    90% 60%, 100% 68%, 100% 100%, 0% 100%
+  );
+  /* The near layer stops being rock and becomes the water itself: a flat
+     rectangle filling the band, not a silhouette. */
+  --clip-near: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+}
+
+:root[data-rf-scene="lake"] .ba-scene-near {
+  overflow: hidden;
+  /* Bright at the far shore where it takes the sky's horizon colour
+     straight, a highlight seam right at the shoreline where land meets
+     water, then deepens toward the viewer. That seam is what stops the
+     join between mid-ridge and water from reading as a hard clipped edge. */
+  background:
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--sky-horizon) 30%, var(--orb-core) 8%) 0%,
+      color-mix(in oklab, var(--sky-horizon) 60%, var(--phase-near)) 6%,
+      color-mix(in oklab, var(--sky-low) 34%, var(--phase-near)) 40%,
+      var(--phase-near) 100%
+    );
+  /* No horizontal slide: a lake sliding sideways reads as a mistake. A
+     slow vertical swell instead, the whole plane breathing by a hair, which
+     is close enough to how ripples actually read at this distance. */
+  animation: ba-lake-swell 26s ease-in-out infinite alternate;
+  transform-origin: bottom;
+}
+
+/* The far ridge, drowned: same clip-path as --clip-far, so the same shape
+   as its source, but into a box under a third the height. Clip-path
+   coordinates are always 0-100% of their own box, so shrinking the box is
+   what does the compressing; a plain `scaleY(-1)` on top of that, pivoting
+   on the box's own centre, is then a clean flip with no offset math to get
+   wrong: the shape's bottom edge (the land/water line) lands back at the
+   top of this box, right at the shoreline, and the peaks hang down into
+   the water below it. Darker and flatter than the rock it copies, the way
+   light loses contrast bouncing off a surface instead of a solid. */
+:root[data-rf-scene="lake"] .ba-scene-near::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 70%;
+  clip-path: var(--clip-far);
+  transform: scaleY(-1);
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0px,
+      transparent 3px,
+      color-mix(in oklab, var(--sky-low) 40%, transparent) 3px,
+      color-mix(in oklab, var(--sky-low) 40%, transparent) 5px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--range-far) 55%, var(--phase-near)) 0%,
+      color-mix(in oklab, var(--range-far) 30%, var(--phase-near)) 70%,
+      transparent 100%
+    );
+  opacity: .55;
+  filter: blur(1.5px);
+  animation: ba-lake-ripple 17s ease-in-out infinite alternate;
+}
+
+/* The orb's own reflection: a soft column under it that fans out as it
+   approaches the bottom edge, i.e. the shore nearest the viewer. A
+   perfectly parallel column reads as a spotlight; a widening one reads as
+   glitter on a surface tilting away underfoot. Ripple-banded the same way
+   as the ridge reflection so the two visibly belong to the same water. */
+:root[data-rf-scene="lake"] .ba-scene-near::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--orb-x) + var(--orb-size) / 2);
+  width: 46%;
+  transform: translateX(-50%);
+  clip-path: polygon(46% 0%, 54% 0%, 78% 100%, 22% 100%);
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0px,
+      transparent 4px,
+      rgba(0, 0, 0, .16) 4px,
+      rgba(0, 0, 0, .16) 6px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--orb-core) 55%, transparent) 0%,
+      color-mix(in oklab, var(--orb-core) 22%, transparent) 45%,
+      color-mix(in oklab, var(--orb-core) 34%, transparent) 78%,
+      transparent 96%
+    );
+  filter: blur(6px);
+  animation: ba-lake-glitter 6s ease-in-out infinite alternate;
+}
+
+@keyframes ba-lake-swell {
+  from { transform: scaleY(1); }
+  to   { transform: scaleY(1.012); }
+}
+@keyframes ba-lake-ripple {
+  from { transform: scaleY(-1); }
+  to   { transform: scaleY(-.92); }
+}
+@keyframes ba-lake-glitter {
+  from { opacity: .62; transform: translateX(-50%) scaleY(1); }
+  to   { opacity: .92; transform: translateX(-50%) scaleY(1.03); }
+}
+
+/* Low mist sitting on the water, in front of the ridges but under the
+   scrim: two flattened bands hugging the shoreline, drifting at a crawl.
+   `.ba-scene-motes` is the layer meant for exactly this, anything between
+   the viewer and the land. */
+:root[data-rf-scene="lake"] .ba-scene-motes::before {
+  content: "";
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  bottom: 22%;
+  height: 16%;
+  background:
+    radial-gradient(46% 100% at 20% 50%, color-mix(in oklab, var(--haze) 70%, white 10%), transparent 72%),
+    radial-gradient(38% 100% at 62% 50%, color-mix(in oklab, var(--haze) 70%, white 10%), transparent 72%),
+    radial-gradient(42% 100% at 90% 50%, color-mix(in oklab, var(--haze) 70%, white 10%), transparent 72%);
+  filter: blur(14px);
+  opacity: .5;
+  animation: ba-lake-mist 95s ease-in-out infinite alternate;
+}
+:root[data-rf-scene="lake"] .ba-scene-motes::after {
+  content: "";
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  bottom: 27%;
+  height: 10%;
+  background: radial-gradient(60% 100% at 50% 50%, color-mix(in oklab, var(--haze) 55%, transparent), transparent 78%);
+  filter: blur(20px);
+  opacity: .35;
+  animation: ba-lake-mist 140s ease-in-out infinite alternate-reverse;
+}
+@keyframes ba-lake-mist {
+  from { transform: translate3d(-2%, 0, 0); }
+  to   { transform: translate3d(2.5%, 0, 0); }
+}
+
+/* Volcano: a caldera scene built to read as lit from inside, at any hour.
+   The cone is the mid range (tallest box of the three, so its summit
+   clears the nearer foothills and actually dominates the skyline). Its
+   clip-path cuts a V into the summit: two rim points with a lower dip
+   between them. That dip is not filled with anything, it is just where the
+   silhouette stops early, so whatever sits behind it on .ba-scene-aux
+   shows straight through the gap. That is the whole trick for a glow that
+   reads as inside the crater rather than painted on top of it. */
+:root[data-rf-scene="volcano"] .ba-scene {
+  --lava: color-mix(in oklab, #ff6a2b 82%, var(--sky-horizon) 18%);
+  --range-far: color-mix(in oklab, var(--phase-far) 62%, #4a3b42);
+  --range-mid: color-mix(in oklab, var(--phase-mid) 70%, #2e2530);
+  --range-near: color-mix(in oklab, var(--phase-near) 86%, #1a1418);
+
+  --h-far: 40%;
+  --h-mid: 48%;
+  --h-near: 27%;
+
+  /* Older, eroded cones behind the active one. Irregular but unremarkable,
+     nothing here should compete with the notch. */
+  --clip-far: polygon(
+    0% 55%, 8% 48%, 16% 52%, 24% 42%, 32% 47%, 40% 38%, 48% 44%,
+    55% 36%, 62% 41%, 68% 33%, 74% 39%, 80% 45%, 86% 40%, 92% 47%,
+    100% 50%, 100% 100%, 0% 100%
+  );
+  /* The cone. Shoulders are close to symmetric, the way a stratovolcano
+     actually is, with the crater as two rim points (49%/51% at 20%) and a
+     notch between them (50% at 32%) that dips well below both. */
+  --clip-mid: polygon(
+    0% 78%, 10% 74%, 20% 70%, 28% 64%, 34% 55%, 40% 44%, 44% 34%,
+    47% 26%, 49% 20%, 50% 32%, 51% 20%, 53% 26%, 56% 34%, 60% 44%,
+    66% 55%, 72% 64%, 80% 70%, 90% 74%, 100% 78%, 100% 100%, 0% 100%
+  );
+  /* Broken foreground rim, close enough that it is rubble rather than a
+     silhouette anymore. Its own low points let crater light catch the
+     inward faces of the two peaks flanking centre. */
+  --clip-near: polygon(
+    0% 68%, 6% 58%, 12% 64%, 18% 50%, 24% 60%, 30% 46%, 38% 56%,
+    44% 40%, 50% 52%, 52% 44%, 56% 54%, 62% 42%, 68% 58%, 74% 48%,
+    80% 60%, 86% 52%, 92% 62%, 100% 56%, 100% 100%, 0% 100%
+  );
+}
+
+/* Warmth on the rim tips themselves, as if the glow below is licking the
+   inside edge of the crater. Same box-relative coordinates as the clip
+   points they sit on. */
+:root[data-rf-scene="volcano"] .ba-scene-mid {
+  background:
+    radial-gradient(8% 10% at 49% 20%, color-mix(in oklab, var(--lava) 55%, transparent), transparent 70%),
+    radial-gradient(8% 10% at 51% 20%, color-mix(in oklab, var(--lava) 55%, transparent), transparent 70%),
+    linear-gradient(to bottom, var(--range-mid), color-mix(in oklab, var(--range-mid) 78%, var(--haze)));
+}
+/* Lit undersides on the two foreground peaks that flank the crater axis:
+   light bouncing off the caldera catches their inward faces before the
+   rest of the rubble. */
+:root[data-rf-scene="volcano"] .ba-scene-near {
+  background:
+    radial-gradient(12% 16% at 44% 36%, color-mix(in oklab, var(--lava) 45%, transparent), transparent 72%),
+    radial-gradient(12% 16% at 62% 38%, color-mix(in oklab, var(--lava) 40%, transparent), transparent 72%),
+    linear-gradient(to bottom, var(--range-near), color-mix(in oklab, var(--range-near) 88%, var(--haze)));
+}
+
+/* The crater glow itself. Aux paints behind the haze and every range, so
+   it only ever becomes visible through the notch cut into --clip-mid
+   above, plus a soft bleed into the haze right around it. Converting the
+   notch's box-relative position (50%, 32% of a box that starts 52% down
+   the viewport, since h-mid is 48%) into viewport space puts the notch at
+   roughly (50%, 67%): comfortably inside the bottom half, well clear of
+   the deck list. Two layers at different sizes and pulse rates so it
+   reads as a shifting glow rather than a single flat light. Opacity only,
+   per the motion contract; brightness never comes from filter or shadow. */
+:root[data-rf-scene="volcano"] .ba-scene-aux::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 67%;
+  width: 20%;
+  height: 24%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, var(--lava), transparent 70%);
+  filter: blur(22px);
+  animation: ba-volcano-glow-inner 34s ease-in-out infinite alternate;
+}
+:root[data-rf-scene="volcano"] .ba-scene-aux::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 68%;
+  width: 46%;
+  height: 34%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, color-mix(in oklab, var(--lava) 55%, transparent), transparent 74%);
+  filter: blur(34px);
+  animation: ba-volcano-glow-outer 41s ease-in-out infinite alternate;
+}
+@keyframes ba-volcano-glow-inner {
+  from { opacity: .55; }
+  to   { opacity: .95; }
+}
+@keyframes ba-volcano-glow-outer {
+  from { opacity: .3; }
+  to   { opacity: .6; }
+}
+
+/* Ash rising off the cone as a slow diffuse smear, and a scatter of embers
+   riding above it that cool and fade well before they would ever cross
+   into the deck-list half of the window. Both climb and dissipate rather
+   than bounce back down, so these run one-directional, not alternate. */
+:root[data-rf-scene="volcano"] .ba-scene-motes::before {
+  content: "";
+  position: absolute;
+  left: 42%;
+  top: 40%;
+  width: 18%;
+  height: 26%;
+  background: radial-gradient(60% 70% at 50% 100%, color-mix(in oklab, var(--haze) 60%, #6b5a5a), transparent 72%);
+  filter: blur(16px);
+  opacity: 0;
+  animation: ba-volcano-ash 150s linear infinite;
+  will-change: transform, opacity;
+}
+:root[data-rf-scene="volcano"] .ba-scene-motes::after {
+  content: "";
+  position: absolute;
+  left: 46%;
+  top: 62%;
+  width: 10%;
+  height: 8%;
+  background:
+    radial-gradient(1.6px 1.6px at 20% 80%, var(--lava), transparent 60%),
+    radial-gradient(1.4px 1.4px at 60% 60%, var(--lava), transparent 60%),
+    radial-gradient(1.2px 1.2px at 85% 90%, color-mix(in oklab, var(--lava) 80%, white), transparent 60%);
+  animation: ba-volcano-embers 22s linear infinite;
+  will-change: transform, opacity;
+}
+@keyframes ba-volcano-ash {
+  0%   { transform: translate3d(0, 0, 0); opacity: 0; }
+  15%  { opacity: .22; }
+  100% { transform: translate3d(4%, -60%, 0); opacity: 0; }
+}
+@keyframes ba-volcano-embers {
+  0%   { transform: translate3d(0, 0, 0) scale(1); opacity: 0; }
+  20%  { opacity: .85; }
+  100% { transform: translate3d(3%, -46%, 0) scale(.7); opacity: 0; }
+}
+
+/* Anki Design - scene: isles.
+   Floating islands over a distant valley. The three named ranges stop being
+   mountains here: heights drop low and their silhouettes flatten into a
+   gentle roll, standing in for a valley floor seen from well above it,
+   which is what leaves the sky open for the real subject.
+
+   `.ba-scene-aux` and `.ba-scene-motes` are both left at their default
+   full-viewport `inset: 0` on purpose. A pseudo-element's own percentages
+   resolve against the box its generator actually occupies, so every shape
+   here lives on `::before` / `::after` and gets sized and placed with
+   plain viewport-relative percentages; if either generator were shrunk to
+   an island's own footprint instead, its pseudo-elements would inherit
+   that smaller box as their coordinate space and every number below would
+   mean something else.
+
+   Island one, the large one, is `.ba-scene-aux::before` (the rounded cap:
+   `border-radius` is enough on its own once the shape is a small box, no
+   clip-path needed) sitting directly over `.ba-scene-aux::after` (the
+   tapering rocky underside, `clip-path`). They are siblings, not parent and
+   child, so what keeps them moving as one body is not inheritance: it is
+   giving both literally the same `animation` name and timing, so every
+   frame moves them by the same amount. Island two lives on
+   `.ba-scene-motes` instead, in front of the ridges rather than behind
+   them: smaller, nearer, drifting past on its own schedule, which is what
+   actually reads as a second depth rather than a matched pair. The
+   waterfall shares that layer, since falling water in front of the valley
+   needs no relation to either island's shape. */
+
+:root[data-rf-scene="isles"] .ba-scene {
+  --range-far: color-mix(in oklab, var(--phase-far) 60%, #5c8f5a);
+  --range-mid: color-mix(in oklab, var(--phase-mid) 68%, #487a4c);
+  --range-near: color-mix(in oklab, var(--phase-near) 84%, #274430);
+  /* Low and gentle: a valley floor a long way down, not a skyline. */
+  --h-far: 17%;
+  --h-mid: 12%;
+  --h-near: 8%;
+  --clip-far: polygon(
+    0% 58%, 10% 48%, 20% 56%, 30% 44%, 40% 54%, 50% 42%, 60% 52%,
+    70% 40%, 80% 50%, 90% 42%, 100% 52%, 100% 100%, 0% 100%
+  );
+  --clip-mid: polygon(
+    0% 64%, 12% 52%, 25% 62%, 38% 48%, 50% 60%, 62% 46%, 75% 58%,
+    88% 46%, 100% 56%, 100% 100%, 0% 100%
+  );
+  --clip-near: polygon(
+    0% 70%, 15% 56%, 30% 68%, 45% 52%, 60% 66%, 75% 50%, 90% 64%,
+    100% 54%, 100% 100%, 0% 100%
+  );
+}
+
+/* ---- island one: the large one, with the waterfall ---- */
+/* The cap. Bottom-anchored like the ranges so a shorter window keeps it
+   clear of the 52% line the deck rows and heatmap need, same reason the
+   ranges themselves anchor to the bottom rather than the top. */
+:root[data-rf-scene="isles"] .ba-scene-aux::before {
+  content: "";
+  position: absolute;
+  left: 8%;
+  bottom: 32%;
+  width: 30%;
+  height: 12%;
+  border-radius: 50% 50% 16% 16% / 100% 100% 24% 24%;
+  background: linear-gradient(to bottom,
+    color-mix(in oklab, var(--phase-far) 45%, #6fae55) 0%,
+    color-mix(in oklab, var(--phase-mid) 62%, #7a6142) 62%,
+    color-mix(in oklab, var(--phase-near) 78%, #3a2a1a) 100%
+  );
+  animation: ba-isles-drift-1 175s ease-in-out infinite alternate;
+  will-change: transform;
+}
+/* The rocky underside: same left and width as the cap so it reads as one
+   mass, sitting directly beneath it, tapering to a single off-centre
+   point the way an eroded root would rather than a neat cone. */
+:root[data-rf-scene="isles"] .ba-scene-aux::after {
+  content: "";
+  position: absolute;
+  left: 8%;
+  bottom: 18%;
+  width: 30%;
+  height: 14%;
+  clip-path: polygon(
+    4% 0%, 96% 0%, 88% 22%, 74% 42%, 58% 60%, 46% 100%,
+    42% 60%, 26% 42%, 12% 22%
+  );
+  background: linear-gradient(to bottom,
+    color-mix(in oklab, var(--phase-mid) 55%, #7a6042) 0%,
+    color-mix(in oklab, var(--phase-near) 82%, #2e2013) 100%
+  );
+  /* Same name, same timing as the cap above: two elements reading as one
+     rigid body because they move by an identical amount every frame. */
+  animation: ba-isles-drift-1 175s ease-in-out infinite alternate;
+  will-change: transform;
+}
+@keyframes ba-isles-drift-1 {
+  from { transform: translate3d(-2%, 0, 0); }
+  to   { transform: translate3d(2%, .8%, 0); }
+}
+
+/* ---- island two: smaller, nearer, on its own schedule ---- */
+/* One polygon does the whole shape: enough points around the top arc to
+   read as rounded without a second element, the same taper-to-a-point
+   logic at the bottom. Living on `.ba-scene-motes` rather than `.ba-scene-
+   aux` puts it in front of the ridges and, more to the point, gives it a
+   completely separate animation with no shared ancestor to keep it in
+   step with island one: that independence is the parallax. */
+:root[data-rf-scene="isles"] .ba-scene-motes::before {
+  content: "";
+  position: absolute;
+  left: 60%;
+  bottom: 22%;
+  width: 16%;
+  height: 10%;
+  clip-path: polygon(
+    50% 4%, 68% 8%, 82% 20%, 92% 36%, 96% 52%, 84% 66%,
+    68% 80%, 58% 100%, 42% 80%, 26% 66%, 14% 52%, 8% 36%,
+    18% 20%, 32% 8%
+  );
+  background: linear-gradient(to bottom,
+    color-mix(in oklab, var(--phase-mid) 50%, #6fae55) 0%,
+    color-mix(in oklab, var(--phase-mid) 68%, #7a6142) 58%,
+    color-mix(in oklab, var(--phase-near) 82%, #3a2a1a) 100%
+  );
+  animation: ba-isles-drift-2 130s ease-in-out infinite alternate;
+  will-change: transform;
+}
+@keyframes ba-isles-drift-2 {
+  from { transform: translate3d(1.5%, .3%, 0); }
+  to   { transform: translate3d(-1.5%, -.5%, 0); }
+}
+
+/* ---- falling water, fading to mist before it lands ---- */
+/* Inset to the full stage rather than boxed to its own footprint, because
+   two `radial-gradient(... at x% y%)` layers can be positioned anywhere in
+   that space directly, no separate box to size and align by hand. The
+   narrow one is the stream, hung under island one's point; the wide flat
+   one near the bottom is the mist it becomes, the fade built entirely out
+   of each gradient's own transparent stop rather than a change in blur. */
+:root[data-rf-scene="isles"] .ba-scene-motes::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(9% 6% at 22% 97%,
+      color-mix(in oklab, white 50%, var(--sky-low)), transparent 72%),
+    radial-gradient(3% 22% at 22% 88%,
+      color-mix(in oklab, white 55%, var(--sky-horizon)), transparent 66%);
+  filter: blur(9px);
+  opacity: .4;
+  animation: ba-isles-falls 6s ease-in-out infinite alternate;
+  will-change: opacity, transform;
+}
+@keyframes ba-isles-falls {
+  from { opacity: .32; transform: scale(1); }
+  to   { opacity: .46; transform: scale(1.05); }
+}
+
+/* ---- tundra : glacial ice field ----
+
+   Where the mountain ranges are rolling, ice is not. Every silhouette
+   here is built from straight jumps between points rather than the
+   gentle up-down drift the default ranges use, so the shelves and bergs
+   read as broken and faceted instead of eroded. Far is a flat-topped ice
+   shelf stepping in and out; mid and near are angular berg clusters, the
+   near rank large enough to read as ice you could stand on rather than
+   ice you are looking at from a distance.
+
+   Cold reads as blue-white tint held close to the sky's own colours, not
+   as a fixed palette, so the shelf still warms slightly at dusk instead
+   of staying a photograph of itself across all four hours. */
+:root[data-rf-scene="tundra"] .ba-scene {
+  --range-far: color-mix(in oklab, var(--phase-far) 55%, #cfe9f2);
+  --range-mid: color-mix(in oklab, var(--phase-mid) 64%, #9fc9d9);
+  --range-near: color-mix(in oklab, var(--phase-near) 80%, #3d5b68);
+  --h-far: 39%;
+  --h-mid: 30%;
+  --h-near: 23%;
+
+  /* Flat-topped shelf, stepping up and down between plateaus rather
+     than peaking. The diagonal jump between each plateau and the next
+     is the facet; a rolling range would round that corner off. */
+  --clip-far: polygon(
+    0% 70%, 10% 70%, 14% 55%, 24% 55%, 28% 68%, 40% 68%, 45% 48%,
+    58% 48%, 62% 66%, 74% 66%, 79% 52%, 90% 52%, 94% 64%, 100% 64%,
+    100% 100%, 0% 100%
+  );
+  /* Broken pack ice: sharp zigzag with no two teeth the same height,
+     closer to shattered glass than to a hillside. */
+  --clip-mid: polygon(
+    0% 62%, 8% 62%, 12% 40%, 18% 54%, 24% 34%, 32% 58%, 38% 44%,
+    46% 60%, 52% 38%, 60% 56%, 67% 46%, 74% 64%, 80% 42%, 88% 58%,
+    94% 48%, 100% 60%, 100% 100%, 0% 100%
+  );
+  /* Foreground bergs: fewer, larger, almost rectilinear blocks, the
+     scale close enough that each one is a distinct mass rather than
+     texture. */
+  --clip-near: polygon(
+    0% 55%, 16% 55%, 22% 72%, 34% 72%, 40% 50%, 56% 50%, 62% 74%,
+    78% 74%, 84% 58%, 100% 58%, 100% 100%, 0% 100%
+  );
+}
+
+/* ---- fracture lines ----
+   A bright crack riding on the mid and near shelves. Each is its own
+   pseudo-element so it can carry a colour and angle the ridge itself
+   does not, but it still lives inside the range box, so --clip-mid and
+   --clip-near crop it to the ice exactly the way they crop the ice
+   itself: the crack cannot float off the edge of a berg it belongs to. */
+:root[data-rf-scene="tundra"] .ba-scene-near::before {
+  content: "";
+  position: absolute;
+  left: 8%;
+  right: 22%;
+  bottom: 60%;
+  height: 3%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--sky-horizon) 30%, #eaffff) 35%,
+    color-mix(in oklab, var(--sky-horizon) 10%, #ffffff) 55%,
+    transparent
+  );
+  transform: rotate(-4deg);
+  filter: blur(1px);
+  opacity: .75;
+  animation: ba-tundra-fracture-a 11s ease-in-out infinite alternate;
+}
+:root[data-rf-scene="tundra"] .ba-scene-mid::before {
+  content: "";
+  position: absolute;
+  left: 30%;
+  right: 10%;
+  bottom: 42%;
+  height: 2.4%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--sky-low) 25%, #eafcff) 40%,
+    transparent
+  );
+  transform: rotate(3deg);
+  filter: blur(1px);
+  opacity: .55;
+  animation: ba-tundra-fracture-b 13s ease-in-out infinite alternate;
+}
+@keyframes ba-tundra-fracture-a {
+  from { opacity: .45; }
+  to   { opacity: .9; }
+}
+@keyframes ba-tundra-fracture-b {
+  from { opacity: .3; }
+  to   { opacity: .65; }
+}
+
+/* ---- aurora ----
+   The one vivid thing this scene is allowed. Kept low: its top edge
+   sits at 56%, four points clear of the 52% line the deck rows and
+   heatmap occupy, and most of its height falls behind the far and near
+   shelves anyway since aux paints underneath the ranges. What survives
+   is a glow above the ice rather than a curtain across the sky, which
+   reads as more distant and lets the scrim do the rest of the work.
+   Opacity is --stars again: full at night, nothing at noon. */
+:root[data-rf-scene="tundra"] .ba-scene-aux {
+  inset: 0;
+}
+:root[data-rf-scene="tundra"] .ba-scene-aux::before,
+:root[data-rf-scene="tundra"] .ba-scene-aux::after {
+  content: "";
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  top: 56%;
+  height: 20%;
+  filter: blur(22px);
+  opacity: calc(var(--stars) * .8);
+  transition: opacity 900ms ease;
+  will-change: transform;
+}
+:root[data-rf-scene="tundra"] .ba-scene-aux::before {
+  background:
+    radial-gradient(60% 70% at 30% 40%, color-mix(in oklab, var(--sky-low) 25%, #38e8a4), transparent 68%),
+    radial-gradient(50% 60% at 68% 55%, color-mix(in oklab, var(--sky-mid) 20%, #7a5bff), transparent 70%);
+  animation: ba-tundra-aurora-a 200s ease-in-out infinite alternate;
+}
+:root[data-rf-scene="tundra"] .ba-scene-aux::after {
+  background:
+    radial-gradient(46% 60% at 52% 46%, color-mix(in oklab, var(--sky-horizon) 20%, #4be0c0), transparent 72%);
+  animation: ba-tundra-aurora-b 260s ease-in-out infinite alternate;
+}
+@keyframes ba-tundra-aurora-a {
+  from { transform: translate3d(-3%, 0, 0) scaleY(1); }
+  to   { transform: translate3d(3%, -2%, 0) scaleY(1.12); }
+}
+@keyframes ba-tundra-aurora-b {
+  from { transform: translate3d(2%, 1%, 0); }
+  to   { transform: translate3d(-4%, -1%, 0); }
+}
+
+/* ---- falling snow ----
+   Two tiled layers of tiny flakes at different densities and speeds so
+   the fall has depth instead of every flake moving in lock step. Each
+   layer is overscanned well past the viewport on every side; a flake
+   drifting sideways as it falls must never run out of background before
+   the loop resets. */
+:root[data-rf-scene="tundra"] .ba-scene-motes {
+  inset: 0;
+}
+:root[data-rf-scene="tundra"] .ba-scene-motes::before,
+:root[data-rf-scene="tundra"] .ba-scene-motes::after {
+  content: "";
+  position: absolute;
+  inset: -30% -20%;
+  background-repeat: repeat;
+  will-change: transform;
+}
+:root[data-rf-scene="tundra"] .ba-scene-motes::before {
+  background-image:
+    radial-gradient(1.4px 1.4px at 10% 10%, rgba(255, 255, 255, .85), transparent 60%),
+    radial-gradient(1px 1px at 40% 55%, rgba(255, 255, 255, .7), transparent 60%),
+    radial-gradient(1.6px 1.6px at 70% 25%, rgba(255, 255, 255, .8), transparent 60%),
+    radial-gradient(1.2px 1.2px at 88% 70%, rgba(255, 255, 255, .65), transparent 60%);
+  background-size: 22% 26%;
+  opacity: .8;
+  animation: ba-tundra-snow-a 14s linear infinite;
+}
+:root[data-rf-scene="tundra"] .ba-scene-motes::after {
+  background-image:
+    radial-gradient(1px 1px at 20% 20%, rgba(255, 255, 255, .6), transparent 60%),
+    radial-gradient(1.3px 1.3px at 55% 60%, rgba(255, 255, 255, .55), transparent 60%),
+    radial-gradient(1px 1px at 82% 35%, rgba(255, 255, 255, .5), transparent 60%);
+  background-size: 30% 34%;
+  opacity: .5;
+  animation: ba-tundra-snow-b 20s linear infinite;
+}
+@keyframes ba-tundra-snow-a {
+  from { transform: translate3d(-2%, 0%, 0); }
+  to   { transform: translate3d(4%, 26%, 0); }
+}
+@keyframes ba-tundra-snow-b {
+  from { transform: translate3d(3%, 0%, 0); }
+  to   { transform: translate3d(-3%, 34%, 0); }
+}
+
+/* Spires: hoodoo country, the vertical counterpart to canyon's horizontal
+   strata. Each tower is drawn base-waist-cap-tip: the outline steps inward
+   for the narrow waist and then back outward past the waist's own line for
+   the cap, so the cap genuinely overhangs rather than the tower just
+   tapering to a point. Leaning comes from shifting the cap and tip points
+   sideways off the base's centre line, not from rotating anything.
+
+   The near layer carries the tallest, darkest towers on purpose, framing
+   both edges of the window, which is the opposite of the usual "near is
+   short and dark, far is tall and pale" convention the other scenes use.
+   Every tip on that layer is kept at least 12% of the layer's own height
+   below its box top, which multiplied out by --h-near keeps every peak
+   several points clear of the 52% line the deck list and heatmap occupy. */
+
+:root[data-rf-scene="spires"] .ba-scene {
+  --range-far: color-mix(in oklab, var(--phase-far) 55%, #d98f52);
+  --range-mid: color-mix(in oklab, var(--phase-mid) 62%, #b5643a);
+  --range-near: color-mix(in oklab, var(--phase-near) 92%, #1c0f0a);
+  --h-far: 32%;
+  --h-mid: 42%;
+  --h-near: 50%;
+
+  /* Far: five slim, simply-knobbled hoodoos, hazy and small. */
+  --clip-far: polygon(
+    4% 100%, 4% 66%, 6.4% 66%, 6.4% 42%, 6.2% 42%, 6.2% 24%, 8.3% 24%,
+    8.3% 15%, 9.7% 15%, 9.7% 24%, 11.8% 24%, 11.8% 42%, 9.6% 42%, 9.6% 66%,
+    12% 66%, 12% 100%,
+    22.5% 100%, 22.5% 70%, 24.6% 70%, 24.6% 48%, 22.5% 48%, 22.5% 30%,
+    24.4% 30%, 24.4% 20%, 25.6% 20%, 25.6% 30%, 27.5% 30%, 27.5% 48%,
+    27.4% 48%, 27.4% 70%, 29.5% 70%, 29.5% 100%,
+    40.8% 100%, 40.8% 64%, 43.3% 64%, 43.3% 40%, 42.8% 40%, 42.8% 22%,
+    45% 22%, 45% 13%, 45.8% 13%, 45.8% 22%, 48.8% 22%, 48.8% 40%,
+    46.7% 40%, 46.7% 64%, 49.2% 64%, 49.2% 100%,
+    60.2% 100%, 60.2% 68%, 62.5% 68%, 62.5% 44%, 60.5% 44%, 60.5% 26%,
+    62.5% 26%, 62.5% 17%, 63.9% 17%, 63.9% 26%, 65.9% 26%, 65.9% 44%,
+    65.5% 44%, 65.5% 68%, 67.8% 68%, 67.8% 100%,
+    78.5% 100%, 78.5% 62%, 81.2% 62%, 81.2% 38%, 81% 38%, 81% 20%,
+    83.4% 20%, 83.4% 11%, 85% 11%, 85% 20%, 87.4% 20%, 87.4% 38%,
+    84.8% 38%, 84.8% 62%, 87.5% 62%, 87.5% 100%,
+    100% 100%, 0% 100%
+  );
+
+  /* Mid: four thicker towers, moderate lean, moderate overhang. */
+  --clip-mid: polygon(
+    7% 100%, 7% 70%, 10% 70%, 10% 42%, 9.2% 42%, 9.2% 20%, 12.2% 20%,
+    12.2% 10%, 13.8% 10%, 13.8% 20%, 16.8% 20%, 16.8% 42%, 14% 42%,
+    14% 70%, 17% 70%, 17% 100%,
+    29% 100%, 29% 74%, 32.5% 74%, 32.5% 48%, 28.5% 48%, 28.5% 26%,
+    32% 26%, 32% 16%, 34% 16%, 34% 26%, 37.5% 26%, 37.5% 74%, 41% 74%,
+    41% 100%,
+    53.5% 100%, 53.5% 78%, 56.2% 78%, 56.2% 54%, 56% 54%, 56% 32%,
+    58.6% 32%, 58.6% 22%, 60.4% 22%, 60.4% 32%, 63% 32%, 63% 54%,
+    59.8% 54%, 59.8% 78%, 62.5% 78%, 62.5% 100%,
+    76.5% 100%, 76.5% 72%, 79.8% 72%, 79.8% 46%, 76.3% 46%, 76.3% 24%,
+    79.5% 24%, 79.5% 14%, 81.5% 14%, 81.5% 24%, 84.7% 24%, 84.7% 46%,
+    84.2% 46%, 84.2% 72%, 87.5% 72%, 87.5% 100%,
+    100% 100%, 0% 100%
+  );
+
+  /* Near: five tall, near-black towers. The first and last are sized so
+     their outer walls meet the box edges, framing the window. */
+  --clip-near: polygon(
+    0% 100%, 0% 78%, 4% 78%, 4% 45%, 4.5% 45%, 4.5% 18%, 9% 18%, 9% 12%,
+    11% 12%, 11% 18%, 15.5% 18%, 15.5% 45%, 10% 45%, 10% 78%, 14% 78%,
+    14% 100%,
+    22% 100%, 22% 82%, 25% 82%, 25% 58%, 21% 58%, 21% 34%, 24% 34%,
+    24% 24%, 26% 24%, 26% 34%, 29% 34%, 29% 82%, 32% 82%, 32% 100%,
+    44.5% 100%, 44.5% 80%, 46.5% 80%, 46.5% 50%, 46.2% 50%, 46.2% 26%,
+    48.2% 26%, 48.2% 14%, 49.8% 14%, 49.8% 26%, 51.8% 26%, 51.8% 50%,
+    49.5% 50%, 49.5% 80%, 51.5% 80%, 51.5% 100%,
+    62% 100%, 62% 84%, 65.5% 84%, 65.5% 62%, 60% 62%, 60% 40%, 63.8% 40%,
+    63.8% 30%, 66.2% 30%, 66.2% 40%, 70% 40%, 70% 62%, 70.5% 62%,
+    70.5% 84%, 74% 84%, 74% 100%,
+    85% 100%, 85% 76%, 89.5% 76%, 89.5% 42%, 88.5% 42%, 88.5% 16%,
+    93.2% 16%, 93.2% 12%, 95.8% 12%, 95.8% 16%, 100.5% 16%, 100.5% 42%,
+    95.5% 42%, 95.5% 76%, 100% 76%,
+    100% 100%, 0% 100%
+  );
+}
+
+/* Aux: a low ember-glow sitting on the canyon floor between the towers,
+   built from the hour's own horizon colour so it banks toward orange at
+   dusk and thins out under a blue noon sky instead of always looking like
+   the same fire. */
+:root[data-rf-scene="spires"] .ba-scene-aux::before {
+  content: "";
+  position: absolute;
+  left: -10%;
+  right: -10%;
+  bottom: 0;
+  height: 20%;
+  background:
+    radial-gradient(40% 100% at 30% 100%, color-mix(in oklab, var(--sky-horizon) 55%, var(--orb-core)), transparent 72%),
+    radial-gradient(34% 100% at 68% 100%, color-mix(in oklab, var(--sky-horizon) 45%, var(--orb-core)), transparent 70%);
+  filter: blur(24px);
+  opacity: .5;
+  animation: ba-spires-glow-breathe 52s ease-in-out infinite alternate;
+}
+@keyframes ba-spires-glow-breathe {
+  from { opacity: .32; transform: scale3d(1, 1, 1); }
+  to   { opacity: .62; transform: scale3d(1.06, 1.1, 1); }
+}
+
+/* Motes: warm seeds of light lifting off the glow and drifting up past the
+   towers, like embers on a thermal rather than snow or dust. Two groups on
+   different rise times so they never step together. */
+:root[data-rf-scene="spires"] .ba-scene-motes::before,
+:root[data-rf-scene="spires"] .ba-scene-motes::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: .6;
+}
+:root[data-rf-scene="spires"] .ba-scene-motes::before {
+  background-image:
+    radial-gradient(1.6px 1.6px at 18% 88%, color-mix(in oklab, var(--sky-horizon) 60%, #ffd9a0), transparent 70%),
+    radial-gradient(1.3px 1.3px at 44% 80%, color-mix(in oklab, var(--sky-horizon) 50%, #ffe4b8), transparent 70%),
+    radial-gradient(1.8px 1.8px at 66% 86%, color-mix(in oklab, var(--sky-horizon) 65%, #ffcf8a), transparent 70%),
+    radial-gradient(1.2px 1.2px at 85% 78%, color-mix(in oklab, var(--sky-horizon) 45%, #ffe4b8), transparent 70%);
+  animation: ba-spires-embers-rise 96s linear infinite;
+}
+:root[data-rf-scene="spires"] .ba-scene-motes::after {
+  background-image:
+    radial-gradient(1.4px 1.4px at 30% 84%, color-mix(in oklab, var(--sky-horizon) 55%, #ffd9a0), transparent 70%),
+    radial-gradient(1.6px 1.6px at 57% 90%, color-mix(in oklab, var(--sky-horizon) 60%, #ffcf8a), transparent 70%),
+    radial-gradient(1.2px 1.2px at 77% 82%, color-mix(in oklab, var(--sky-horizon) 45%, #ffe4b8), transparent 70%);
+  animation: ba-spires-embers-rise 133s linear infinite reverse;
+}
+@keyframes ba-spires-embers-rise {
+  0%   { transform: translate3d(0, 0, 0); opacity: 0; }
+  10%  { opacity: .8; }
+  85%  { opacity: .5; }
+  100% { transform: translate3d(2%, -46%, 0); opacity: 0; }
+}
+
+/* ---- ruins ----
+   A dead city reduced to three silhouettes: soft hills behind everything,
+   a cluster of broken towers holding the one tall survivor, and a foreground
+   row of standing stones with a fallen arch lying among them. Rectilinear
+   clip paths throughout, the same stair-step technique `canyon` uses,
+   because architecture breaks into right angles where dunes and forests
+   don't. The only colour in the whole scene besides sky and stone is a
+   handful of window-sized rectangles on the tall tower, lit by the hour
+   rather than by us: `var(--stars)` is already 1 at night and 0 at noon,
+   which is exactly the curve a lit window should follow. */
+:root[data-rf-scene="ruins"] .ba-scene {
+  --range-far: color-mix(in oklab, var(--phase-far) 74%, #5a5468);
+  --range-mid: color-mix(in oklab, var(--phase-mid) 80%, #3a3542);
+  --range-near: color-mix(in oklab, var(--phase-near) 90%, #1c1a22);
+  --h-far: 20%;
+  --h-mid: 50%;
+  --h-near: 32%;
+
+  /* Low rolling hills, the only smooth silhouette in the scene, there so
+     the towers have somewhere to stand rather than floating on the sky. */
+  --clip-far: polygon(
+    0% 62%, 8% 54%, 16% 60%, 24% 50%, 32% 58%, 40% 48%, 48% 56%,
+    56% 46%, 64% 54%, 72% 47%, 80% 56%, 88% 50%, 100% 58%,
+    100% 100%, 0% 100%
+  );
+
+  /* The tower cluster: a run of rubble at each end, one broken stump left
+     of centre, and the tall survivor spanning roughly 39-55%, its top a
+     ragged crenellation rather than a point because a tower that broke
+     stopped at whatever height the break left it. */
+  --clip-mid: polygon(
+    0% 100%, 0% 82%, 6% 82%, 6% 70%, 11% 70%, 11% 75%, 16% 75%,
+    16% 58%, 21% 58%, 21% 64%, 27% 64%, 27% 44%, 31% 44%, 31% 38%,
+    35% 38%, 35% 24%, 39% 24%, 39% 14%, 43% 14%, 43% 8%, 47% 8%,
+    47% 15%, 51% 15%, 51% 8%, 55% 8%, 55% 16%, 59% 16%, 59% 26%,
+    63% 26%, 63% 40%, 67% 40%, 67% 32%, 71% 32%, 71% 46%, 76% 46%,
+    76% 60%, 82% 60%, 82% 52%, 88% 52%, 88% 66%, 94% 66%, 94% 76%,
+    100% 76%, 100% 100%, 0% 100%
+  );
+
+  /* Foreground: two standing stones, a jagged half-collapsed stump, a
+     fallen arch (the low wide hump, shorter than anything standing either
+     side of it) and a third stone, each separated by a dip straight to
+     100% so the plain shows through the gaps instead of a false ground
+     line stitching them together. */
+  --clip-near: polygon(
+    0% 100%, 5% 100%, 5% 40%, 8% 48%, 11% 40%, 11% 100%,
+    20% 100%, 24% 100%, 24% 55%, 27% 62%, 30% 55%, 30% 100%,
+    40% 100%, 43% 100%, 43% 68%, 46% 58%, 49% 66%, 49% 100%,
+    58% 100%, 61% 90%, 67% 80%, 73% 80%, 79% 90%, 82% 100%,
+    90% 100%, 90% 36%, 93% 44%, 96% 36%, 96% 100%,
+    100% 100%, 0% 100%
+  );
+}
+
+/* Window slots on the tall tower: tiny warm rectangles plus a soft halo
+   around each, sitting inside the 39-55%/8-30% region the clip path
+   carves out for it. Brightness is `--stars` itself, not a copy of its
+   curve, so these are lit exactly when the sky says it's dark and fade
+   to nothing at noon with no phase rules of their own. The flicker
+   animates `transform`, not opacity, so it never fights that base value:
+   the two compose instead of one overwriting the other every frame. */
+:root[data-rf-scene="ruins"] .ba-scene-mid::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 44.5% 17%, #ffdca0 0%, color-mix(in oklab, #ffb862 60%, transparent) 45%, transparent 70%),
+    radial-gradient(circle at 49.5% 22%, #ffdca0 0%, color-mix(in oklab, #ffb862 60%, transparent) 45%, transparent 70%),
+    radial-gradient(circle at 41% 32%, #ffdca0 0%, color-mix(in oklab, #ffb862 60%, transparent) 45%, transparent 65%),
+    linear-gradient(#fff3d8, #fff3d8) 43.6% 15.5% / 1.8% 3.5% no-repeat,
+    linear-gradient(#fff3d8, #fff3d8) 48.6% 20.5% / 1.8% 3.2% no-repeat,
+    linear-gradient(#fff3d8, #fff3d8) 40.2% 30.5% / 1.6% 3% no-repeat;
+  opacity: var(--stars);
+  transition: opacity 600ms ease;
+  animation: ba-ruins-glow 5s ease-in-out infinite alternate;
+  transform-origin: 45% 20%;
+}
+@keyframes ba-ruins-glow {
+  from { transform: scale(1); }
+  to   { transform: scale(1.05); }
+}
+
+/* Ground mist, behind every silhouette in the scene. It reads as rolling
+   through the gaps between the stones because those gaps are the only
+   place it escapes the ranges sitting in front of it. */
+:root[data-rf-scene="ruins"] .ba-scene-aux::before {
+  content: "";
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  bottom: 0;
+  height: 20%;
+  background:
+    radial-gradient(50% 100% at 15% 100%, color-mix(in oklab, var(--haze) 80%, white 8%), transparent 75%),
+    radial-gradient(46% 100% at 50% 100%, color-mix(in oklab, var(--haze) 80%, white 8%), transparent 75%),
+    radial-gradient(50% 100% at 85% 100%, color-mix(in oklab, var(--haze) 80%, white 8%), transparent 75%);
+  filter: blur(16px);
+  opacity: .6;
+  animation: ba-ruins-mist 130s ease-in-out infinite alternate;
+}
+:root[data-rf-scene="ruins"] .ba-scene-aux::after {
+  content: "";
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  bottom: 4%;
+  height: 12%;
+  background: radial-gradient(60% 100% at 50% 100%, color-mix(in oklab, var(--haze) 60%, transparent), transparent 80%);
+  filter: blur(22px);
+  opacity: .4;
+  animation: ba-ruins-mist 190s ease-in-out infinite alternate-reverse;
+}
+@keyframes ba-ruins-mist {
+  from { transform: translate3d(-3%, 0, 0); }
+  to   { transform: translate3d(3.5%, 0, 0); }
+}
+
