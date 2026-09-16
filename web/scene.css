@@ -477,6 +477,23 @@
    dark-theme values here so black backdrop is legible under any theme;
    body itself stays #000 as set above.
 
+   Ink alone isn't enough, though: panel-backed components — `.ba-today`,
+   `.ba-today-bar-tip`, `.ba-hero--done` and anything else that paints
+   `var(--rf-panel)` / `var(--canvas-elevated)` / `var(--canvas-inset)`
+   instead of the page background — read their surface from the same
+   theme-driven tokens, not from the backdrop. Forcing only the ink left
+   those panels rendering light-theme's pale panel colors (`--rf-panel:
+   #fbf9f3`, `--canvas-elevated: #fbf9f3`) under the now-forced-light ink
+   — light-on-light, ~1.16:1, the mirror image of the bug this rule was
+   originally written to fix. So this forces the *whole* dark-theme
+   surface family alongside the ink: theme.css's --rf-paper/--rf-panel/
+   --rf-line(-2)/--rf-row-hover/--rf-row-current/--rf-bg, and tokens.css's
+   --canvas/--canvas-elevated/--canvas-inset/--canvas-overlay/
+   --canvas-glass/--border/--border-subtle/--shadow — every per-theme
+   token either stylesheet derives for a *surface*, not just for text.
+   (--rf-due/--rf-new/--rf-learn and --rf-glow are left alone: they're
+   accent/decoration, not contrast-bearing surface or ink.)
+
    `:root:root[data-rf-backdrop="black"]` (the doubled `:root` is
    deliberate, not a typo) rather than plain `:root[data-rf-backdrop=
    "black"]`: tokens.css's `:root[data-rf-theme="light"] { --fg: ... }`
@@ -495,6 +512,23 @@
   --fg-subtle: #9b978a !important;
   --fg-faint: #5d5a51 !important;
   --fg-disabled: #45433d !important;
+
+  --rf-paper: #0b0c0f !important;
+  --rf-panel: #121319 !important;
+  --rf-line: rgba(236, 234, 226, 0.09) !important;
+  --rf-line-2: rgba(236, 234, 226, 0.18) !important;
+  --rf-row-hover: rgba(236, 234, 226, 0.04) !important;
+  --rf-row-current: rgba(236, 234, 226, 0.03) !important;
+  --rf-bg: #060708 !important;
+
+  --canvas: #0b0c0f !important;
+  --canvas-elevated: #14161b !important;
+  --canvas-inset: #0d0e12 !important;
+  --canvas-overlay: #16181f !important;
+  --canvas-glass: rgba(20, 22, 28, 0.72) !important;
+  --border: #2a2d36 !important;
+  --border-subtle: #1d2027 !important;
+  --shadow: rgba(0, 0, 0, 0.45) !important;
 }
 
 /* Motion is the decoration here, not the scene. Everything stops; nothing

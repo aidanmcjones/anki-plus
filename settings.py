@@ -997,8 +997,9 @@ class AnkiDesignSettingsPage(QWidget):
             "Rotate video every",
             "How often the nature-video backdrop crossfades to the next "
             "clip. Values below 5 seconds are rounded up to 5 — anything "
-            "faster reads as a glitch rather than a change of scene. "
-            "Choose “Never” to loop a single clip without rotating.",
+            "faster reads as a glitch rather than a change of scene — and "
+            "above 24 hours are capped at 24 hours. Choose “Never” to "
+            "loop a single clip without rotating.",
         )
 
         def _sync_backdrop_deps(mode: str) -> None:

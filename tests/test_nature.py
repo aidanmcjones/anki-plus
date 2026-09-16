@@ -263,6 +263,17 @@ def test_filtered_for_selection_custom_all_files_missing_falls_back_to_full_libr
     assert nature.filtered_for_selection(_VIDEOS, selection) == _VIDEOS
 
 
+def test_filtered_for_selection_non_string_non_custom_dict_falls_back_to_full_library():
+    # normalize_selection() never emits this shape (a dict whose "mode"
+    # isn't "custom"), but filtered_for_selection's docstring promises
+    # hand-edit robustness independent of that — without the isinstance
+    # guard this used to fall through to `selection.startswith(...)` and
+    # raise AttributeError instead of degrading.
+    assert nature.filtered_for_selection(_VIDEOS, {"mode": "bogus"}) == _VIDEOS
+    assert nature.filtered_for_selection(_VIDEOS, 42) == _VIDEOS
+    assert nature.filtered_for_selection(_VIDEOS, None) == _VIDEOS
+
+
 # --------------------------------------------------------------------------- #
 # rotate_seconds()
 # --------------------------------------------------------------------------- #

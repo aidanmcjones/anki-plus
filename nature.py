@@ -165,6 +165,13 @@ def filtered_for_selection(
         files = set(selection.get("files") or [])
         matched = [v for v in videos if v.get("file") in files]
         return matched or list(videos)
+    if not isinstance(selection, str):
+        # Anything else — a dict with a mode other than "custom", a
+        # number, a list — is a shape normalize_selection never emits,
+        # but this module's contract (see the module docstring) is to
+        # degrade rather than raise on a hand-edited config, and the
+        # str-only handling below would AttributeError on .startswith.
+        return list(videos)
     if selection == "shuffle":
         return list(videos)
     if selection.startswith("biome:"):

@@ -12,11 +12,30 @@
 (function () {
   "use strict";
 
+  // __init__.py only ever adds this script AND the <meta name="ba-theme">
+  // tag together, in the same `_is(context, _PreviewCtx)` branch — so the
+  // tag's presence is a reliable marker that we're actually running on
+  // the Browse-tab preview pane, not the reviewer. That matters because
+  // both webviews render the exact same revHtml/reviewer.js markup (see
+  // the file header): if a future edit copy-pastes just the
+  // `web_content.js.append(".../browse-preview.js")` line into the
+  // Reviewer branch above it — without also carrying the meta-tag lines
+  // that follow it today — this script would start running during real
+  // study, where force-opening <details> is exactly the behavior the
+  // comment below says study deliberately does NOT want. Setting our own
+  // `data-ba-preview` marker (as this used to, unconditionally) can't
+  // detect that: it's this script asserting where it thinks it is, not
+  // evidence of where it actually is. Gate on the independent, Python-
+  // sourced tag instead.
+  var isPreviewPane = false;
   try {
-    document.documentElement.dataset.baPreview = "1";
     var theme = document.querySelector('meta[name="ba-theme"]');
-    if (theme && theme.content) {
-      document.documentElement.dataset.rfTheme = theme.content;
+    isPreviewPane = !!theme;
+    if (isPreviewPane) {
+      document.documentElement.dataset.baPreview = "1";
+      if (theme.content) {
+        document.documentElement.dataset.rfTheme = theme.content;
+      }
     }
   } catch (_) {}
 
@@ -61,10 +80,12 @@
     } catch (_) {}
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", watchQA);
-  } else {
-    watchQA();
+  if (isPreviewPane) {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", watchQA);
+    } else {
+      watchQA();
+    }
   }
 
   function ensureTags() {
