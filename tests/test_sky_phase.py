@@ -166,6 +166,33 @@ def test_backdrop_intensity_falls_back_too():
         )
 
 
+def test_backdrop_motion_mode_defaults_to_os_signal_only():
+    """Anki's own reduce-motion preference defaults to ON when it has never
+    been opened, so obeying it by default would switch the backdrop off for
+    nearly every user. Opting in must stay opt-in, and junk must not
+    accidentally enable it."""
+    mode = mod._backdrop_motion_mode
+    assert mode({}) == "always", "missing key must not opt into Anki's flag"
+    assert mode({"backdrop_motion": "auto"}) == "auto"
+    assert mode({"backdrop_motion": "always"}) == "always"
+    for junk in ("", None, "AUTO", "yes", 1, [], {"a": 1}):
+        assert mode({"backdrop_motion": junk}) == "always", (
+            f"{junk!r} leaked through and would change motion behaviour"
+        )
+
+
+def test_js_opts_carries_the_motion_mode_the_script_reads():
+    """scene-shuffle.js reads `__baOpts.scene.motion` to decide whether to
+    consult Anki's body class at all. A rename here silently returns the
+    script to OS-only gating."""
+    import json as _json
+    opts = mod._js_opts({"backdrop_motion": "auto"})
+    assert "scene" in opts and "motion" in opts["scene"], opts.get("scene")
+    assert opts["scene"]["motion"] == "auto"
+    assert mod._js_opts({})["scene"]["motion"] == "always"
+    _json.dumps(opts)  # must survive the trip to the page
+
+
 def test_scene_markup_cannot_intercept_the_center_tagging():
     """`.ba-home` / `.ba-over` are applied by replacing the first literal
     `<center>` in the page body. The scene is prepended ahead of that body,
@@ -310,6 +337,8 @@ if __name__ == "__main__":
     test_out_of_range_hours_wrap_instead_of_failing()
     test_backdrop_mode_falls_back_instead_of_blanking_the_page()
     test_backdrop_intensity_falls_back_too()
+    test_backdrop_motion_mode_defaults_to_os_signal_only()
+    test_js_opts_carries_the_motion_mode_the_script_reads()
     test_scene_markup_cannot_intercept_the_center_tagging()
     test_scene_layers_are_in_paint_order()
     test_scene_list_is_ten_unique_names()

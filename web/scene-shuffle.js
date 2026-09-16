@@ -106,6 +106,10 @@
     document.removeEventListener("visibilitychange", onVisibility);
     window.removeEventListener("pagehide", teardown);
     window.removeEventListener("beforeunload", teardown);
+    if (classWatch) {
+      classWatch.disconnect();
+      classWatch = null;
+    }
     if (quiet) {
       if (quiet.removeEventListener) {
         quiet.removeEventListener("change", applyMotionPref);
@@ -125,8 +129,25 @@
     quiet = window.matchMedia("(prefers-reduced-motion: reduce)");
   } catch (e) {}
 
+  // Anki's own Reduce motion preference, which is a different signal from the
+  // OS one and only consulted when `backdrop_motion` is "auto". It lives as a
+  // class on body, and Anki toggles it with an eval into the LIVE document
+  // (aqt/webview.py on_body_classes_need_update, reached from the
+  // body_classes_need_update hook), so it can flip while this page is open.
+  // Reading it once at startup would also race that eval on a cold load.
+  // Hence the observer rather than a single read.
+  function ankiQuiet() {
+    if (opts.motion !== "auto") return false;
+    try {
+      return !!(document.body &&
+        document.body.classList.contains("reduce-motion"));
+    } catch (e) {
+      return false;
+    }
+  }
+
   function applyMotionPref() {
-    still = !!(quiet && quiet.matches);
+    still = !!(quiet && quiet.matches) || ankiQuiet();
     if (still) stop();
     else start();
   }
@@ -134,6 +155,17 @@
   if (quiet) {
     if (quiet.addEventListener) quiet.addEventListener("change", applyMotionPref);
     else if (quiet.addListener) quiet.addListener(applyMotionPref);
+  }
+
+  var classWatch = null;
+  if (opts.motion === "auto") {
+    try {
+      classWatch = new MutationObserver(applyMotionPref);
+      classWatch.observe(document.body, {
+        attributes: true,
+        attributeFilter: ["class"],
+      });
+    } catch (e) {}
   }
 
   document.addEventListener("visibilitychange", onVisibility);
