@@ -1482,6 +1482,8 @@ def _open_settings() -> None:
             return
         except Exception:
             pass
+        finally:
+            _push_video_occlusion()
     # Standalone Preferences dialog with the Anki Design tab selected — the
     # fallback path, and the normal path when inline settings are off.
     try:
@@ -1493,6 +1495,7 @@ def _open_settings() -> None:
             showWarning(f"Anki Design settings: {e}")
         except Exception:
             pass
+    _push_video_occlusion()
 
 
 def _on_js_message(handled, message, context):
@@ -1615,6 +1618,7 @@ def _on_js_message(handled, message, context):
                     import_module("." + mod, __name__).close_inline()
                 except Exception:
                     pass
+            _push_video_occlusion()
             if getattr(mw, "state", None) != "deckBrowser":
                 mw.moveToState("deckBrowser")
         elif cmd == "browse":
@@ -3355,6 +3359,53 @@ def _push_sidebar_standing() -> None:
             pass
 
 
+def _any_embed_open() -> bool:
+    """True while any inline embed overlay (Add, Browse, Stats, Settings)
+    is painted over mw.web. Unlike `_active_embed_cmd()`, this checks all
+    four, including addcard_embed — that function deliberately omits it
+    for rail-highlight purposes only (an open Add overlay should still
+    highlight "browse", per its own docstring), but the video backdrop
+    underneath mw.web is occluded by ANY of the four, including Add's own
+    fallback stacked overlay."""
+    from importlib import import_module
+
+    for mod_name in (
+        "addcard_embed", "browse_embed", "stats_embed", "settings_embed",
+    ):
+        try:
+            mod = import_module("." + mod_name, __name__)
+            if mod._state.get("overlay") is not None:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _push_video_occlusion() -> None:
+    """Pause or resume the deck-browser/overview video backdrop
+    (video-backdrop.js) depending on whether an inline embed currently
+    occludes mw.web.
+
+    These embeds are Qt widgets painted *on top of* mw.web without ever
+    hiding, minimizing, or blurring it — so `document.hidden` never
+    fires for them, and without this a video backdrop underneath keeps
+    decoding, invisibly, behind an opaque panel for as long as the
+    overlay is up (see the long comment in video-backdrop.js's
+    __baVideoPause/__baVideoResume block). Call this after anything that
+    opens or closes an embed; it's cheap (one property read on each of
+    four already-imported modules, then a single `.eval()`) and a no-op
+    on every non-video-mode render, since the JS hooks it targets are
+    only ever defined when video-backdrop.js actually initialised."""
+    w = getattr(mw, "web", None)
+    if w is None:
+        return
+    hook = "__baVideoPause" if _any_embed_open() else "__baVideoResume"
+    try:
+        w.eval(f"window.{hook} && window.{hook}();")
+    except Exception:
+        pass
+
+
 def on_deck_browser_did_render(deck_browser: DeckBrowser) -> None:
     # The deck browser re-shows the bottom strip and Anki (re)sets the window
     # title around render; re-assert our state on the next event-loop tick so
@@ -3990,51 +4041,64 @@ def _open_add(*args: Any, **kwargs: Any) -> None:
     isn't), there's nothing to open a panel inside, so fall back to the
     old full-pane inline Add. If neither embed is enabled, fall back to
     Anki's own Add Cards window."""
-    if _embed_enabled("embed_add") and _config().get("restyle_addcard", True):
-        try:
-            from . import addcard_embed
-            if _embed_enabled("embed_browse"):
-                from . import browse_embed
-                browse_embed.open_inline(mw)
-                if browse_embed._state.get("overlay") is not None:
-                    browse_embed._open_add_in_panel(mw)
-                    return
-                # Browse's embed didn't come up for some reason — fall
-                # through to a plain full-pane Add rather than doing
-                # nothing.
-            addcard_embed.open_inline(mw)
+    try:
+        if _embed_enabled("embed_add") and _config().get("restyle_addcard", True):
+            try:
+                from . import addcard_embed
+                if _embed_enabled("embed_browse"):
+                    from . import browse_embed
+                    browse_embed.open_inline(mw)
+                    if browse_embed._state.get("overlay") is not None:
+                        browse_embed._open_add_in_panel(mw)
+                        return
+                    # Browse's embed didn't come up for some reason — fall
+                    # through to a plain full-pane Add rather than doing
+                    # nothing.
+                addcard_embed.open_inline(mw)
+                return
+            except Exception:
+                pass
+        orig = getattr(mw, "_ba_orig_on_add_card", None)
+        if orig is not None:
+            orig(*args, **kwargs)
             return
+        try:
+            from aqt import dialogs
+            dialogs.open("AddCards", mw)
         except Exception:
             pass
-    orig = getattr(mw, "_ba_orig_on_add_card", None)
-    if orig is not None:
-        orig(*args, **kwargs)
-        return
-    try:
-        from aqt import dialogs
-        dialogs.open("AddCards", mw)
-    except Exception:
-        pass
+    finally:
+        # Belt-and-braces for the embed paths above (open_inline/
+        # _open_add_in_panel push their own occlusion state on their own
+        # exit too, via _open_browse/_open_settings-style tails elsewhere)
+        # — cheap, idempotent, and covers the orig()/dialogs.open()
+        # fallbacks, which are real top-level windows this function
+        # itself never needs to occlude-push for but which may be
+        # closing an embed that was open a moment ago.
+        _push_video_occlusion()
 
 
 def _open_browse(*args: Any, **kwargs: Any) -> None:
     """Browse — inline embed when enabled, else Anki's own window."""
-    if _embed_enabled("embed_browse"):
-        try:
-            from . import browse_embed
-            browse_embed.open_inline(mw)
+    try:
+        if _embed_enabled("embed_browse"):
+            try:
+                from . import browse_embed
+                browse_embed.open_inline(mw)
+                return
+            except Exception:
+                pass
+        orig = getattr(mw, "_ba_orig_on_browse", None)
+        if orig is not None:
+            orig(*args, **kwargs)
             return
+        try:
+            from aqt import dialogs
+            dialogs.open("Browser", mw)
         except Exception:
             pass
-    orig = getattr(mw, "_ba_orig_on_browse", None)
-    if orig is not None:
-        orig(*args, **kwargs)
-        return
-    try:
-        from aqt import dialogs
-        dialogs.open("Browser", mw)
-    except Exception:
-        pass
+    finally:
+        _push_video_occlusion()
 
 
 def _open_stats(*args: Any, **kwargs: Any) -> None:
@@ -4042,27 +4106,30 @@ def _open_stats(*args: Any, **kwargs: Any) -> None:
     (legacy DeckStats) always falls through to Anki."""
     orig = getattr(mw, "_ba_orig_on_stats", None)
     try:
-        from aqt.utils import KeyboardModifiersPressed
-        if KeyboardModifiersPressed().shift and orig is not None:
-            orig(*args, **kwargs)
-            return
-    except Exception:
-        pass
-    if _embed_enabled("embed_stats"):
         try:
-            from . import stats_embed
-            stats_embed.open_inline(mw)
-            return
+            from aqt.utils import KeyboardModifiersPressed
+            if KeyboardModifiersPressed().shift and orig is not None:
+                orig(*args, **kwargs)
+                return
         except Exception:
             pass
-    if orig is not None:
-        orig(*args, **kwargs)
-        return
-    try:
-        from aqt import dialogs
-        dialogs.open("NewDeckStats", mw)
-    except Exception:
-        pass
+        if _embed_enabled("embed_stats"):
+            try:
+                from . import stats_embed
+                stats_embed.open_inline(mw)
+                return
+            except Exception:
+                pass
+        if orig is not None:
+            orig(*args, **kwargs)
+            return
+        try:
+            from aqt import dialogs
+            dialogs.open("NewDeckStats", mw)
+        except Exception:
+            pass
+    finally:
+        _push_video_occlusion()
 
 
 def _open_prefs(*args: Any, **kwargs: Any) -> None:
@@ -4149,6 +4216,7 @@ def _setup_sidebar_shortcuts() -> None:
                     import_module("." + mod, __name__).close_inline()
                 except Exception:
                     pass
+            _push_video_occlusion()
             return _orig_move_to_state(state, *args, **kwargs)
 
         mw.moveToState = _patched_move_to_state  # type: ignore[assignment]
