@@ -81,6 +81,14 @@ def main() -> None:
 
     size = os.path.getsize(OUT)
     if size > MAX_OUT_BYTES:
+        # Remove the oversized artifact before exiting — a failed build
+        # shouldn't leave anything behind at OUT for a subsequent step
+        # (packaging, CI upload, a human skimming dist/) to mistake for a
+        # good build just because the path exists.
+        try:
+            os.remove(OUT)
+        except OSError:
+            pass
         print(
             f"\nERROR: {OUT} is {size / 1024 / 1024:.1f}MB, over the "
             f"{MAX_OUT_BYTES / 1024 / 1024:.0f}MB sanity limit for a "
