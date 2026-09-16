@@ -70,30 +70,31 @@
   opacity: 1;
 }
 
-/* Same treatment scene.css gives `.ba-scene-scrim`, but stronger: a scene
-   is drawn in fixed, known-dim colours, while a nature clip can hand the
-   page anything from a night dive to a snowfield — the brightest frames
-   in the library (arctic ice, tropical shoreline) are most of the way to
-   white. `--rf-paper` (light theme) is itself pale, so the scrim below
-   used to lean on `color-mix` percentages tuned for scene.css's fixed
-   palette; over a white frame those same percentages left the text
-   column sitting on something closer to the clip's own brightness than
-   to a wash. Bumped stops (78/58/86% vs. scene's 82/58/68 — see
-   scene.css's `.ba-scene-scrim`) and a taller top-to-bottom gradient
-   reach so deck rows two-thirds down the page still sit on real
-   coverage, not the tail of the fade. */
+/* Same job scene.css's `.ba-scene-scrim` does, but a fixed dark wash
+   rather than a `--rf-paper`-tinted one: a scene is drawn in fixed,
+   known-dim colours, while a nature clip can hand the page anything from
+   a night dive to a snowfield — the brightest frames in the library
+   (arctic ice, tropical shoreline) are most of the way to white. Reading
+   `--rf-paper` (as scene.css's scrim does) would mean the wash itself
+   goes pale in light theme, which is exactly backwards once the ink
+   below is forced light: light text needs a dark floor regardless of
+   which theme the rest of the page is in, the same trade pure-black
+   backdrop already makes. So this is plain `rgba(5, 6, 10, …)` — the
+   same near-black `.ba-video`'s own no-frame-yet background uses —
+   stronger stops than scene's scrim (90/74/54/28 vs. scene's 82/58/22)
+   and a taller top-to-bottom reach so deck rows two-thirds down the page
+   still sit on real coverage, not the tail of the fade. */
 .ba-video-scrim {
   position: absolute;
   inset: 0;
   pointer-events: none;
   background:
     radial-gradient(70% 60% at 50% 30%,
-      color-mix(in oklab, var(--rf-paper) 92%, transparent),
-      transparent 82%),
+      rgba(5, 6, 10, .90), transparent 82%),
     linear-gradient(to bottom,
-      color-mix(in oklab, var(--rf-paper) 78%, transparent) 0%,
-      color-mix(in oklab, var(--rf-paper) 58%, transparent) 30%,
-      color-mix(in oklab, var(--rf-paper) 30%, transparent) 58%,
+      rgba(5, 6, 10, .74) 0%,
+      rgba(5, 6, 10, .54) 30%,
+      rgba(5, 6, 10, .28) 58%,
       transparent 86%);
 }
 
@@ -101,23 +102,22 @@
   .ba-video-scrim {
     background:
       radial-gradient(82% 70% at 50% 32%,
-        color-mix(in oklab, var(--rf-paper) 94%, transparent),
-        transparent 86%),
+        rgba(5, 6, 10, .94), transparent 86%),
       linear-gradient(to bottom,
-        color-mix(in oklab, var(--rf-paper) 84%, transparent) 0%,
-        color-mix(in oklab, var(--rf-paper) 62%, transparent) 40%,
-        color-mix(in oklab, var(--rf-paper) 34%, transparent) 66%,
+        rgba(5, 6, 10, .82) 0%,
+        rgba(5, 6, 10, .60) 40%,
+        rgba(5, 6, 10, .32) 66%,
         transparent 90%);
   }
 }
 
-/* Light mode: the same footage has to sit under dark ink instead of
-   glowing out of a near-black page, so it's damped rather than recoloured
-   — same bargain scene.css makes for `.ba-scene`. Dropped from .46 to .34:
-   the brightest clips (arctic, tropical shoreline — mostly-white frames)
-   still pushed the deck column past comfortable contrast at .46, even
-   with the strengthened scrim above; text legibility wins over how much
-   of the clip stays visible. */
+/* Light mode: the same footage has to sit under a fixed dark wash and
+   forced-light ink instead of the page's own pale paper, so it's damped
+   rather than recoloured — same bargain scene.css makes for `.ba-scene`,
+   just leaning further into it now that video mode's contrast no longer
+   depends on the theme at all. Dropped from the scene-mode-era .46 to
+   .34: the brightest clips (arctic, tropical shoreline — mostly-white
+   frames) still pushed brightness through the scrim at .46. */
 :root[data-rf-theme="light"] .ba-video { opacity: .34; }
 @media (prefers-color-scheme: light) {
   :root:not([data-rf-theme="dark"]) .ba-video { opacity: .34; }
