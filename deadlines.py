@@ -71,6 +71,16 @@ it survives restarts without touching the collection schema:
                                        # what old entries with no "time" key
                                        # keep meaning forever (see
                                        # `_deadline_moment`)
+            "mode": "pause",          # optional; what the deck does once the
+                                       # deadline is behind it. Written only
+                                       # when the user actually answers that
+                                       # question in the dialog — an entry
+                                       # without it follows the
+                                       # `deadline_passed_mode` config key
+                                       # (default "pause") every time it is
+                                       # read, so the default stays a default
+                                       # rather than being frozen into state
+                                       # (see `entry_mode`)
             "orig_conf": 1,           # preset to restore on clear
             "cloned_conf": 173…,      # preset we made (0 = none)
             "orig_max_ivl": 36500     # ceiling to restore on clear
@@ -96,6 +106,11 @@ MODE_PAUSE = "pause"         # deck stops presenting anything, reversibly
 DEFAULT_MAX_IVL = 36500
 STATE_KEY = "deck_deadlines"
 LAST_CHECK_KEY = "deck_deadlines_last_check"
+# Config key holding what a passed deadline does when the deck itself never
+# recorded a choice. Its default is PAUSE, deliberately: a deadline that
+# keeps presenting cards afterwards isn't a deadline. See `default_mode`.
+PASSED_MODE_KEY = "deadline_passed_mode"
+DEFAULT_PASSED_MODE = MODE_PAUSE
 
 
 # --------------------------------------------------------------------------- #
@@ -246,11 +261,51 @@ def get_time(did: int) -> Optional[datetime.time]:
     return _parse_time(entry.get("time"))
 
 
+def default_mode() -> str:
+    """What a passed deadline does when its deck never recorded a choice.
+
+    Read from the `deadline_passed_mode` config key, default **pause** —
+    which is a deliberate divergence from how this feature originally
+    shipped (implicit "maintain"). The reasoning is the user's: a deadline
+    that keeps presenting cards after the date is not a deadline, it's a
+    label. Six decks with a deadline of today still offering 385 reviews
+    the evening it passed is the concrete failure that motivated it.
+
+    Anything unrecognised in the config — a typo, a hand-edited
+    meta.json — reads as the default rather than as an error, so a
+    malformed key can never leave a deck in an undefined mode.
+    """
+    value = _config().get(PASSED_MODE_KEY, DEFAULT_PASSED_MODE)
+    if isinstance(value, str) and value in (MODE_MAINTAIN, MODE_PAUSE):
+        return value
+    return DEFAULT_PASSED_MODE
+
+
+def entry_mode(entry: Any) -> str:
+    """Resolve one state entry's post-deadline mode.
+
+    The single place that answers "what does this deck do now" — every
+    caller (`get_mode`, `paused_deck_ids`, `_apply`, `_announce_crossing`)
+    routes through it, so the label, the scheduler state and the sidebar
+    exclusions can't disagree about a deck the way they could when each
+    site inlined its own `entry.get("mode", MODE_MAINTAIN)`.
+
+    An explicit per-deck choice always wins: if the entry records a valid
+    `mode`, that is the answer and the config default is not consulted.
+    Only an entry with no `mode` key (or an unrecognised one) falls back
+    to `default_mode()` — which means the fallback stays *live*, so
+    flipping the config key retroactively changes every deck that never
+    made a choice of its own, without rewriting any state.
+    """
+    if isinstance(entry, dict):
+        mode = entry.get("mode")
+        if mode in (MODE_MAINTAIN, MODE_PAUSE):
+            return str(mode)
+    return default_mode()
+
+
 def get_mode(did: int) -> str:
-    entry = _state().get(str(did))
-    if isinstance(entry, dict) and entry.get("mode") in (MODE_MAINTAIN, MODE_PAUSE):
-        return str(entry["mode"])
-    return MODE_MAINTAIN
+    return entry_mode(_state().get(str(did)))
 
 
 def is_passed(deadline: datetime.date, time_of_day: Optional[datetime.time] = None) -> bool:
@@ -331,7 +386,7 @@ def paused_deck_ids() -> List[int]:
     for key, entry in _state().items():
         if not isinstance(entry, dict):
             continue
-        if entry.get("mode") != MODE_PAUSE:
+        if entry_mode(entry) != MODE_PAUSE:
             continue
         deadline = parse(str(entry.get("date", "")))
         if deadline is None:
@@ -684,7 +739,7 @@ def _apply(col: Any, did: int, entry: Dict[str, Any]) -> Tuple[Dict[str, Any], b
     # the date.
     target = int(entry.get("orig_max_ivl") or DEFAULT_MAX_IVL)
     _set_max_interval(col, conf, target)
-    _set_limits(col, conf, entry, did, paused=(entry.get("mode") == MODE_PAUSE))
+    _set_limits(col, conf, entry, did, paused=(entry_mode(entry) == MODE_PAUSE))
     verified = _verify_max_interval(col, did, max(1, target))
     return entry, verified
 
@@ -706,7 +761,13 @@ def set_deadline(did: int, deadline: datetime.date,
         entry["time"] = f"{time_of_day.hour:02d}:{time_of_day.minute:02d}"
     if mode in (MODE_MAINTAIN, MODE_PAUSE):
         entry["mode"] = mode
-    entry.setdefault("mode", MODE_MAINTAIN)
+    # Deliberately *not* `setdefault("mode", …)`. Materialising a mode the
+    # user never picked is what made this feature's default impossible to
+    # change later: every entry the dialog saved carried an explicit
+    # "maintain" that then looked exactly like a deliberate choice. An
+    # entry with no `mode` key resolves through `entry_mode` → config
+    # every time it's read, so the deck follows `deadline_passed_mode`
+    # until the user actually answers the question in the dialog.
     entry, verified = _apply(col, did, entry)
     if not verified:
         _log(f"set_deadline {did}: preset restore did not verify")
@@ -785,8 +846,7 @@ def _announce_crossing(did: int, entry: Dict[str, Any]) -> None:
     if entry.get("notified_passed"):
         return
     entry["notified_passed"] = True
-    mode = entry.get("mode", MODE_MAINTAIN)
-    if mode == MODE_PAUSE:
+    if entry_mode(entry) == MODE_PAUSE:
         _tooltip(f"“{_deck_name(did)}” reached its deadline — reviews paused")
     else:
         _tooltip(
@@ -1022,6 +1082,230 @@ def repair_legacy_corruption() -> None:
     _write(cfg)
 
 
+# --------------------------------------------------------------------------- #
+# One-time migration to the pause-by-default post-deadline mode (2026-09-15)
+# --------------------------------------------------------------------------- #
+# Until this change, a deck whose deadline passed carried on presenting cards
+# unless the user went and picked "Pause reviews" — the default was maintain,
+# and `set_deadline` wrote that default into the entry as though it were a
+# choice. The default is now `deadline_passed_mode` ("pause"), but flipping it
+# only helps decks that cross their deadline *after* this ships: entries that
+# already passed are sitting on the old default and would keep presenting.
+#
+# Eligibility — deliberately narrow, because the one thing this must never do
+# is overrule a real decision:
+#
+#   * the entry's deadline has **already passed** (`is_passed`, the same
+#     moment-in-time check the scheduler paths use). A deadline still ahead is
+#     left completely alone: it hasn't chosen anything yet, and when it does
+#     cross it will resolve through `entry_mode` → config and pause anyway.
+#   * the entry is **not** explicitly paused already (nothing to do), and
+#   * the entry is on the old implicit default — either it has no `mode` key
+#     at all (three of the six decks here), or it has `mode: "maintain"`
+#     *written before this change*. There is no timestamp on an entry, so the
+#     migration flag itself is what dates them: this runs exactly once, on the
+#     first profile open after the upgrade, before the user can have opened
+#     the dialog even once under the new default. Every "maintain" it sees is
+#     therefore an old, unasked-for one. A "maintain" the user picks
+#     deliberately *after* this ships is written later, when the flag is
+#     already set and this function returns immediately — it can never be
+#     flipped.
+#
+# The fix is to *remove* the stale `mode` rather than write "pause" into it:
+# that puts the entry back to "no choice recorded", so it follows
+# `deadline_passed_mode` live — including back to maintain if the user sets
+# the config key that way — instead of freezing today's default into state.
+_PASSED_MODE_MIGRATION_KEY = "deck_deadlines_passed_mode_default_20260915"
+
+
+def _is_implicit_maintain(entry: Any) -> bool:
+    """Is this entry on the pre-change implicit "maintain" default?
+
+    Pure predicate over one state dict — no collection, no clock — so the
+    eligibility rule above is testable on its own. The "already passed"
+    half of eligibility is deliberately *not* folded in here: that needs a
+    real deadline moment, and keeping it separate means the two halves can
+    be exercised independently.
+    """
+    if not isinstance(entry, dict):
+        return False
+    mode = entry.get("mode")
+    if mode == MODE_PAUSE:
+        return False          # explicit pause — already what we want
+    # Missing, unrecognised, or the materialised "maintain" the old
+    # `set_deadline` wrote for every entry whether or not it was asked for.
+    return True
+
+
+def migrate_passed_mode_default() -> int:
+    """Apply the new pause default to deadlines that already passed.
+
+    Runs once (`_PASSED_MODE_MIGRATION_KEY`). Returns how many decks it
+    actually paused, for the caller's one-line summary.
+    """
+    col = getattr(mw, "col", None)
+    if col is None or not enabled():
+        # Not a no-op-and-latch: without a collection there is nothing to
+        # apply, and with the feature off it would be applying scheduling
+        # changes the user turned off. Leave the flag unset so this runs
+        # properly next time instead of being permanently skipped.
+        return 0
+    cfg = _config()
+    if cfg.get(_PASSED_MODE_MIGRATION_KEY):
+        return 0
+    state = _state()
+    paused: List[str] = []
+    for did_s in list(state.keys()):
+        try:
+            did = int(did_s)
+        except Exception:
+            continue
+        entry = dict(state.get(did_s) or {})
+        deadline = parse(str(entry.get("date", "")))
+        if deadline is None:
+            continue
+        if not is_passed(deadline, _parse_time(entry.get("time"))):
+            continue
+        if not _is_implicit_maintain(entry):
+            continue
+        if not col.decks.get(did, default=False):
+            continue
+        entry.pop("mode", None)
+        if entry_mode(entry) != MODE_PAUSE:
+            # The config key says "maintain" — the user (or a future
+            # default) wants the old behavior, so there is nothing to
+            # apply. The stale key is still dropped so the entry follows
+            # the config from here.
+            state[did_s] = entry
+            continue
+        try:
+            entry, verified = _apply(col, did, entry)
+            if not verified:
+                _log(f"passed-mode migration {did}: preset restore did not verify")
+        except Exception as exc:
+            _log(f"passed-mode migration {did}: {exc!r}")
+            continue
+        state[did_s] = entry
+        paused.append(_deck_name(did))
+    _save_state(state)
+    cfg = _config()
+    cfg[_PASSED_MODE_MIGRATION_KEY] = True
+    _write(cfg)
+    if paused:
+        count = len(paused)
+        _tooltip(
+            f"{count} deck{'s' if count != 1 else ''} past their deadline "
+            "paused — reopen “Memorize by…” to keep reviewing instead"
+        )
+    return len(paused)
+
+
+# --------------------------------------------------------------------------- #
+# One-time repair of "— deadline" clones parked at 0/day (2026-09-15)
+# --------------------------------------------------------------------------- #
+# An older build of this module implemented "Pause reviews" by zeroing the
+# *preset's* `new/perDay` and `rev/perDay` (today it zeroes the deck's own
+# limits instead — see `_set_limits`). `_set_limits` still carries a
+# resume-side migration for that, but it only fires for a deck that still has
+# a `deck_deadlines` entry to resume from. A deck whose entry was dropped
+# while it was paused that way is stranded: it sits on a "<preset> — deadline"
+# clone whose per-day limits are 0, presents nothing at all, and nothing in
+# the codebase will ever look at it again.
+#
+# That is exactly the state of "Default — Amino Acids — deadline" in this
+# collection: 0 new/day, 0 reviews/day, one deck on it, no state entry.
+#
+# Repaired conservatively and once: only a preset whose name ends in
+# CLONE_SUFFIX (i.e. one this module made), only when a per-day limit is
+# actually 0, and only with numbers there is evidence for — the remembered
+# `orig_*` from a state entry that still points at the clone, else the
+# current values of the preset the clone was named after ("Default — Amino
+# Acids — deadline" → "Default"). With no evidence, it is left alone and
+# logged rather than guessed at.
+_ZEROED_CLONE_REPAIR_KEY = "deck_deadlines_zeroed_clone_repair_20260915"
+
+
+def _clone_source_name(clone_name: str) -> Optional[str]:
+    """"Default — Amino Acids — deadline" → "Default".
+
+    Mirrors the name `_ensure_own_preset` builds ("<preset> — <leaf> —
+    deadline"). Names are never trusted to decide *which* clone belongs to
+    a deck (that's `cloned_conf`, by id); this only reads a name to find a
+    plausible source for limits the clone lost, and a miss just means the
+    preset is skipped.
+    """
+    if not isinstance(clone_name, str) or not clone_name.endswith(CLONE_SUFFIX):
+        return None
+    head = clone_name[: -len(CLONE_SUFFIX)]
+    sep = " — "
+    if sep not in head:
+        return None
+    return head.rsplit(sep, 1)[0] or None
+
+
+def repair_zeroed_clone_presets() -> int:
+    """Un-park "— deadline" clones left at 0/day by the old pause. Once."""
+    col = getattr(mw, "col", None)
+    if col is None:
+        return 0
+    cfg = _config()
+    if cfg.get(_ZEROED_CLONE_REPAIR_KEY):
+        return 0
+    fixed = 0
+    try:
+        confs = list(col.decks.all_config())
+    except Exception as exc:
+        _log(f"zeroed clone repair: {exc!r}")
+        return 0
+    by_name = {str(c.get("name", "")): c for c in confs}
+    state = _state()
+    for conf in confs:
+        name = str(conf.get("name", ""))
+        if not name.endswith(CLONE_SUFFIX):
+            continue
+        new = conf.get("new", {}) or {}
+        rev = conf.get("rev", {}) or {}
+        if int(new.get("perDay", 0) or 0) and int(rev.get("perDay", 0) or 0):
+            continue
+        conf_id = int(conf.get("id", 0) or 0)
+        new_per_day = rev_per_day = None
+        for entry in state.values():
+            if not isinstance(entry, dict):
+                continue
+            if int(entry.get("cloned_conf") or 0) != conf_id:
+                continue
+            new_per_day = entry.get("orig_new_per_day")
+            rev_per_day = entry.get("orig_rev_per_day")
+            break
+        if new_per_day is None or rev_per_day is None:
+            source = by_name.get(_clone_source_name(name) or "")
+            if not source:
+                _log(f"zeroed clone repair: no evidence for {name!r}, left alone")
+                continue
+            new_per_day = (source.get("new", {}) or {}).get("perDay")
+            rev_per_day = (source.get("rev", {}) or {}).get("perDay")
+        try:
+            new_per_day = int(new_per_day or 0)
+            rev_per_day = int(rev_per_day or 0)
+        except Exception:
+            continue
+        if new_per_day <= 0 or rev_per_day <= 0:
+            _log(f"zeroed clone repair: source for {name!r} is itself 0, left alone")
+            continue
+        try:
+            conf.setdefault("new", {})["perDay"] = new_per_day
+            conf.setdefault("rev", {})["perDay"] = rev_per_day
+            col.decks.update_config(conf)
+            fixed += 1
+            _log(f"zeroed clone repair: {name!r} → {new_per_day}/{rev_per_day} per day")
+        except Exception as exc:
+            _log(f"zeroed clone repair {name!r}: {exc!r}")
+    cfg = _config()
+    cfg[_ZEROED_CLONE_REPAIR_KEY] = True
+    _write(cfg)
+    return fixed
+
+
 # A single pending single-shot timer, re-armed for the soonest upcoming
 # deadline moment every time a deadline is set/cleared or a check runs.
 # Never a recurring/polling timer, and never more than one pending.
@@ -1210,6 +1494,10 @@ def show_dialog(did: int) -> None:
     past_why.setWordWrap(True)
     past_col.addWidget(past_why)
     root.addWidget(past_box)
+    # Pre-selects the deck's own recorded choice when it has one, and the
+    # `deadline_passed_mode` default when it doesn't (`get_mode` resolves
+    # both) — so a deck that has never answered this question arrives with
+    # Pause ticked, matching what it would do if the user just hit Save.
     (rb_pause if get_mode(did) == MODE_PAUSE else rb_maintain).setChecked(True)
     past_box.hide()
 

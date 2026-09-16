@@ -34,6 +34,7 @@
   "reviewer_menu_extras": true,
   "reviewer_text_lookup": true,
   "deck_deadlines": true,
+  "deadline_passed_mode": "pause",
   "cmdk": true,
   "embed_add": true,
   "embed_browse": true,

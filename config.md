@@ -149,16 +149,39 @@ in this file are the raw form the settings page writes.
   learned on time — the gear row then reads "Memorized by Sep 8 —
   passed ✓". The interval cap comes off, and the dialog asks what the deck
   should do from there; the choice is remembered per deck:
-  - **Maintain long-term** (default) — reviews carry on as normal. Cards
+  - **Maintain long-term** — reviews carry on as normal. Cards
     coming due after the deadline are memory upkeep, not a missed target;
     that is how spaced repetition holds something you already know.
-  - **Pause reviews** — the deck stops presenting anything, by setting
+  - **Pause reviews** (default, see `deadline_passed_mode`) — the deck
+    stops presenting anything, by setting
     *that deck's own* per-day review and new limits to 0 (not its
     preset's, which other decks share). Reversible, and no card is
     suspended or otherwise altered: switch back to Maintain, or clear the
     deadline, to resume — and whatever limits the deck had before the
     pause, including one you raised to hit the deadline, come back with
     it.
+- **deadline_passed_mode** — what a deck does once its deadline is behind
+  it, for every deck that hasn't been asked. `"pause"` (the default) stops
+  the deck presenting anything; `"maintain"` keeps reviews coming. A deck
+  you *have* answered for in the dialog keeps its own answer either way —
+  this key only fills in the blank, and it fills it in live, so changing
+  it moves every un-answered deck at once without rewriting anything. It
+  is also what the dialog pre-selects when a deck has made no choice yet.
+
+  **This diverges from how the feature originally shipped**, where the
+  default was `"maintain"` and the dialog wrote that into every deck as
+  though it had been chosen. The reasoning for the change: a deadline that
+  keeps presenting cards after the date is not a deadline, it is a label.
+  Auto-pause is the point of setting one — six decks due "by today" still
+  offering 385 reviews the evening the date passed is the failure that
+  prompted it. Set this to `"maintain"` to get the old behavior back for
+  every deck that hasn't chosen otherwise.
+
+  Deadlines that had *already* passed under the old default are moved onto
+  the new one once, on the first launch after this change, so the fix
+  reaches decks that went quiet before it shipped. That one-time pass only
+  touches entries that never recorded a choice of their own; anything you
+  pick afterwards is yours and is never revisited.
 
 ## Windows
 - **cmdk** — the ⌘K / Ctrl+K command palette.

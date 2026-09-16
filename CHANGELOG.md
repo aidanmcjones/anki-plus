@@ -5,6 +5,21 @@ All notable changes to Anki Design are documented here. Format loosely follows
 
 ## [Unreleased]
 ### Changed
+- **A deadline that has passed now pauses its deck by default.** Setting
+  "Memorize by…" and then being handed 385 reviews in those decks the
+  evening the date passed is the feature contradicting itself — a deadline
+  that keeps presenting cards afterwards is a label, not a deadline. The
+  post-deadline default moves from *Maintain long-term* to *Pause
+  reviews*, as the new `deadline_passed_mode` config key (`"pause"` |
+  `"maintain"`); set it to `"maintain"` for the old behaviour. A deck you
+  answered for yourself in the dialog keeps its own answer — the key only
+  fills in the blank, and it fills it in live, so every deck that never
+  chose follows it without any state being rewritten. The dialog now
+  pre-selects it too. Pausing is what it always was: that deck's own
+  per-day limits set to 0, reversible, nothing suspended. Deadlines that
+  had already passed under the old default are moved across once, on the
+  first launch after this change, so decks that went quiet before it
+  shipped are covered too.
 - **The Browse sidebar picks several decks without a mode.** Anki put
   multi-select behind a two-button tool row above the tree — Search, or
   Select — which is a mode you have to know exists, switch into and
@@ -24,6 +39,16 @@ All notable changes to Anki Design are documented here. Format loosely follows
   restores the tool row.
 
 ### Fixed
+- **A deck stranded on a "— deadline" preset parked at 0/day shows its
+  cards again.** An older build paused a deck by zeroing its *preset's*
+  per-day limits; the resume path for that only fires for a deck that
+  still has deadline bookkeeping to resume from, so a deck whose deadline
+  was cleared while it was paused that way sat on a clone preset offering
+  0 new and 0 reviews a day, permanently, with nothing left in the
+  codebase that would ever look at it again. A one-time pass restores any
+  such clone's per-day limits from the preset it was cloned from (or the
+  remembered originals, when there are any) and leaves anything it has no
+  evidence for alone.
 - **Images can be added to a field again, and resized there.** Two separate
   faults made the embedded editors — the Browse pane's pencil mode and the
   Add tab — unable to take a picture. In the Browse pane the attach button

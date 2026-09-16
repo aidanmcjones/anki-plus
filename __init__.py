@@ -3747,6 +3747,17 @@ try:
         # docstring in deadlines.py) — must run before the two calls below,
         # since it's what makes their "orig_*" restore targets correct.
         _deadlines.repair_legacy_corruption()
+        # Un-park "— deadline" clone presets an older build left at 0/day
+        # (one-time, guarded by its own flag). Before the mode migration:
+        # that migration pauses decks by their *own* limits, and a preset
+        # still stuck at 0 underneath would make a later resume a no-op.
+        _deadlines.repair_zeroed_clone_presets()
+        # One-time: decks whose deadline already passed under the old
+        # implicit "maintain" default now follow `deadline_passed_mode`
+        # ("pause"). Guarded by its own dated flag, and it never touches a
+        # deck that explicitly chose maintain after this shipped — see the
+        # eligibility notes on `migrate_passed_mode_default`.
+        _deadlines.migrate_passed_mode_default()
         _deadlines.refresh_all()
         _deadlines.check_due_transitions()
 
