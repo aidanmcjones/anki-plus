@@ -955,3 +955,43 @@ body.ba-editing .ba-rv-field ins {
    still useful context (deck name, position) but shouldn't compete. */
 body.ba-editing .ba-rv-head { opacity: 0.55; }
 body.ba-editing .ba-rv-head .ba-rv-icon-btn { pointer-events: none; }
+
+/* Images inside an editable field get a pointer cursor as a selectability
+   hint, and native browser image-drag is switched off so it can't fight
+   our own handle-drag gesture. */
+body.ba-editing .ba-rv-field img {
+  cursor: pointer;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* Quick-editor image select/resize overlay (web/reviewer.js). A lightweight,
+   self-contained equivalent of the full editor's ImageOverlay — this DOM is
+   created once and reused, only ever unhidden while body.ba-editing is set
+   and an <img> inside a field is selected. position: fixed + viewport
+   coordinates from getBoundingClientRect() so it works regardless of #qa's
+   own scroll/transform context. */
+#ba-img-resize-overlay {
+  position: fixed;
+  z-index: 10001; /* above #ba-edit-bar (10000) */
+  outline: 2px dashed var(--rf-accent);
+  pointer-events: none;
+}
+.ba-img-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin: -7px;
+  border-radius: 3px;
+  /* Bright fill + dark border reads on both light and dark card
+     backgrounds, and the added ring gives a second contrast edge against
+     mid-tone backgrounds the border alone might blend into. */
+  background: #fff;
+  border: 2px solid #111;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9), 0 1px 3px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+.ba-img-handle-nw { top: 0; left: 0; cursor: nwse-resize; }
+.ba-img-handle-ne { top: 0; right: 0; cursor: nesw-resize; }
+.ba-img-handle-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.ba-img-handle-se { bottom: 0; right: 0; cursor: nwse-resize; }

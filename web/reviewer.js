@@ -148,6 +148,13 @@
     var mo = new MutationObserver(function () {
       cleanupBody();
       wrapAnswer();
+      // A card re-render (post-save, or a fresh card) replaces #qa's whole
+      // subtree — any selected image / overlay from before is now pointing
+      // at detached nodes. Drop it rather than leave a ghost overlay
+      // floating over the new card.
+      if (imgResize.active && !document.contains(imgResize.active)) {
+        deselectImage();
+      }
     });
     mo.observe(document.body, {
       attributes: true,
@@ -319,6 +326,131 @@
     return bar;
   }
 
+  // ---------- Inline edit mode: image select / resize ------------------ //
+  // The quick editor's field divs are plain rendered card HTML dropped into
+  // a contenteditable region — there is no Svelte ImageOverlay here (that
+  // tree only exists in the real Editor/AddCards/Browse-edit webview). This
+  // is a small, self-contained equivalent: click an <img> inside a
+  // [data-ba-field] region to select it (outline + 4 corner handles),
+  // drag a corner to resize proportionally, double-click to reset to
+  // natural size. Only active while editState.active is true, and it never
+  // touches anything outside edit mode.
+  var imgResize = { active: null, overlay: null, dragging: null };
+
+  function ensureImgOverlay() {
+    if (imgResize.overlay) return imgResize.overlay;
+    var el = document.createElement("div");
+    el.id = "ba-img-resize-overlay";
+    el.innerHTML =
+        '<div class="ba-img-handle ba-img-handle-nw" data-corner="nw"></div>'
+      + '<div class="ba-img-handle ba-img-handle-ne" data-corner="ne"></div>'
+      + '<div class="ba-img-handle ba-img-handle-sw" data-corner="sw"></div>'
+      + '<div class="ba-img-handle ba-img-handle-se" data-corner="se"></div>';
+    el.hidden = true;
+    document.body.appendChild(el);
+    Array.prototype.forEach.call(
+      el.querySelectorAll(".ba-img-handle"),
+      function (h) { h.addEventListener("mousedown", onImgHandleMousedown); }
+    );
+    imgResize.overlay = el;
+    return el;
+  }
+
+  function positionImgOverlay() {
+    if (!imgResize.active || !imgResize.overlay) return;
+    var r = imgResize.active.getBoundingClientRect();
+    if (!r.width || !r.height) { deselectImage(); return; }
+    var el = imgResize.overlay;
+    el.style.left = r.left + "px";
+    el.style.top = r.top + "px";
+    el.style.width = r.width + "px";
+    el.style.height = r.height + "px";
+  }
+
+  function selectImage(img) {
+    if (!editState.active) return;
+    imgResize.active = img;
+    var el = ensureImgOverlay();
+    el.hidden = false;
+    positionImgOverlay();
+  }
+
+  function deselectImage() {
+    imgResize.active = null;
+    imgResize.dragging = null;
+    if (imgResize.overlay) imgResize.overlay.hidden = true;
+  }
+
+  function onImgHandleMousedown(e) {
+    if (!imgResize.active) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var img = imgResize.active;
+    var rect = img.getBoundingClientRect();
+    var ratio = img.naturalWidth && img.naturalHeight
+      ? img.naturalWidth / img.naturalHeight
+      : (rect.width / (rect.height || 1)) || 1;
+    imgResize.dragging = {
+      corner: e.currentTarget.getAttribute("data-corner"),
+      startX: e.clientX,
+      startWidth: rect.width,
+      ratio: ratio,
+    };
+    document.addEventListener("mousemove", onImgHandleMousemove);
+    document.addEventListener("mouseup", onImgHandleMouseup);
+  }
+
+  function onImgHandleMousemove(e) {
+    var d = imgResize.dragging;
+    if (!d || !imgResize.active) return;
+    var west = d.corner === "nw" || d.corner === "sw";
+    var dx = e.clientX - d.startX;
+    var delta = west ? -dx : dx;
+    var newWidth = Math.max(20, Math.round(d.startWidth + delta));
+    // Same reasoning as the full editor's own ImageOverlay: clear any
+    // inline width/height style (older resize add-ons used to set those,
+    // and a leftover style would silently no-op the width attribute we're
+    // about to write), then set only the width attribute so the browser
+    // scales height to match the image's natural aspect ratio.
+    imgResize.active.style.removeProperty("width");
+    imgResize.active.style.removeProperty("height");
+    imgResize.active.removeAttribute("height");
+    imgResize.active.width = newWidth;
+    positionImgOverlay();
+  }
+
+  function onImgHandleMouseup() {
+    imgResize.dragging = null;
+    document.removeEventListener("mousemove", onImgHandleMousemove);
+    document.removeEventListener("mouseup", onImgHandleMouseup);
+  }
+
+  function onDocClickForImageSelect(e) {
+    if (!editState.active) return;
+    var t = e.target;
+    if (t && t.tagName === "IMG" && t.closest && t.closest("[data-ba-field]")) {
+      selectImage(t);
+      return;
+    }
+    if (t && t.closest && t.closest("#ba-img-resize-overlay")) return;
+    deselectImage();
+  }
+
+  function onDocDblClickForImageReset(e) {
+    if (!editState.active || !imgResize.active) return;
+    if (e.target !== imgResize.active) return;
+    e.preventDefault();
+    imgResize.active.removeAttribute("width");
+    imgResize.active.removeAttribute("height");
+    imgResize.active.style.removeProperty("width");
+    imgResize.active.style.removeProperty("height");
+    positionImgOverlay();
+  }
+
+  function onWindowReflowForImageOverlay() {
+    if (imgResize.active) positionImgOverlay();
+  }
+
   function focusFirstField(spans) {
     if (!spans || !spans.length) return;
     var first = spans[0];
@@ -380,6 +512,7 @@
 
   window.__baEnterEdit = function () {
     if (editState.active) return;
+    deselectImage();  // clean slate — no stale selection from a prior session
     // Always edit with the back showing — front-only edits are confusing
     // when the user can't see what the back currently says. Anki's
     // question render doesn't contain the answer divider at all, so we
@@ -430,6 +563,7 @@
 
   function exitEdit(save) {
     if (!editState.active) return;
+    deselectImage();
     var spans = fieldSpans();
     if (save) {
       var payload = collectPayload();
@@ -469,6 +603,7 @@
     var payload = collectPayload();
     try { pycmd("ba:edit-full:" + payload); } catch (_) {}
     // Local cleanup — the full editor takes over from here.
+    deselectImage();
     var spans = fieldSpans();
     spans.forEach(function (sp) {
       sp.removeAttribute("contenteditable");
@@ -508,6 +643,10 @@
     clickToReveal();
     hookEaseClicks();
     watchBody();
+    document.addEventListener("click", onDocClickForImageSelect);
+    document.addEventListener("dblclick", onDocDblClickForImageReset);
+    window.addEventListener("scroll", onWindowReflowForImageOverlay, true);
+    window.addEventListener("resize", onWindowReflowForImageOverlay);
   }
 
   if (document.readyState === "loading") {
