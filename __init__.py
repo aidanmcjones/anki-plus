@@ -20,6 +20,7 @@ import os
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote as _quote
 
 from aqt import gui_hooks, mw
 from aqt.deckbrowser import DeckBrowser, DeckBrowserContent
@@ -68,7 +69,9 @@ WEB = f"/_addons/{ADDON_DIR}/web"
 # user_files/ is Anki's conventional per-addon data dir: it survives add-on
 # updates (unlike the rest of the tree, which gets replaced wholesale), so
 # it's where the nature-video library lives — curated separately from this
-# checkout and never bundled into the .ankiaddon. See nature.py.
+# checkout. It is kept out of the shipped .ankiaddon by build.py's
+# EXCLUDE_DIRS (the actual guard — see build.py), not by anything Anki does
+# on its own. See nature.py.
 USER_FILES = f"/_addons/{ADDON_DIR}/user_files"
 
 # Let Anki serve our static files to the embedded web views.
@@ -272,8 +275,13 @@ _VIDEO_EMPTY_WARNED = False
 def _video_state(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Resolves the nature-video library plus the `video_selection` /
     `video_rotate_seconds` config into what both `_js_opts` and the
-    injection branch need — one call so index.json is read once per
-    render and the two agree exactly on what's playable."""
+    injection branch need. Only meaningful (and only ever called) when
+    backdrop mode is "video" — callers are responsible for computing this
+    once per render and threading the same dict into both `_js_opts` and
+    the injection branch, so index.json is read once and the two agree
+    exactly on what's playable. Importing `nature` here (rather than at
+    module scope) also keeps every other backdrop mode — the common
+    case — from paying for this module or a filesystem read at all."""
     from . import nature as _nature
     videos_all = _nature.read_index()
     selection = _nature.normalize_selection(
@@ -312,14 +320,39 @@ def _video_html(initial_url: str) -> str:
     )
 
 
-def _js_opts(cfg: Dict[str, Any]) -> Dict[str, Any]:
+def _js_opts(
+    cfg: Dict[str, Any], video_state: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Feature flags handed to the page scripts as `window.__baOpts`.
     Every key mirrors a Settings toggle; the JS treats a missing key as
-    "on" so older payloads keep working."""
+    "on" so older payloads keep working.
+
+    This runs on EVERY themed surface — deck browser, overview, reviewer,
+    editor, both toolbars — so it must stay cheap in the common case.
+    `video_state` lets a caller that already computed it (the deck-
+    browser/overview injection branch) pass it through instead of a
+    second `_video_state()` call; when backdrop mode isn't "video" (most
+    renders, most surfaces) this never imports `nature` or touches the
+    filesystem at all."""
     startup = str(cfg.get("deck_tree_startup", "remember") or "remember")
     if startup not in ("remember", "expanded", "collapsed"):
         startup = "remember"
-    video_state = _video_state(cfg)
+    if _backdrop_mode(cfg) == "video":
+        if video_state is None:
+            video_state = _video_state(cfg)
+        video_payload = [
+            {
+                "url": f"{USER_FILES}/nature/{_quote(v['file'])}",
+                "file": v["file"],
+                "biome": v["biome"],
+                "title": v["title"],
+            }
+            for v in video_state["filtered"]
+        ]
+        rotate_seconds = video_state["rotate_seconds"]
+    else:
+        video_payload = []
+        rotate_seconds = 0
     return {
         "cmdk": bool(cfg.get("cmdk", True)),
         "skipOverview": bool(cfg.get("skip_overview", True)),
@@ -337,16 +370,8 @@ def _js_opts(cfg: Dict[str, Any]) -> Dict[str, Any]:
         # Python already applied `video_selection`, so the page never has
         # to know what a biome or a pinned file even is.
         "video": {
-            "videos": [
-                {
-                    "url": f"{USER_FILES}/nature/{v['file']}",
-                    "file": v["file"],
-                    "biome": v["biome"],
-                    "title": v["title"],
-                }
-                for v in video_state["filtered"]
-            ],
-            "rotateSeconds": video_state["rotate_seconds"],
+            "videos": video_payload,
+            "rotateSeconds": rotate_seconds,
             "motion": _backdrop_motion_mode(cfg),
         },
         "deckList": {
@@ -532,10 +557,24 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             extras += "d.dataset.rfEase='native';"
     extras += "})();</script>"
     # Feature flags read by the page scripts (deck list, reviewer, sidebar).
+    # Computed once here (only when it can actually matter — video mode on
+    # a surface that gets a backdrop at all) and threaded into both
+    # `_js_opts` below and the video injection branch further down, so
+    # index.json is read at most once per render rather than twice.
     import json as _json
-    opts_js = (
-        "<script>window.__baOpts=" + _json.dumps(_js_opts(cfg)) + ";</script>"
-    )
+    video_state: Optional[Dict[str, Any]] = None
+    if _backdrop_mode(cfg) == "video" and isinstance(context, (DeckBrowser, Overview)):
+        try:
+            video_state = _video_state(cfg)
+        except Exception:
+            video_state = None
+    try:
+        opts_js = (
+            "<script>window.__baOpts="
+            + _json.dumps(_js_opts(cfg, video_state)) + ";</script>"
+        )
+    except Exception:
+        opts_js = "<script>window.__baOpts={};</script>"
 
     web_content.head += (
         f"<style>:root,.night-mode,body{{"
@@ -624,14 +663,22 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             # screens: the reviewer gets no backdrop and no motion at all.
             web_content.js.append(f"{WEB}/scene-shuffle.js")
         elif _backdrop_mode(cfg) == "video":
-            video_state = _video_state(cfg)
+            # Already computed once above (this is the branch that made
+            # that computation happen at all); only re-derive it if that
+            # earlier attempt failed, so a transient error here doesn't
+            # also take down the opts payload above.
+            if video_state is None:
+                try:
+                    video_state = _video_state(cfg)
+                except Exception:
+                    video_state = {"filtered": []}
             filtered = video_state["filtered"]
             if filtered:
                 web_content.css.append(f"{WEB}/video-backdrop.css")
                 try:
                     day_idx = datetime.date.today().toordinal() % len(filtered)
                     initial_url = (
-                        f"{USER_FILES}/nature/{filtered[day_idx]['file']}"
+                        f"{USER_FILES}/nature/{_quote(filtered[day_idx]['file'])}"
                     )
                     web_content.body = (
                         _video_html(initial_url) + web_content.body

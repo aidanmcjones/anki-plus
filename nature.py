@@ -5,9 +5,12 @@ step maintains, and reduces it (plus the `video_selection` config value)
 to what the page needs: a filtered, order-stable list of playable clips.
 
 `user_files/` is Anki's conventional per-addon data directory — it
-survives add-on updates and is never bundled into a shipped `.ankiaddon`,
-so this module treats its absence as completely normal (a fresh install,
-or a dev checkout before curation has run) rather than an error. Only a
+survives add-on updates. It is never bundled into a shipped `.ankiaddon`
+because `build.py`'s `EXCLUDE_DIRS` walks it out at package time (that
+exclusion is the actual guard; nothing about the directory name itself is
+special to Anki), so this module treats its absence as completely normal
+(a fresh install, or a dev checkout before curation has run) rather than
+an error. Only a
 genuinely malformed `index.json` gets logged, and only once, so a missing
 library never spams stderr and never raises into the render path.
 
@@ -60,9 +63,14 @@ def read_index() -> List[Dict[str, str]]:
     dicts. A missing file or dir returns ``[]`` silently (the common case:
     curation hasn't run yet). A present-but-broken index.json — bad JSON,
     a `videos` key that isn't a list — also returns ``[]``, but logs once.
-    Entries that are the wrong shape, or whose `file` would escape the
-    nature/ tree (absolute path, `..` segment), are skipped individually
-    rather than invalidating the whole library."""
+    Entries that are the wrong shape, whose `file` would escape the
+    nature/ tree (absolute path, `..` segment), or whose `file` doesn't
+    exist on disk, are skipped individually rather than invalidating the
+    whole library — this last check is what keeps a stale index.json (a
+    clip removed by curation but not re-indexed) from producing an
+    entry the page can never actually play, which would otherwise read
+    as a permanently blank backdrop instead of degrading to the same
+    aurora fallback a missing index gets."""
     try:
         with open(INDEX_PATH, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -81,6 +89,8 @@ def read_index() -> List[Dict[str, str]]:
             continue
         file = str(entry.get("file") or "").strip().replace("\\", "/")
         if not file or file.startswith("/") or ".." in file.split("/"):
+            continue
+        if not os.path.exists(os.path.join(ROOT, file)):
             continue
         biome = str(entry.get("biome") or "").strip() or "other"
         title = str(entry.get("title") or file).strip()
@@ -140,7 +150,7 @@ def rotate_seconds(raw: Any) -> int:
     dragged back up to the floor."""
     try:
         secs = int(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         secs = ROTATE_SECONDS_DEFAULT
     if secs <= 0:
         return 0
