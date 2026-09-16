@@ -160,6 +160,77 @@
     return true;
   }
 
+  // Stock Anki also never shows the image resize handles on a freshly
+  // inserted/loaded image: ImageOverlay.svelte computes
+  // `isSizeConstrained = getBooleanDatasetAttribute(img, "editorShrink")
+  // ?? $shrinkImagesByDefault`, and $shrinkImagesByDefault defaults to
+  // true, so every image starts "shrunk". HandleControl only lights up
+  // its corner squares when `active={!isSizeConstrained}`
+  // (ts/routes/editor/HandleControl.svelte: the `.control` divs get no
+  // `.active` class, hence no background/cursor, while shrunk — they're
+  // still in the DOM and still clickable, just invisible). A shrunk
+  // image instead shows only the "(double-click to expand)" hint and a
+  // selection box + floating toolbar — exactly what the addon looked
+  // like it might be causing, until you check the source: this is
+  // stock behavior, not an addon regression.
+  //
+  // The same `data-editor-shrink` attribute that gates the CSS shrink
+  // cap (editable-base.scss: `img:not([data-editor-shrink="false"])`)
+  // also gates isSizeConstrained above, and per-image it wins over the
+  // store default. NoteEditor strips it from field HTML before saving
+  // (`content.replace(/ data-editor-shrink="(true|false)"/g, "")`), so
+  // it never reaches the note and never round-trips — purely transient
+  // UI state we're free to force. Setting it to "false" on every field
+  // image makes handles active on the very first click, no double-click
+  // needed, on top of the larger display size raiseImageSizeCap already
+  // gives them. A user who manually re-shrinks an image via the toolbar
+  // (SizeSelect's "shrink" button, which flips this same attribute to
+  // "true") is left alone — we only ever set the attribute on images
+  // that don't already carry it, and mid-session toggles never remove
+  // an img node, so the shadow-root child-list observer below can't
+  // clobber a deliberate user choice.
+  function unshrinkFieldImages(root) {
+    root = root || document;
+    var imgs = root.querySelectorAll
+      ? root.querySelectorAll("img:not(.mathjax)")
+      : [];
+    imgs.forEach(function (img) {
+      if (img.dataset.editorShrink !== "false" && img.dataset.editorShrink !== "true") {
+        img.dataset.editorShrink = "false";
+      }
+    });
+  }
+
+  // Each editable field (RichTextInput.svelte) mounts its own shadow
+  // root (`element.attachShadow({mode:"open"})`), so images live behind
+  // a shadow boundary a plain querySelectorAll from document can't see.
+  // Walk the tree recursively, run the unshrink pass on every shadow
+  // root found, and attach a childList observer to each new one so
+  // images pasted/dropped in after initial load get caught too (adding
+  // an <img> node fires childList; toggling the dataset attribute via
+  // the toolbar does not, so this can't fight a manual re-shrink).
+  var observedShadowRoots = typeof WeakSet !== "undefined" ? new WeakSet() : null;
+  function scanForShadowRoots(root) {
+    root = root || document;
+    var els = root.querySelectorAll ? root.querySelectorAll("*") : [];
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      var sr = el.shadowRoot;
+      if (!sr) continue;
+      if (observedShadowRoots) {
+        if (observedShadowRoots.has(sr)) continue;
+        observedShadowRoots.add(sr);
+      }
+      unshrinkFieldImages(sr);
+      try {
+        new MutationObserver(function () {
+          unshrinkFieldImages(sr);
+        }).observe(sr, { childList: true, subtree: true });
+      } catch (_) {}
+      scanForShadowRoots(sr);
+    }
+  }
+
   function poll(fn, max) {
     if (fn()) return;
     var n = 0;
@@ -194,6 +265,7 @@
     ok = keepTagsOpen() && ok;
     ok = moveTagsIntoFields() && ok;
     raiseImageSizeCap(); // cosmetic only — never gates reveal
+    scanForShadowRoots(); // ditto — finds fields, unshrinks their images
     if (ok) reveal();
     return ok;
   }
@@ -214,6 +286,7 @@
       cleanFieldsCardsLabels();
       keepTagsOpen();
       moveTagsIntoFields();
+      scanForShadowRoots(); // new field rows/notetype switch mount new shadow roots
     }).observe(document.body, { childList: true, subtree: true });
   } catch (_) {}
 
@@ -233,6 +306,7 @@
   try {
     new MutationObserver(function () {
       raiseImageSizeCap();
+      scanForShadowRoots(); // Card<->Edit remount tears down old shadow roots too
     }).observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["style"],
