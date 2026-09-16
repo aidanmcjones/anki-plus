@@ -466,6 +466,27 @@
   display: none;
 }
 
+/* Black backdrop forces the page to pure #000 regardless of theme, but
+   the ink tokens (theme.css's --rf-ink family, and tokens.css's --fg
+   family that Anki's own chrome reads) are theme-driven, not backdrop-
+   driven. On a light-themed profile that leaves dark ink (#1f1d18-class
+   colors) sitting on pure black — ~1.1:1 contrast, essentially
+   unreadable — and it silently overrides whatever paper/canvas the user
+   configured under Settings → Background, without doing the same for
+   the text that has to sit on it. Force both ink families to their
+   dark-theme values here so black backdrop is legible under any theme;
+   body itself stays #000 as set above. */
+:root[data-rf-backdrop="black"] {
+  --rf-ink: #eceae2 !important;
+  --rf-ink-strong: #ffffff !important;
+  --rf-ink-dim: #9b978a !important;
+  --rf-ink-faint: #5d5a51 !important;
+  --fg: #eceae2 !important;
+  --fg-subtle: #9b978a !important;
+  --fg-faint: #5d5a51 !important;
+  --fg-disabled: #45433d !important;
+}
+
 /* Motion is the decoration here, not the scene. Everything stops; nothing
    disappears, so the landscape is still a landscape, just a still one.
 

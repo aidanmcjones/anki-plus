@@ -74,8 +74,14 @@ WEB = f"/_addons/{ADDON_DIR}/web"
 # on its own. See nature.py.
 USER_FILES = f"/_addons/{ADDON_DIR}/user_files"
 
-# Let Anki serve our static files to the embedded web views.
-mw.addonManager.setWebExports(__name__, r"(web|user_files)/.*")
+# Let Anki serve our static files to the embedded web views. `.*` in the
+# old pattern matched a literal `..` segment too, so
+# "user_files/../../<other-addon>/x" fullmatched it — a path-traversal
+# hole into every other add-on's user_files. This forbids `..` as a path
+# segment while still allowing normal filenames that merely contain dots.
+mw.addonManager.setWebExports(
+    __name__, r"(?:web|user_files/nature)(?:/(?!\.\.(?:/|$))[^/]+)+"
+)
 
 
 def _config() -> Dict[str, Any]:

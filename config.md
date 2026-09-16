@@ -25,8 +25,10 @@ in this file are the raw form the settings page writes.
   is never given a backdrop in any mode, deliberately: motion behind a card
   you are trying to recall is a distraction. Nothing is downloaded or
   bundled for the scene backdrop — it's gradients and clip paths in
-  `web/scene.css`; the video backdrop plays whatever `.mp4` files you (or
-  a curation tool) put in `user_files/nature/`, and ships none itself.
+  `web/scene.css`; the video backdrop plays whatever video files you (or
+  a curation tool) put in `user_files/nature/` — whatever format the
+  embedded webview can decode, WebM/VP9 on current Anki builds — and
+  ships none itself.
 - **backdrop_intensity** — `"cinematic"` (default) or `"subtle"`, which
   halves the backdrop's strength without changing what it draws. Ignored
   when **backdrop** is `"off"`. Light themes are damped again on top of
@@ -51,7 +53,7 @@ in this file are the raw form the settings page writes.
   `user_files/nature/` library. `"biome:<name>"` (e.g. `"biome:ocean"`)
   restricts the rotation to one biome. A bare value naming one of the
   `"file"` entries in `user_files/nature/index.json` (e.g.
-  `"ocean/humpback-whale.mp4"`) pins that single clip, which then just
+  `"ocean/humpback-whale.webm"`) pins that single clip, which then just
   loops on its own — **video_rotate_seconds** has nothing to rotate to.
   A biome no longer curated, or a file that's been deleted, falls back to
   `"shuffle"` rather than rendering nothing.
