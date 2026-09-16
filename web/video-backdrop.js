@@ -11,15 +11,19 @@
    broken file gets skipped once and never retried.
 
    Python has already set `.ba-video-a`'s `src` to a deterministically
-   (date-)picked clip and started it via the `autoplay` attribute — see
-   `_video_html` / `_video_state` in `__init__.py`. video-backdrop.css
-   defaults `.ba-video-a` to `opacity: 1` (see there for why), so that
-   clip is actually visible from the first paint, before this script has
-   even run — and if this script never runs at all (fetch failure, a JS
+   (date-)picked clip and started it via the `autoplay` attribute, and
+   put a `ba-video--preinit` class on the container — see `_video_html` /
+   `_video_state` in `__init__.py`. video-backdrop.css makes that class
+   the thing that holds `.ba-video-a` at `opacity: 1` (see there for why
+   it can't just be a bare rule on `.ba-video-a`), so that clip is
+   actually visible from the first paint, before this script has even
+   run — and if this script never runs at all (fetch failure, a JS
    error elsewhere on the page), that one clip just keeps looping
    forever via the native `autoplay`/`loop` attributes rather than
    sitting behind an opaque, silent rectangle. Once this script does
-   run, it takes over crossfading and rotation from there.
+   run, `init()` strips `ba-video--preinit` in the same breath it hands
+   out the real `.ba-video-front` class, and takes over crossfading and
+   rotation from there.
 
    Deck browser and overview only, same as the scene backdrop: the
    reviewer has no backdrop and no motion, on purpose. */
@@ -96,8 +100,32 @@
     var front = elA;
     var back = elB;
     front.classList.add("ba-video-front");
+    // `.ba-video--preinit` (on `.ba-video`, see `_video_html`) is what
+    // actually keeps `.ba-video-a` visible before this script runs — see
+    // video-backdrop.css. `.ba-video-a` never moves (it's the same DOM
+    // node all session; `front`/`back` are pointers that swap across it,
+    // not classes on it), so if this class stayed on the container, its
+    // `.ba-video--preinit .ba-video-a { opacity: 1 }` rule (0,2,0) would
+    // keep forcing elA visible forever — including after the first
+    // crossfade hands `.ba-video-front` to elB, at which point elA would
+    // be stuck fully opaque *on top of* elB instead of faded out: two
+    // clips visible at once. Has to come off the instant this script
+    // takes over, in the same breath as handing out the real
+    // `.ba-video-front` class above.
+    var container = document.querySelector(".ba-video");
+    if (container) container.classList.remove("ba-video--preinit");
 
     var badFiles = Object.create(null);
+    // Holds the setTimeout id for the deferred outgoing.pause() below, so a
+    // second advance() within CROSSFADE_MS of the first can cancel the
+    // stale one before it fires. Without this, an onError-driven advance()
+    // (reachable from any bad clip source — see onError()) firing twice in
+    // quick succession leaves two pending pause() calls; the first one's
+    // callback captured the element that was front *at that time*, which
+    // by the time it fires is the element the second advance() just made
+    // visible again — pausing the thing actually on screen and freezing
+    // the backdrop.
+    var pauseTimer = null;
 
     function playQuiet(el) {
       try {
@@ -136,6 +164,13 @@
 
     function advance() {
       if (order.length < 2) return;
+      // Cancel any still-pending pause from a previous advance() — see
+      // `pauseTimer`'s comment above. Letting it fire against a stale
+      // `outgoing` reference is exactly the freeze this guards against.
+      if (pauseTimer !== null) {
+        window.clearTimeout(pauseTimer);
+        pauseTimer = null;
+      }
       var idx = nextPlayableIndex(at + 1);
       // -1: every clip has failed, nothing left to show. idx === at:
       // every OTHER clip has failed, so the only "next" candidate
@@ -165,9 +200,16 @@
       // Pause the outgoing element once its fade-out has actually
       // finished (not immediately — that would cut the transition off
       // mid-fade and freeze it) so only the one on screen keeps
-      // decoding.
-      window.setTimeout(function () {
-        try { outgoing.pause(); } catch (e) {}
+      // decoding. Self-cancelling: if another advance() has run in the
+      // meantime (see `pauseTimer` above), `outgoing` here may no longer
+      // be the hidden element — it may be the one a later advance() just
+      // made `front` again — so re-check before pausing rather than
+      // trusting the closure's stale snapshot.
+      pauseTimer = window.setTimeout(function () {
+        pauseTimer = null;
+        if (outgoing !== front) {
+          try { outgoing.pause(); } catch (e) {}
+        }
       }, CROSSFADE_MS);
       // Buffer the clip AFTER this one into the newly-hidden element
       // right away, so the NEXT crossfade — up to `rotateSeconds` from
@@ -218,7 +260,7 @@
     }
 
     function start() {
-      if (still || document.hidden) return;
+      if (still || document.hidden || occluded) return;
       playQuiet(front);
       if (timer === null && rotateSeconds > 0) {
         timer = setInterval(advance, rotateSeconds * 1000);
@@ -247,10 +289,22 @@
     // closes — see `_push_video_occlusion` in `__init__.py`. Window
     // blur/focus are wired too, belt-and-braces, for whatever occlusion
     // *does* reach the OS level (another app, another Space).
+    // Tracks embed occlusion specifically (as opposed to `document.hidden`,
+    // which onVisibility already handles): set true for the whole time an
+    // inline embed is open, false once it closes. Without this, a window
+    // focus event that arrives *while an embed is still open* (e.g. the
+    // user clicks back into the Anki window without closing Settings first)
+    // would call start() and resume decoding/painting behind the opaque
+    // overlay — onWindowFocus only ever checked `document.hidden`, which
+    // stays false the whole time an embed is up (see the comment above on
+    // why `document.hidden` never fires for these).
+    var occluded = false;
     window.__baVideoPause = function () {
+      occluded = true;
       pauseAll();
     };
     window.__baVideoResume = function () {
+      occluded = false;
       if (document.hidden) return;
       start();
     };

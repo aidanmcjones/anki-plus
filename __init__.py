@@ -316,7 +316,11 @@ def _video_html(initial_url: str) -> str:
         f' src="{html.escape(initial_url, quote=True)}"' if initial_url else ""
     )
     return (
-        '<div class="ba-video" aria-hidden="true">'
+        # `ba-video--preinit` is what makes `.ba-video-a` visible before
+        # video-backdrop.js has run — see video-backdrop.css. The script's
+        # `init()` strips this class the moment it takes over; if it never
+        # runs at all, it just stays and the CSS fallback holds.
+        '<div class="ba-video ba-video--preinit" aria-hidden="true">'
         f'<video class="ba-video-el ba-video-a" muted autoplay loop '
         f'playsinline preload="auto"{src_attr}></video>'
         '<video class="ba-video-el ba-video-b" muted autoplay loop '

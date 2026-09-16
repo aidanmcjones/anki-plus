@@ -27,21 +27,26 @@
   background: #05060a;
 }
 
-/* Defaults `.ba-video-a` on top, opacity 1, *before* the base rule below
-   sets every `.ba-video-el` to opacity 0 — same specificity (one class
-   each), so source order decides the tie, and this one has to lose it
-   once video-backdrop.js actually starts running: from that point on,
-   `.ba-video-front` (two classes, unambiguously higher specificity) is
-   what actually controls which element shows, and the script keeps that
-   class on whichever of A/B is current regardless of which one started
-   as "a". This rule only matters for the window before the script has
-   run — __init__.py's `_video_html` puts the initial clip on `.ba-video-a`
-   with the `autoplay`/`loop` attributes already set, so it's visible and
-   playing from first paint even if the script never runs at all (a JS
-   error elsewhere on the page, a blocked/failed script fetch): graceful
-   degradation to "one clip, looping, forever" instead of an opaque
-   rectangle over dead markup. */
-.ba-video-a {
+/* Before video-backdrop.js has run, `.ba-video-a` needs to be visible on
+   its own — __init__.py's `_video_html` puts the initial clip there with
+   `autoplay`/`loop` already set, so it plays from first paint even if the
+   script never runs at all (a JS error elsewhere on the page, a
+   blocked/failed script fetch): graceful degradation to "one clip,
+   looping, forever" instead of an opaque rectangle over dead markup.
+
+   That can't be a bare `.ba-video-a { opacity: 1 }` rule, though: it's
+   the same specificity (0,1,0) as the base `.ba-video-el { opacity: 0 }`
+   rule below, and CSS resolves same-specificity ties by *source order*,
+   not by which one "sounds like" it should win — so a rule textually
+   before `.ba-video-el` here still loses to it. Scoping the fallback
+   under `.ba-video--preinit` (0,2,0) instead makes it unambiguously more
+   specific, so it actually wins regardless of source order. `_video_html`
+   puts that class on the `.ba-video` container at render time, and
+   video-backdrop.js's `init()` strips it in the same breath it hands out
+   the real `.ba-video-front` class — see the comment there for why
+   leaving it on past that point would freeze two clips visible at once
+   instead of just gating the pre-script window. */
+.ba-video--preinit .ba-video-a {
   opacity: 1;
 }
 
