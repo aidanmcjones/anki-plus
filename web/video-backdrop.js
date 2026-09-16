@@ -12,8 +12,14 @@
 
    Python has already set `.ba-video-a`'s `src` to a deterministically
    (date-)picked clip and started it via the `autoplay` attribute — see
-   `_video_html` / `_video_state` in `__init__.py` — so the first paint
-   already has something playing. This only ever takes it from there.
+   `_video_html` / `_video_state` in `__init__.py`. video-backdrop.css
+   defaults `.ba-video-a` to `opacity: 1` (see there for why), so that
+   clip is actually visible from the first paint, before this script has
+   even run — and if this script never runs at all (fetch failure, a JS
+   error elsewhere on the page), that one clip just keeps looping
+   forever via the native `autoplay`/`loop` attributes rather than
+   sitting behind an opaque, silent rectangle. Once this script does
+   run, it takes over crossfading and rotation from there.
 
    Deck browser and overview only, same as the scene backdrop: the
    reviewer has no backdrop and no motion, on purpose. */
@@ -49,6 +55,10 @@
     if (!elA || !elB) return;
 
     var MIN_ROTATE_SECONDS = 5;
+    // Must match video-backdrop.css's `.ba-video-el` transition duration —
+    // this is how long advance() waits before pausing the element that
+    // just faded out, so the pause doesn't cut the fade off mid-transition.
+    var CROSSFADE_MS = 900;
 
     var rotateSeconds = parseInt(opts.rotateSeconds, 10);
     if (!isFinite(rotateSeconds) || rotateSeconds < 0) rotateSeconds = 0;
@@ -96,6 +106,13 @@
       } catch (e) {}
     }
 
+    // Buffers a clip into `el` without playing it. `el` here is always the
+    // currently-hidden element — playing it here would decode it
+    // continuously (forever, since <video loop> never stops) from the
+    // moment it's buffered until the crossfade that finally shows it,
+    // which for a long rotate interval is most of the page's lifetime for
+    // no visible benefit. advance() is the only place that ever calls
+    // play() on an element, and only for the one becoming visible.
     function prepare(el, entry) {
       if (!entry) return;
       if (el.getAttribute("src") === entry.url) return; // already loaded
@@ -104,7 +121,6 @@
         el.setAttribute("src", entry.url);
         el.load();
       } catch (e) {}
-      playQuiet(el);
     }
 
     // Next order[] index, from `fromIdx`, that isn't a known-bad file.
@@ -121,21 +137,38 @@
     function advance() {
       if (order.length < 2) return;
       var idx = nextPlayableIndex(at + 1);
-      if (idx === -1) {
+      // -1: every clip has failed, nothing left to show. idx === at:
+      // every OTHER clip has failed, so the only "next" candidate
+      // nextPlayableIndex can find by wrapping is the one already on
+      // screen — crossfading a clip into itself every rotate interval
+      // instead of holding it. Both cases: stop and hold the frame.
+      if (idx === -1 || idx === at) {
         stop();
-        return; // nothing playable left; hold whatever frame is up
+        return;
       }
       at = idx;
       var entry = order[at];
       if (back.getAttribute("src") !== entry.url) prepare(back, entry);
+      var outgoing = front;
       // The crossfade itself: toggling this class is what
       // video-backdrop.css actually animates (`opacity` transition on
-      // `.ba-video-el`).
+      // `.ba-video-el`). The incoming element must actually be playing
+      // for the fade to show anything but a frozen frame — prepare()
+      // deliberately never calls play(), so this is the one place that
+      // does.
       back.classList.add("ba-video-front");
       front.classList.remove("ba-video-front");
+      playQuiet(back);
       var swap = front;
       front = back;
       back = swap;
+      // Pause the outgoing element once its fade-out has actually
+      // finished (not immediately — that would cut the transition off
+      // mid-fade and freeze it) so only the one on screen keeps
+      // decoding.
+      window.setTimeout(function () {
+        try { outgoing.pause(); } catch (e) {}
+      }, CROSSFADE_MS);
       // Buffer the clip AFTER this one into the newly-hidden element
       // right away, so the NEXT crossfade — up to `rotateSeconds` from
       // now — never has to start a fetch at the moment it needs to show
@@ -167,8 +200,12 @@
     // Pre-buffer the clip that will follow the one already on screen.
     // Ample lead time in every realistic rotate interval (the settings
     // UI's fastest option is 1 minute; a 20s clip loads well inside
-    // that).
-    prepare(back, order[nextPlayableIndex(at + 1)]);
+    // that). Skipped entirely for a single-clip library — with only one
+    // playable clip, "the one that follows it" IS it, and there is
+    // nothing to gain from decoding the same file into both elements.
+    if (order.length > 1) {
+      prepare(back, order[nextPlayableIndex(at + 1)]);
+    }
 
     var timer = null;
     var still = false;
@@ -199,6 +236,33 @@
       else start();
     }
 
+    // `document.hidden` only ever fires for genuine tab/window occlusion,
+    // not for the addon's own inline overlays (Browse, Stats, Settings)
+    // opening on top of the deck browser — those are Qt-level widgets
+    // painted over `mw.web` without ever hiding or blurring it, so a
+    // video backdrop underneath keeps decoding, invisibly, behind an
+    // opaque panel for as long as the overlay is up. Anki's Python side
+    // pushes state here via these two window-level hooks (mirroring
+    // `__baSetActive`/`__baSetStanding`) whenever an embed opens or
+    // closes — see `_push_video_occlusion` in `__init__.py`. Window
+    // blur/focus are wired too, belt-and-braces, for whatever occlusion
+    // *does* reach the OS level (another app, another Space).
+    window.__baVideoPause = function () {
+      pauseAll();
+    };
+    window.__baVideoResume = function () {
+      if (document.hidden) return;
+      start();
+    };
+    function onWindowBlur() {
+      pauseAll();
+    }
+    function onWindowFocus() {
+      if (!document.hidden) start();
+    }
+    window.addEventListener("blur", onWindowBlur);
+    window.addEventListener("focus", onWindowFocus);
+
     // Reduced motion: hold the current frame and stop rotating — a
     // paused <video> is a still image at no further decode cost, same
     // contract scene-shuffle.js documents ("the landscape is still a
@@ -224,8 +288,10 @@
     function applyMotionPref() {
       still = !!(quiet && quiet.matches) || ankiQuiet();
       if (still) {
-        stop();
-        try { front.pause(); } catch (e) {}
+        // pauseAll(), not just front — back is mid-buffer (or holding a
+        // pre-loaded clip) and keeps decoding otherwise; "still" means
+        // stop, full stop.
+        pauseAll();
       } else {
         start();
       }
@@ -252,6 +318,10 @@
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", teardown);
       window.removeEventListener("beforeunload", teardown);
+      window.removeEventListener("blur", onWindowBlur);
+      window.removeEventListener("focus", onWindowFocus);
+      try { delete window.__baVideoPause; } catch (e) { window.__baVideoPause = undefined; }
+      try { delete window.__baVideoResume; } catch (e) { window.__baVideoResume = undefined; }
       if (classWatch) {
         classWatch.disconnect();
         classWatch = null;

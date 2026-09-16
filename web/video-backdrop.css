@@ -27,6 +27,24 @@
   background: #05060a;
 }
 
+/* Defaults `.ba-video-a` on top, opacity 1, *before* the base rule below
+   sets every `.ba-video-el` to opacity 0 — same specificity (one class
+   each), so source order decides the tie, and this one has to lose it
+   once video-backdrop.js actually starts running: from that point on,
+   `.ba-video-front` (two classes, unambiguously higher specificity) is
+   what actually controls which element shows, and the script keeps that
+   class on whichever of A/B is current regardless of which one started
+   as "a". This rule only matters for the window before the script has
+   run — __init__.py's `_video_html` puts the initial clip on `.ba-video-a`
+   with the `autoplay`/`loop` attributes already set, so it's visible and
+   playing from first paint even if the script never runs at all (a JS
+   error elsewhere on the page, a blocked/failed script fetch): graceful
+   degradation to "one clip, looping, forever" instead of an opaque
+   rectangle over dead markup. */
+.ba-video-a {
+  opacity: 1;
+}
+
 .ba-video-el {
   position: absolute;
   inset: 0;
