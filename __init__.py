@@ -387,6 +387,14 @@ def _js_opts(
             "videos": video_payload,
             "rotateSeconds": rotate_seconds,
             "motion": _backdrop_motion_mode(cfg),
+            # Seeds init()'s `occluded` flag so a deck-browser/overview
+            # render that happens WHILE an embed overlay is already open
+            # (e.g. _refresh_views() firing from a Settings toggle) starts
+            # paused instead of decoding invisibly behind the overlay for
+            # however long the overlay stays up. `_push_video_occlusion()`
+            # covers every occlusion change AFTER the page has loaded; this
+            # covers the one it can't — the state as of this render.
+            "occluded": _any_embed_open(),
         },
         "deckList": {
             "startup": startup,

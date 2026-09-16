@@ -164,19 +164,19 @@
 
     function advance() {
       if (order.length < 2) return;
-      // Cancel any still-pending pause from a previous advance() — see
-      // `pauseTimer`'s comment above. Letting it fire against a stale
-      // `outgoing` reference is exactly the freeze this guards against.
-      if (pauseTimer !== null) {
-        window.clearTimeout(pauseTimer);
-        pauseTimer = null;
-      }
       var idx = nextPlayableIndex(at + 1);
       // -1: every clip has failed, nothing left to show. idx === at:
       // every OTHER clip has failed, so the only "next" candidate
       // nextPlayableIndex can find by wrapping is the one already on
       // screen — crossfading a clip into itself every rotate interval
       // instead of holding it. Both cases: stop and hold the frame.
+      //
+      // Deliberately NOT cancelling any pending `pauseTimer` on this
+      // path: there is no new crossfade here to protect, so an earlier
+      // advance()'s deferred pause should still go through on schedule —
+      // its own `outgoing !== front` re-check (below) is what decides
+      // whether pausing the element it captured is still correct, and
+      // that check needs the timer to actually survive to fire.
       if (idx === -1 || idx === at) {
         stop();
         return;
@@ -197,6 +197,17 @@
       var swap = front;
       front = back;
       back = swap;
+      // Cancel any still-pending pause from a previous advance() — see
+      // `pauseTimer`'s comment above. Letting it fire against a stale
+      // `outgoing` reference is exactly the freeze this guards against.
+      // Only cancelled here, right before scheduling this crossfade's own
+      // pause, and not on the early-return path above: that path starts
+      // no new crossfade, so an earlier pending pause has nothing to
+      // conflict with and should still fire on its own schedule.
+      if (pauseTimer !== null) {
+        window.clearTimeout(pauseTimer);
+        pauseTimer = null;
+      }
       // Pause the outgoing element once its fade-out has actually
       // finished (not immediately — that would cut the transition off
       // mid-fade and freeze it) so only the one on screen keeps
@@ -298,7 +309,17 @@
     // overlay — onWindowFocus only ever checked `document.hidden`, which
     // stays false the whole time an embed is up (see the comment above on
     // why `document.hidden` never fires for these).
-    var occluded = false;
+    // Seeded from the render-time snapshot Python took in `_js_opts`
+    // (`opts.occluded`, via `_any_embed_open()`) rather than always
+    // starting false: a render that happens WHILE an embed is already
+    // open — e.g. `_refresh_views()` firing from a Settings toggle with
+    // Settings' own overlay still up — would otherwise default to
+    // "not occluded" here and have applyMotionPref() below call start()
+    // and begin decoding behind the overlay before `_push_video_occlusion`
+    // ever gets a chance to push a correction. The two pause/resume hooks
+    // above take over from here for every occlusion change that happens
+    // AFTER this point.
+    var occluded = !!opts.occluded;
     window.__baVideoPause = function () {
       occluded = true;
       pauseAll();
