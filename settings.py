@@ -51,6 +51,10 @@ try:
     from . import colors as _colors
 except Exception:  # pragma: no cover — standalone import during tooling
     _colors = None
+try:
+    from . import nature as _nature
+except Exception:  # pragma: no cover — standalone import during tooling
+    _nature = None
 
 
 def _icon_url(name: str) -> str:
@@ -952,6 +956,66 @@ class AnkiDesignSettingsPage(QWidget):
             "Page colour in dark mode.",
         ))
 
+        # Backdrop — what sits behind the deck list and overview. Built
+        # bottom-up: the two dependent rows (scene picker, video picker +
+        # rotate interval) exist before the mode row so the mode row's
+        # on_change callback can enable/disable them by reference.
+        scene_row, _scene_combo = self._combo_row(
+            "scene", "shuffle",
+            [("shuffle", "Shuffle (all ten)")] + [
+                (name, name.capitalize())
+                for name in (
+                    "peaks", "dunes", "forest", "canyon", "lake",
+                    "volcano", "isles", "tundra", "spires", "ruins",
+                )
+            ],
+            "Scene",
+            "Which illustrated landscape shows when Backdrop is Scenes.",
+        )
+        video_choices, video_hint = self._video_choices()
+        video_row, _video_combo = self._combo_row(
+            "video_selection", "shuffle", video_choices,
+            "Nature video", video_hint,
+        )
+        rotate_row, _rotate_combo = self._combo_row(
+            "video_rotate_seconds", 300,
+            [
+                (60, "Every minute"),
+                (300, "Every 5 minutes"),
+                (900, "Every 15 minutes"),
+                (3600, "Hourly"),
+                (0, "Never (loop one clip)"),
+            ],
+            "Rotate video every",
+            "How often the nature-video backdrop crossfades to the next clip.",
+            formatter=lambda s: f"Every {s}s",
+        )
+
+        def _sync_backdrop_deps(mode: str) -> None:
+            scene_row.setEnabled(mode == "scene")
+            video_row.setEnabled(mode == "video")
+            rotate_row.setEnabled(mode == "video")
+
+        v.addWidget(self._radio_row(
+            "backdrop", "scene",
+            [
+                ("off", "Off"),
+                ("black", "Pure black"),
+                ("aurora", "Aurora"),
+                ("scene", "Scenes"),
+                ("video", "Nature video"),
+            ],
+            "Backdrop",
+            "What sits behind the deck list and overview. The reviewer "
+            "never gets one — motion behind a card you're recalling is a "
+            "distraction.",
+            on_change=_sync_backdrop_deps,
+        ))
+        _sync_backdrop_deps(self._g("backdrop", "scene"))
+        v.addWidget(scene_row)
+        v.addWidget(video_row)
+        v.addWidget(rotate_row)
+
         def feature_row(key: str, label: str, default: bool, hint: str) -> QWidget:
             cb = QCheckBox(label)
             cb.setChecked(bool(self._g(key, default)))
@@ -1350,9 +1414,12 @@ class AnkiDesignSettingsPage(QWidget):
     # ----- builders ----- #
     def _radio_row(self, key: str, default: str,
                    options: List[Tuple[str, str]],
-                   label: str, hint: Optional[str] = None) -> QWidget:
+                   label: str, hint: Optional[str] = None,
+                   on_change: Optional[Any] = None) -> QWidget:
         """Horizontal radio group as a stacked field row. options is
-        ``[(config_value, display_label), …]``."""
+        ``[(config_value, display_label), …]``. ``on_change``, if given, is
+        called with the new value after the config write — for rows (like
+        Backdrop) that also need to enable/disable other fields."""
         group = QButtonGroup(self)
         # Keep a reference so the group isn't garbage-collected and the
         # exclusivity stops working — Qt notoriously drops un-referenced
@@ -1363,16 +1430,73 @@ class AnkiDesignSettingsPage(QWidget):
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(14)
         current = self._g(key, default)
+
+        def _choose(value: str) -> None:
+            self._set(key, value)
+            if on_change is not None:
+                on_change(value)
+
         for value, opt_label in options:
             rb = QRadioButton(opt_label)
             rb.setChecked(current == value)
             group.addButton(rb)
             rb.toggled.connect(
-                lambda checked, k=key, v=value: checked and self._set(k, v)
+                lambda checked, val=value: checked and _choose(val)
             )
             h.addWidget(rb)
         h.addStretch(1)
         return _field_row(label, box, hint)
+
+    def _combo_row(self, key: str, default: Any,
+                    options: List[Tuple[Any, str]],
+                    label: str, hint: Optional[str] = None,
+                    formatter: Optional[Any] = None) -> Tuple[QWidget, QComboBox]:
+        """QComboBox as a stacked field row. ``options`` is
+        ``[(config_value, display_label), …]``. If the current config value
+        isn't one of ``options`` (e.g. it names a video file that's since
+        been removed from the library), a synthetic entry is appended so
+        opening Settings never silently rewrites it — only picking a
+        different option does. Returns ``(row, combo)`` so the caller can
+        wire enabled/disabled state and read ``combo.currentData()``."""
+        combo = QComboBox()
+        current = self._g(key, default)
+        values = [o[0] for o in options]
+        opts = list(options)
+        if current not in values:
+            shown = formatter(current) if formatter else str(current)
+            opts = opts + [(current, shown)]
+        for value, opt_label in opts:
+            combo.addItem(opt_label, value)
+        idx = combo.findData(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.currentIndexChanged.connect(
+            lambda _i, k=key, c=combo: self._set(k, c.currentData())
+        )
+        return _field_row(label, combo, hint), combo
+
+    def _video_choices(self) -> Tuple[List[Tuple[Any, str]], str]:
+        """Options + hint for the video-selection combo, built from
+        ``user_files/nature/index.json`` at dialog-open time — a curation
+        run that adds or removes clips is picked up next time Settings
+        opens, no code change needed."""
+        videos: List[Dict[str, str]] = []
+        if _nature is not None:
+            try:
+                videos = _nature.read_index()
+            except Exception:
+                videos = []
+        if not videos:
+            return (
+                [("shuffle", "Shuffle all")],
+                "No clips found in user_files/nature/ yet. Nature video "
+                "will show the plain backdrop until a library is added.",
+            )
+        options: List[Tuple[Any, str]] = [("shuffle", "Shuffle all")]
+        for biome in _nature.biomes(videos):
+            options.append((f"biome:{biome}", f"Biome: {biome.title()}"))
+        for entry in videos:
+            options.append((entry["file"], entry.get("title") or entry["file"]))
+        return options, "Which clip(s) play when Backdrop is Nature video."
 
     def _bg_row(self, key: str, label: str,
                 presets: List[Tuple[str, str]], custom_default: str,
