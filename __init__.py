@@ -338,18 +338,22 @@ def _js_opts(
     "on" so older payloads keep working.
 
     This runs on EVERY themed surface — deck browser, overview, reviewer,
-    editor, both toolbars — so it must stay cheap in the common case.
-    `video_state` lets a caller that already computed it (the deck-
-    browser/overview injection branch) pass it through instead of a
-    second `_video_state()` call; when backdrop mode isn't "video" (most
-    renders, most surfaces) this never imports `nature` or touches the
-    filesystem at all."""
+    editor, both toolbars, the sidebar webview — so it must stay cheap in
+    the common case. `video_state` is never computed here: only a caller
+    that already has it (the deck-browser/overview injection branch, the
+    one surface that actually renders `.ba-video` markup) can populate the
+    "video" payload at all. Every other surface — reviewer, editor,
+    toolbars, sidebar — calls this without `video_state` and gets the
+    empty payload, even when backdrop mode is "video", because none of
+    them show a video backdrop; there is nothing for the ~4.6KB clip list
+    to do there but bloat every render. This used to fall back to a fresh
+    `_video_state(cfg)` call whenever `video_state` was None, which meant
+    those surfaces were reading and re-embedding index.json on every
+    single render for no reason — see B5 in the fix history."""
     startup = str(cfg.get("deck_tree_startup", "remember") or "remember")
     if startup not in ("remember", "expanded", "collapsed"):
         startup = "remember"
-    if _backdrop_mode(cfg) == "video":
-        if video_state is None:
-            video_state = _video_state(cfg)
+    if _backdrop_mode(cfg) == "video" and video_state is not None:
         video_payload = [
             {
                 "url": f"{USER_FILES}/nature/{_quote(v['file'])}",

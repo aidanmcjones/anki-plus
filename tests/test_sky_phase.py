@@ -329,6 +329,40 @@ def test_js_opts_carries_the_scene_payload_the_script_reads():
     json.loads(json.dumps(opts))
 
 
+def test_js_opts_video_payload_only_appears_when_video_state_is_supplied():
+    """_js_opts must NOT fall back to computing `_video_state()` itself
+    when the caller omits it — that fallback used to mean every themed
+    surface (reviewer, editor, both toolbars, the sidebar webview) read
+    index.json and embedded the whole clip list on every single render
+    whenever backdrop mode was "video", even though only the deck-browser/
+    overview injection branch ever uses it. Omitting `video_state` must
+    now always yield the empty payload, regardless of backdrop mode —
+    the caller that can actually use a non-empty one is required to pass
+    it explicitly."""
+    cfg = {"backdrop": "video"}
+    opts = mod._js_opts(cfg)
+    assert opts["video"]["videos"] == [], (
+        "a caller that omitted video_state got a non-empty video payload — "
+        "the fallback to _video_state() must be gone, not just optional"
+    )
+    assert opts["video"]["rotateSeconds"] == 0
+
+    # The one caller that DOES have it still gets a populated payload.
+    fake_state = {
+        "filtered": [{"file": "ocean/whale.webm", "biome": "ocean", "title": "Whale"}],
+        "rotate_seconds": 300,
+    }
+    opts_with_state = mod._js_opts(cfg, fake_state)
+    assert len(opts_with_state["video"]["videos"]) == 1
+    assert opts_with_state["video"]["videos"][0]["file"] == "ocean/whale.webm"
+    assert opts_with_state["video"]["rotateSeconds"] == 300
+
+    # Non-video backdrop modes stay empty either way — video_state being
+    # supplied doesn't matter once the mode itself rules video out.
+    off_opts = mod._js_opts({"backdrop": "scene"}, fake_state)
+    assert off_opts["video"]["videos"] == []
+
+
 if __name__ == "__main__":
     test_every_hour_has_a_phase_the_stylesheet_knows()
     test_all_four_phases_are_reachable()
@@ -349,4 +383,5 @@ if __name__ == "__main__":
     test_scene_list_for_the_page_collapses_when_pinned()
     test_shuffle_interval_clamp_rejects_a_spinning_timer()
     test_js_opts_carries_the_scene_payload_the_script_reads()
+    test_js_opts_video_payload_only_appears_when_video_state_is_supplied()
     print("PASS test_sky_phase")
