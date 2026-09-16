@@ -63,6 +63,18 @@
     // this is how long advance() waits before pausing the element that
     // just faded out, so the pause doesn't cut the fade off mid-transition.
     var CROSSFADE_MS = 900;
+    // How long to wait for a target clip's first frame to actually decode
+    // before giving up on a rotation cycle rather than fade to it. Only
+    // reached when the follow-buffer's prediction didn't pan out (a
+    // reshuffle wrap-around, a selection change, a bad-file skip), so it
+    // has to cover a cold fetch, not just a decode — generous on purpose.
+    var FADE_READY_TIMEOUT_MS = 3000;
+    // HTMLMediaElement.HAVE_CURRENT_DATA: the readyState threshold at
+    // which an element has actually decoded a frame of ITS CURRENT src,
+    // as opposed to still showing the last frame of whatever it displayed
+    // before. See beginFade()'s callers for why this specific threshold —
+    // not just "the src attribute looks right" — is the fade gate.
+    var READY_HAVE_CURRENT_DATA = 2;
 
     var rotateSeconds = parseInt(opts.rotateSeconds, 10);
     if (!isFinite(rotateSeconds) || rotateSeconds < 0) rotateSeconds = 0;
@@ -139,8 +151,10 @@
     // continuously (forever, since <video loop> never stops) from the
     // moment it's buffered until the crossfade that finally shows it,
     // which for a long rotate interval is most of the page's lifetime for
-    // no visible benefit. advance() is the only place that ever calls
-    // play() on an element, and only for the one becoming visible.
+    // no visible benefit. beginFade() is the only place that ever calls
+    // play() on an element, and only for the one becoming visible, and
+    // only once that element has actually decoded a frame of the clip
+    // being buffered here — see advance()/waitForReady() below.
     function prepare(el, entry) {
       if (!entry) return;
       if (el.getAttribute("src") === entry.url) return; // already loaded
@@ -162,28 +176,75 @@
       return -1;
     }
 
-    function advance() {
-      if (order.length < 2) return;
-      var idx = nextPlayableIndex(at + 1);
-      // -1: every clip has failed, nothing left to show. idx === at:
-      // every OTHER clip has failed, so the only "next" candidate
-      // nextPlayableIndex can find by wrapping is the one already on
-      // screen — crossfading a clip into itself every rotate interval
-      // instead of holding it. Both cases: stop and hold the frame.
-      //
-      // Deliberately NOT cancelling any pending `pauseTimer` on this
-      // path: there is no new crossfade here to protect, so an earlier
-      // advance()'s deferred pause should still go through on schedule —
-      // its own `outgoing !== front` re-check (below) is what decides
-      // whether pausing the element it captured is still correct, and
-      // that check needs the timer to actually survive to fire.
-      if (idx === -1 || idx === at) {
-        stop();
-        return;
+    // Holds the live wait for a target clip to become ready, if one is in
+    // flight — `{ el, entry, cleanup }`. Mirrors `pauseTimer`'s discipline:
+    // at most one is ever live, and anything that picks a new target
+    // (advance()) or tears the page down (teardown()) cancels it first
+    // rather than letting a late loadeddata/canplay fade to a clip nobody
+    // asked for anymore.
+    var pendingFade = null;
+
+    function cancelPendingFade() {
+      if (pendingFade) {
+        pendingFade.cleanup();
+        pendingFade = null;
       }
-      at = idx;
-      var entry = order[at];
-      if (back.getAttribute("src") !== entry.url) prepare(back, entry);
+    }
+
+    // Waits for `el` to actually have decoded a frame of `entry` — as
+    // opposed to still showing whatever it last displayed under a
+    // different src — before handing off to beginFade(). Self-cancelling
+    // via `pendingFade` above.
+    function waitForReady(el, entry) {
+      var settled = false;
+      var timeoutId = null;
+      function cleanup() {
+        el.removeEventListener("loadeddata", onReady);
+        el.removeEventListener("canplay", onReady);
+        if (timeoutId !== null) window.clearTimeout(timeoutId);
+      }
+      function onReady() {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        pendingFade = null;
+        // el's src can only have moved on from `entry` via a later
+        // prepare() call, and every path that reassigns `back`'s src
+        // cancels this wait first (advance(), onError()) — so this
+        // should never actually mismatch. Checked anyway: firing a fade
+        // for whatever `entry` used to mean, against whatever `el` now
+        // actually holds, is exactly the stale-frame bug this exists to
+        // prevent.
+        if (el.getAttribute("src") !== entry.url) return;
+        beginFade(entry);
+      }
+      function onTimeout() {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        pendingFade = null;
+        // Give up on this rotation cycle rather than flash a stale
+        // frame — `front` just keeps playing what it's already showing.
+        // `at` stays pointed at `entry` (advance() already set it before
+        // calling here), so the next scheduled advance() moves on from
+        // this clip instead of retrying the one that just timed out.
+      }
+      timeoutId = window.setTimeout(onTimeout, FADE_READY_TIMEOUT_MS);
+      el.addEventListener("loadeddata", onReady);
+      el.addEventListener("canplay", onReady);
+      pendingFade = { el: el, entry: entry, cleanup: cleanup };
+    }
+
+    // The actual crossfade to `entry`, which is already showing on `back`
+    // (readyState >= HAVE_CURRENT_DATA) by the time this runs — whether
+    // that was true the instant advance() checked, or only became true
+    // later via waitForReady()'s loadeddata/canplay. Everything that used
+    // to run unconditionally at the bottom of advance() lives here now,
+    // so none of it — the class swap video-backdrop.css animates, the
+    // front/back pointer swap, the outgoing element's deferred pause, or
+    // lining up the clip after this one — can happen ahead of the frame
+    // that's supposed to justify it.
+    function beginFade(entry) {
       var outgoing = front;
       // The crossfade itself: toggling this class is what
       // video-backdrop.css actually animates (`opacity` transition on
@@ -197,42 +258,111 @@
       var swap = front;
       front = back;
       back = swap;
-      // Cancel any still-pending pause from a previous advance() — see
+      // Cancel any still-pending pause from a previous fade — see
       // `pauseTimer`'s comment above. Letting it fire against a stale
       // `outgoing` reference is exactly the freeze this guards against.
-      // Only cancelled here, right before scheduling this crossfade's own
-      // pause, and not on the early-return path above: that path starts
-      // no new crossfade, so an earlier pending pause has nothing to
-      // conflict with and should still fire on its own schedule.
       if (pauseTimer !== null) {
         window.clearTimeout(pauseTimer);
         pauseTimer = null;
       }
+      // Buffer the clip AFTER this one so the NEXT crossfade doesn't have
+      // to start its fetch at the moment it needs something to show.
+      // Computed now (stable — depends only on `at`, which doesn't change
+      // again until the next advance()) but not *loaded* into `outgoing`
+      // until the pause callback below confirms it's fully faded out and
+      // hidden — see that callback for why.
+      var followIdx = nextPlayableIndex(at + 1);
       // Pause the outgoing element once its fade-out has actually
       // finished (not immediately — that would cut the transition off
       // mid-fade and freeze it) so only the one on screen keeps
-      // decoding. Self-cancelling: if another advance() has run in the
+      // decoding. Self-cancelling: if another fade has started in the
       // meantime (see `pauseTimer` above), `outgoing` here may no longer
-      // be the hidden element — it may be the one a later advance() just
-      // made `front` again — so re-check before pausing rather than
-      // trusting the closure's stale snapshot.
+      // be the hidden element — it may be the one a later fade just made
+      // `front` again — so re-check before pausing rather than trusting
+      // the closure's stale snapshot.
       pauseTimer = window.setTimeout(function () {
         pauseTimer = null;
         if (outgoing !== front) {
           try { outgoing.pause(); } catch (e) {}
+          // Safe to load the next-next clip into it only now: its
+          // fade-out transition (video-backdrop.css's 900ms opacity,
+          // matching CROSSFADE_MS) has actually finished, so it's fully
+          // hidden, not just paused. Doing this immediately when the
+          // fade started (the pre-fix behavior) mutated the src of an
+          // element that was still visibly blending into the page for
+          // the next 900ms — the same "mid-load, still on screen"
+          // hazard advance()/waitForReady() guard against for the
+          // incoming element below.
+          if (followIdx !== -1) prepare(outgoing, order[followIdx]);
         }
       }, CROSSFADE_MS);
-      // Buffer the clip AFTER this one into the newly-hidden element
-      // right away, so the NEXT crossfade — up to `rotateSeconds` from
-      // now — never has to start a fetch at the moment it needs to show
-      // something.
-      var followIdx = nextPlayableIndex(at + 1);
-      if (followIdx !== -1) prepare(back, order[followIdx]);
+    }
+
+    function advance() {
+      if (order.length < 2) return;
+      var idx = nextPlayableIndex(at + 1);
+      // -1: every clip has failed, nothing left to show. idx === at:
+      // every OTHER clip has failed, so the only "next" candidate
+      // nextPlayableIndex can find by wrapping is the one already on
+      // screen — crossfading a clip into itself every rotate interval
+      // instead of holding it. Both cases: stop and hold the frame.
+      //
+      // Deliberately NOT cancelling any pending `pauseTimer` or
+      // `pendingFade` on this path: there is no new crossfade here to
+      // protect, so an earlier fade's deferred pause, or an earlier
+      // fade still waiting on its target to become ready, should still
+      // go through on its own schedule — their own re-checks (`outgoing
+      // !== front` for the pause; the src comparison in waitForReady's
+      // onReady) are what decide whether acting is still correct, and
+      // those checks need the timer/listeners to actually survive.
+      if (idx === -1 || idx === at) {
+        stop();
+        return;
+      }
+      at = idx;
+      var entry = order[at];
+      // A fade already waiting on a *different* target (an earlier
+      // advance() whose pre-buffered clip didn't pan out, or whose grace
+      // window hasn't expired yet) is now stale — this call just picked
+      // a new target, and letting that old wait's listener fire later
+      // would fade to a clip nobody asked for anymore. Nothing else to
+      // unwind alongside it: nothing ever became visible on that path,
+      // that's the whole point of waiting.
+      cancelPendingFade();
+      prepare(back, entry);
+      if (back.getAttribute("src") === entry.url &&
+          back.readyState >= READY_HAVE_CURRENT_DATA) {
+        // Normal path: the follow-buffer (or a lucky idle fetch) already
+        // got this clip's first frame decoded, so the element about to
+        // fade in is actually showing IT, not whatever it displayed the
+        // last time it held a different src. Fade now.
+        beginFade(entry);
+        return;
+      }
+      // back's displayed frame does NOT belong to `entry` yet — either
+      // prepare() above just changed its src (a reshuffle wrap-around, a
+      // selection change, a bad-file skip: any path where the follow-
+      // buffer's prediction didn't match this advance()'s actual
+      // target), or it already had the right src but hasn't decoded a
+      // frame of it yet. Toggling the crossfade class here regardless —
+      // the pre-fix behavior — starts the opacity transition while the
+      // element is still showing its PREVIOUS clip's last frame: the
+      // viewer sees that stale clip for however long loading takes, then
+      // a hard content-swap to the real target underneath a fade that
+      // already started ("a third scene plays for a second, then it
+      // flips"). Defer instead: no class change, no play(), no pointer
+      // swap, until the element proves it has the target's first frame.
+      waitForReady(back, entry);
     }
 
     function onError(el) {
       var url = el.getAttribute("src") || "";
       if (url) badFiles[url] = true;
+      // If this element was the live target of a readiness wait, that
+      // wait can never resolve now — its src just errored, not loaded —
+      // so tear it down before deciding what to do next, the same way
+      // advance() does before starting a different one.
+      if (pendingFade && pendingFade.el === el) cancelPendingFade();
       if (el === front) {
         // The clip actually on screen just broke (removed mid-session,
         // truly a 404 this time) — don't wait out the rotation interval
@@ -256,6 +386,12 @@
     // that). Skipped entirely for a single-clip library — with only one
     // playable clip, "the one that follows it" IS it, and there is
     // nothing to gain from decoding the same file into both elements.
+    // Safe against the same "mid-load, still on screen" hazard advance()
+    // guards against below: `back` (elB) has no `ba-video-front` class
+    // and is not the element `.ba-video--preinit` holds visible (that's
+    // `.ba-video-a`/`front` only) — it stays fully hidden, opacity 0, the
+    // whole time this load is in flight, right up until the first
+    // advance() decides whether to fade it in at all.
     if (order.length > 1) {
       prepare(back, order[nextPlayableIndex(at + 1)]);
     }
@@ -390,6 +526,10 @@
 
     function teardown() {
       pauseAll();
+      // A fade waiting on loadeddata/canplay that never gets to fire its
+      // listener again — the page is going away — still holds a live
+      // setTimeout and two event listeners otherwise.
+      cancelPendingFade();
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", teardown);
       window.removeEventListener("beforeunload", teardown);
