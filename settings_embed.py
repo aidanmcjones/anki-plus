@@ -153,6 +153,21 @@ def _teardown_now() -> None:
     except Exception:
         pass
 
+    # This overlay occluded the video backdrop for as long as it was up
+    # (see `_push_video_occlusion` in `__init__.py`); now that its state
+    # above has already been cleared to None, `_any_embed_open()` no
+    # longer sees it, so this correctly resumes playback — unless some
+    # OTHER embed is still open, in which case it's a no-op push of the
+    # same "still occluded" state. Runs on every path through here (Close
+    # button, Esc, and Done via `_close_enclosing_dialog`), so nothing
+    # downstream has to remember to do this as a side effect of some
+    # unrelated navigation.
+    try:
+        from . import _push_video_occlusion
+        _push_video_occlusion()
+    except Exception:
+        pass
+
 
 def close_inline() -> None:
     """Kick off save + teardown of the embedded Preferences.

@@ -829,6 +829,25 @@ class AnkiDesignSettingsPage(QWidget):
         w: Optional[QWidget] = self.parentWidget()
         while w is not None:
             if isinstance(w, QDialog):
+                # When this page is hosted inline (settings_embed.py
+                # reparents the whole Preferences dialog into its overlay
+                # QFrame), `w` here IS that same reparented instance —
+                # calling `w.accept()` directly goes through
+                # `Preferences.accept()` -> `accept_with_callback(None)`:
+                # saves prefs but runs no callback, so the embed's
+                # overlay/curtain never get torn down and the QFrame is
+                # left stuck over the deck browser. Route through
+                # `close_inline()` instead, which does the identical save
+                # via `accept_with_callback(_teardown_now)` and actually
+                # brings the overlay down. Only the standalone (non-embed)
+                # Preferences dialog falls through to the plain accept().
+                try:
+                    from . import settings_embed
+                    if settings_embed._state.get("prefs") is w:
+                        settings_embed.close_inline()
+                        return
+                except Exception:
+                    pass
                 try:
                     w.accept()
                 except Exception:
