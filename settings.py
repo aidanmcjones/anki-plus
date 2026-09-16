@@ -1456,8 +1456,12 @@ class AnkiDesignSettingsPage(QWidget):
         isn't one of ``options`` (e.g. it names a video file that's since
         been removed from the library), a synthetic entry is appended so
         opening Settings never silently rewrites it — only picking a
-        different option does. Returns ``(row, combo)`` so the caller can
-        wire enabled/disabled state and read ``combo.currentData()``."""
+        different option does. Persistence is wired here, not left to the
+        caller: `currentIndexChanged` writes straight to config on every
+        change. Returns ``(row, combo)`` so the caller can wire the row's
+        (not the combo's) enabled/disabled state against another field —
+        every current caller discards the combo half for exactly that
+        reason."""
         combo = QComboBox()
         current = self._g(key, default)
         values = [o[0] for o in options]
