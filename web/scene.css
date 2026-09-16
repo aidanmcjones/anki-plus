@@ -475,8 +475,18 @@
    configured under Settings → Background, without doing the same for
    the text that has to sit on it. Force both ink families to their
    dark-theme values here so black backdrop is legible under any theme;
-   body itself stays #000 as set above. */
-:root[data-rf-backdrop="black"] {
+   body itself stays #000 as set above.
+
+   `:root:root[data-rf-backdrop="black"]` (the doubled `:root` is
+   deliberate, not a typo) rather than plain `:root[data-rf-backdrop=
+   "black"]`: tokens.css's `:root[data-rf-theme="light"] { --fg: ... }`
+   is the same (0,2,0) specificity with the same !important, so without
+   this the two rules are only a source-order tie away from swapping
+   which one wins — this file happening to load after tokens.css today
+   is not something a future reorder of the <link> list is obligated to
+   preserve. Repeating `:root` bumps this rule to (0,3,0), which beats
+   tokens.css's selectors outright regardless of load order. */
+:root:root[data-rf-backdrop="black"] {
   --rf-ink: #eceae2 !important;
   --rf-ink-strong: #ffffff !important;
   --rf-ink-dim: #9b978a !important;
