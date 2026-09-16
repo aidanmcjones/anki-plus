@@ -201,6 +201,51 @@
     });
   }
 
+  // unshrinkFieldImages() above is best-effort background coverage (it runs
+  // on a timer/mutation-observer cadence so the image *looks* full-size as
+  // soon as possible) — but it races the field's own content load. A note
+  // just switched to in Browse, or a field whose image finishes rendering
+  // between two observer callbacks, can still have activeImage's dataset
+  // read as unset the moment the user actually clicks it: ImageOverlay's
+  // `isSizeConstrained` is computed once, synchronously, inside the same
+  // click that sets `activeImage` (see maybeShowHandle in
+  // ImageOverlay.svelte) — if our attribute isn't on the element *yet* at
+  // that exact instant, the image opens shrunk-with-inactive-handles and
+  // the "(double-click to expand)" pill appears, no matter how large the
+  // image naturally is. This bit for real users on full-slide-screenshot
+  // sized field images, which take longer to reach a settled DOM state
+  // than the small thumbnails this was first verified against.
+  //
+  // Belt-and-suspenders isn't enough here — we need a hard guarantee. A
+  // capture-phase listener on `document` runs top-down before any
+  // bubble-phase listener anywhere in the tree, including ImageOverlay's
+  // own `on(await input.element, "click", maybeShowHandle)` (bubble
+  // phase, no options — ts/tslib/events.ts's `on()` doesn't pass
+  // `capture`). So this always sets the attribute before Svelte reads it,
+  // regardless of whether the background scan has caught up yet.
+  //
+  // `event.target` would be wrong here: a click that originates inside an
+  // open shadow root (every field is one — RichTextInput.svelte's
+  // `attachShadow({mode:"open"})`) gets *retargeted* to the shadow host
+  // for listeners outside the shadow tree, so `event.target` would be the
+  // field wrapper, never the <img>. `composedPath()[0]` is immune to
+  // retargeting and always gives the true originating element, and click
+  // events are `composed: true` by default so they're observable here at
+  // all despite the shadow boundary.
+  function forceUnshrinkOnClick(event) {
+    var path = typeof event.composedPath === "function" ? event.composedPath() : null;
+    var target = path && path.length ? path[0] : event.target;
+    if (
+      target &&
+      target.tagName === "IMG" &&
+      !target.classList.contains("mathjax") &&
+      target.dataset.editorShrink !== "false" &&
+      target.dataset.editorShrink !== "true"
+    ) {
+      target.dataset.editorShrink = "false";
+    }
+  }
+
   // Each editable field (RichTextInput.svelte) mounts its own shadow
   // root (`element.attachShadow({mode:"open"})`), so images live behind
   // a shadow boundary a plain querySelectorAll from document can't see.
@@ -311,5 +356,13 @@
       attributes: true,
       attributeFilter: ["style"],
     });
+  } catch (_) {}
+
+  // Capture-phase, so it always wins the race against ImageOverlay's own
+  // bubble-phase click listener — see forceUnshrinkOnClick's comment above.
+  // Registered once, unconditionally, for the life of the page; cheap
+  // no-op on every click that isn't on a field image.
+  try {
+    document.addEventListener("click", forceUnshrinkOnClick, true);
   } catch (_) {}
 })();
