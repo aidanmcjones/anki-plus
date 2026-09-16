@@ -166,10 +166,39 @@ def test_cap_is_a_ceiling_grid_never_exceeds_configured_weeks():
             )
 
 
+def test_weekday_glyphs_label_mon_fri_and_keep_seven_rows():
+    """The gutter must stay row-for-row with the grid: one span per weekday,
+    Sunday-first, letters on Mon-Fri and blank spacers on the weekend (whose
+    cells still render, so their rows still need height)."""
+    glyphs = mod._WEEKDAY_GLYPHS
+    weekdays = mod._WEEKDAYS
+
+    assert len(glyphs) == 7, f"expected 7 gutter rows, got {len(glyphs)}"
+    assert len(glyphs) == len(weekdays)
+
+    # Sunday (0) and Saturday (6) are deliberately unlabelled spacers.
+    assert glyphs[0] == "" and glyphs[6] == "", (
+        f"weekends should be blank spacers, got {glyphs[0]!r}/{glyphs[6]!r}"
+    )
+
+    # Every weekday Mon-Fri carries a label, and it's that day's own initial.
+    for i in range(1, 6):
+        assert glyphs[i], f"{weekdays[i]} (row {i}) has no gutter letter"
+        assert glyphs[i] == weekdays[i][0], (
+            f"row {i} labelled {glyphs[i]!r} but is {weekdays[i]}"
+        )
+
+    # Single characters only: .rf-hm-wd's 4px gutter in web/heatmap.css is
+    # sized for one glyph, so "Tu"/"Th" would need that widened to match.
+    for g in glyphs:
+        assert len(g) <= 1, f"{g!r} is wider than the gutter is sized for"
+
+
 if __name__ == "__main__":
     test_short_history_is_small_not_full_year()
     test_long_history_hits_exactly_the_cap()
     test_zero_reviews_renders_current_week_not_a_blank_year()
     test_grid_extends_by_exactly_one_column_per_week_of_new_history()
     test_cap_is_a_ceiling_grid_never_exceeds_configured_weeks()
+    test_weekday_glyphs_label_mon_fri_and_keep_seven_rows()
     print("PASS test_heatmap_window")

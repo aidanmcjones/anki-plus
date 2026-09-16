@@ -641,6 +641,14 @@ _MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 _WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
+# Gutter glyphs for the heatmap's seven rows, Sunday-first like _WEEKDAYS.
+# Spelled out instead of sliced off _WEEKDAYS because "Tue"[0] and "Thu"[0]
+# are both "T": running the whole Mon-Fri block makes that pair readable by
+# position, but only as long as the collision is a decision rather than a
+# side effect of slicing. Weekends stay blank so their rows keep full height
+# and weekend study still shows up in the grid.
+_WEEKDAY_GLYPHS = ["", "M", "T", "W", "T", "F", ""]
+
 
 def _heatmap_level_fn(counts: Dict[int, int]):
     """Pick a bucketing algorithm based on the shape of the data, so the
@@ -821,11 +829,11 @@ def build_heatmap_html(weeks: int = 53) -> str:
         f'{label if (span >= 4 or i == last_span_idx) else ""}</span>'
         for i, (label, span) in enumerate(month_spans)
     )
-    # Single-letter weekday labels (M / W / F) on the usual every-other-row
-    # cadence — same rows as before, just shorter text.
+    # Every weekday gets its letter, not just the old Mon/Wed/Fri cadence.
+    # All seven spans are still emitted: the blank weekend ones are the
+    # spacers that keep letter rows lined up with cell rows.
     weekdays_html = "".join(
-        f'<span class="rf-hm-wd">{_WEEKDAYS[i][0] if i in (1, 3, 5) else ""}</span>'
-        for i in range(7)
+        f'<span class="rf-hm-wd">{g}</span>' for g in _WEEKDAY_GLYPHS
     )
 
     total = sum(counts.values())

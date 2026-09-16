@@ -20,14 +20,28 @@
 .rf-hm-stats { color: var(--rf-text-dim, #9aa0ad); font-size: 12px; }
 .rf-hm-stats b { color: var(--rf-text, #e6e8ee); }
 
-/* body = fixed weekday gutter + a horizontally scrolling calendar */
-.rf-hm-body { display: flex; align-items: flex-start; }
+/* body = fixed weekday gutter + a horizontally scrolling calendar.
+   Shrink-to-fit and centered, so a young history's narrow grid carries its
+   letters along with it instead of leaving them stranded at the far left
+   while the squares float in the middle. `fit-content` clamps itself to the
+   available width, so a history long enough to overflow pins the body to
+   full width and hands scrolling back to `.rf-hm-scroll` untouched — the
+   gutter stays outside that scroller either way, which keeps the letters
+   put without a sticky layer that would have to paint its own background
+   over a card `theme.css` deliberately leaves transparent. */
+.rf-hm-body {
+  display: flex;
+  align-items: flex-start;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+}
 
 .rf-hm-wds {
   display: flex;
   flex-direction: column;
   flex: none;
-  /* Single-letter labels (M/W/F) need less of a gutter than the old
+  /* Single-letter labels (M/T/W/T/F) need less of a gutter than the old
      3-letter abbreviations did before this reads as a stray gap. */
   margin-right: 4px;
   font-size: 9px;
