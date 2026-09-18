@@ -216,11 +216,11 @@
     return { open: open, close: close };
   }
   function ensureToolbar() {
-    // The real editor (Add/Browse/Edit Current) gets compact Aa/Size
-    // controls folded into the icon toolbar instead — see
-    // ensureCompactFontSize(). This full-width row stays only for the
-    // reviewer's inline quick editor, a smaller, simpler surface where a
-    // dedicated row is the right call.
+    // The real editor (Add/Browse/Edit Current) gets uniform icon-button
+    // controls folded into the icon toolbar instead — see ensureHotbar().
+    // This full-width row stays only for the reviewer's inline quick
+    // editor, a smaller, simpler surface where a dedicated row is the
+    // right call.
     if (editorPage) return;
     if (!toolbar || !toolbar.isConnected) {
       toolbar = document.createElement("div");
@@ -255,75 +255,344 @@
     if (group && toolbar.parentNode !== group) group.appendChild(toolbar);
     toolbar.hidden = !document.body.classList.contains("ba-editing");
   }
-  // Compact replacement for the full-width row, folded directly into the
-  // stock icon toolbar next to B/I/U/etc: a small "Aa" button that pops
-  // the same searchable font combobox as above, and a narrow numeric size
-  // box — no separate row, no full-width text inputs, reclaiming the
-  // vertical space the row used to take.
-  function ensureCompactFontSize(nt) {
-    if (document.getElementById("ba-font-btn")) return;
+  // One unified hotbar, every control the same icon-button chrome — the
+  // user explicitly rejected "three pop-ups and two different-looking
+  // button types" (a QDialog for styling, a proxy-click to the stock
+  // Fields dialog, a wide text input for Size) in favor of "a document
+  // editor hotbar. They all have the same formatting." Fields.../Cards...
+  // are still two standalone stock buttons we fold away the same way as
+  // before (hidden, never removed — addcard.js's own comment about that
+  // still applies), but nothing here proxy-clicks the stock Fields button
+  // anymore, and nothing here opens a QDialog: every popover is inline,
+  // in this same pane, built from plain divs styled to match. The one
+  // still-standing popup is Anki's own CardLayout dialog, reached only
+  // through the explicit "Advanced: edit raw template" button — the user
+  // carved that one out by name as acceptable stock chrome.
+  var hotbarPopovers = [];
+  function closeAllHotbarPopovers(except) {
+    hotbarPopovers.forEach(function (p) { if (p !== except) p.close(); });
+  }
+  // Every hotbar control shares this shell: a button with the hotbar's
+  // uniform chrome (.ba-hotbar-btn — same box, border and hover as every
+  // other control here) plus a position:fixed popover under it. Content
+  // is filled in by the caller; open/close/positioning is identical for
+  // all of them, which is what makes them look and behave like one
+  // family of controls instead of ad hoc pop-ups.
+  function buildHotbarControl(container, idBase, label, title, ariaLabel) {
     var wrap = document.createElement("span");
-    wrap.className = "ba-compact-font-wrap";
-    wrap.innerHTML = '<button type="button" id="ba-font-btn" aria-haspopup="true" aria-expanded="false" title="Font family">Aa</button>'
-      + '<div id="ba-font-popover" hidden>'
-      + '<input type="text" id="ba-font-input" placeholder="Search fonts" aria-label="Font family" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" spellcheck="false">'
-      + '<div id="ba-font-dropdown" role="listbox" aria-label="Font suggestions" hidden></div>'
-      + '</div>'
-      + '<input type="number" id="ba-size-input" placeholder="Size" title="Text size in pixels" aria-label="Text size in pixels" min="6" max="300" step="1">';
-    nt.appendChild(wrap);
-    var fontBtn = wrap.querySelector("#ba-font-btn");
-    var fontPopover = wrap.querySelector("#ba-font-popover");
-    var fontInput = wrap.querySelector("#ba-font-input");
-    var fontDropdown = wrap.querySelector("#ba-font-dropdown");
-    var combobox = attachFontCombobox(fontInput, fontDropdown, "ba-font", function (f) { format("fontName", f); });
-    function closePopover() {
-      fontPopover.hidden = true;
-      fontBtn.setAttribute("aria-expanded", "false");
-      combobox.close();
-    }
-    fontBtn.addEventListener("click", function (e) {
+    wrap.className = "ba-hotbar-item";
+    wrap.innerHTML = '<button type="button" id="' + idBase + '-btn" class="ba-hotbar-btn" aria-haspopup="true" aria-expanded="false" title="' + escapeAttr(title) + '" aria-label="' + escapeAttr(ariaLabel || title) + '">' + label + '</button>'
+      + '<div id="' + idBase + '-popover" class="ba-popover" role="dialog" aria-label="' + escapeAttr(title) + '" hidden></div>';
+    container.appendChild(wrap);
+    var btn = wrap.querySelector("#" + idBase + "-btn");
+    var popover = wrap.querySelector("#" + idBase + "-popover");
+    var api = {
+      close: function () {
+        popover.hidden = true;
+        btn.setAttribute("aria-expanded", "false");
+      },
+      open: function () {
+        closeAllHotbarPopovers(api);
+        popover.hidden = false;
+        btn.setAttribute("aria-expanded", "true");
+        positionPopup(popover, btn);
+      },
+    };
+    btn.addEventListener("click", function (e) {
       e.stopPropagation();
-      var opening = fontPopover.hidden;
-      if (!opening) { closePopover(); return; }
-      fontPopover.hidden = false;
-      fontBtn.setAttribute("aria-expanded", "true");
-      positionPopup(fontPopover, fontBtn);
-      fontInput.value = "";
-      fontInput.focus();
+      if (popover.hidden) api.open(); else api.close();
     });
     document.addEventListener("click", function (e) {
-      if (!fontPopover.hidden && !wrap.contains(e.target)) closePopover();
+      if (!popover.hidden && !wrap.contains(e.target)) api.close();
     });
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && !fontPopover.hidden) { e.preventDefault(); closePopover(); }
+      if (e.key === "Escape" && !popover.hidden) { e.preventDefault(); api.close(); }
     }, true);
-    var sizeInput = wrap.querySelector("#ba-size-input");
-    function applySize() {
-      var px = parseInt(sizeInput.value, 10);
-      if (px) applyFontSizePx(px);
-    }
-    sizeInput.addEventListener("change", applySize);
-    sizeInput.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") { e.preventDefault(); applySize(); }
-    });
-    wrap.addEventListener("pointerdown", function () {
-      if (bookmark) rememberSelection(bookmark.field);
+    hotbarPopovers.push(api);
+    return { btn: btn, popover: popover, open: api.open, close: api.close };
+  }
+
+  function buildFontControl(container) {
+    // Distinct accessible names for the button/popover vs. the search
+    // input inside it — sharing "Font family" across all three made them
+    // ambiguous to anything (a test, a screen reader) selecting by
+    // accessible name alone; only the actual combobox should answer to it.
+    var c = buildHotbarControl(container, "ba-font", "Aa", "Font picker", "Open font picker");
+    c.popover.innerHTML = '<input type="text" id="ba-font-search" placeholder="Search fonts" aria-label="Font family" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" spellcheck="false">'
+      + '<div id="ba-font-dropdown" role="listbox" aria-label="Font suggestions" hidden></div>';
+    var input = c.popover.querySelector("#ba-font-search");
+    var dropdown = c.popover.querySelector("#ba-font-dropdown");
+    attachFontCombobox(input, dropdown, "ba-font", function (f) { format("fontName", f); });
+    c.btn.addEventListener("click", function () {
+      if (!c.popover.hidden) { input.value = ""; input.focus(); }
     });
   }
 
-  // Fields... and Cards... are two more standalone toolbar buttons on top
-  // of the text/image tools above — the user's ask was to fold both into
-  // one compact menu rather than adding a third item to the bar. We never
-  // remove or relocate the stock buttons themselves (addcard.js's own
-  // comment about this still applies: nothing here may touch a node
-  // Svelte owns beyond text content) — just hide them and proxy-click
-  // them from our own menu, so the exact same saveNow()+bridgeCommand
-  // flow Anki's own NotetypeButtons.svelte runs still runs, unmodified.
-  function ensureEditorMenu() {
+  // Size used to be an always-visible wide number input — visually
+  // nothing like a B/I/U icon button. Now it's the same button chrome as
+  // every other hotbar control; the popover it pops holds a compact
+  // +/- stepper plus a small number field, styled as one unit.
+  function buildSizeControl(container) {
+    // Distinct accessible names — only the number field itself answers to
+    // "Text size in pixels"; the trigger button is described separately.
+    var c = buildHotbarControl(container, "ba-size", "–+", "Text size", "Open text size");
+    c.popover.classList.add("ba-size-popover");
+    c.popover.innerHTML = '<div class="ba-stepper">'
+      + '<button type="button" class="ba-hotbar-btn" data-step="-1" aria-label="Decrease text size">−</button>'
+      + '<input type="number" id="ba-size-value" aria-label="Text size in pixels" min="6" max="300" step="1" value="16">'
+      + '<button type="button" class="ba-hotbar-btn" data-step="1" aria-label="Increase text size">+</button>'
+      + '</div>';
+    var input = c.popover.querySelector("#ba-size-value");
+    function apply() {
+      var px = parseInt(input.value, 10);
+      if (px) applyFontSizePx(px);
+    }
+    c.popover.querySelectorAll("[data-step]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var delta = Number(b.dataset.step);
+        var next = Math.max(6, Math.min(300, (parseInt(input.value, 10) || 16) + delta));
+        input.value = String(next);
+        apply();
+      });
+    });
+    input.addEventListener("change", apply);
+    input.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); apply(); } });
+  }
+
+  // Fields: add/rename/delete note type fields inline — "a button for
+  // fields... which can give you a dropdown and allow you to add
+  // fields." Schema changes route through card_styling.py's
+  // ba:fields:mutate (col.models.add_field/rename_field/remove_field,
+  // the same primitives the stock Fields dialog itself uses), never
+  // through the stock dialog — that dialog must never appear from here.
+  function buildFieldsControl(container) {
+    var c = buildHotbarControl(container, "ba-fields", "Fields", "Fields", "Open fields");
+    c.popover.classList.add("ba-fields-popover");
+    c.popover.innerHTML = '<div class="ba-fields-list" role="list"></div>'
+      + '<div class="ba-fields-add">'
+      + '<input type="text" id="ba-field-new" placeholder="New field name" aria-label="New field name" autocomplete="off">'
+      + '<button type="button" class="ba-hotbar-btn" id="ba-field-add-btn" aria-label="Add field">+</button>'
+      + '</div>'
+      + '<div class="ba-fields-error" role="alert" hidden></div>';
+    var list = c.popover.querySelector(".ba-fields-list");
+    var newInput = c.popover.querySelector("#ba-field-new");
+    var addBtn = c.popover.querySelector("#ba-field-add-btn");
+    var errorEl = c.popover.querySelector(".ba-fields-error");
+
+    function showError(msg) {
+      errorEl.textContent = msg || "";
+      errorEl.hidden = !msg;
+    }
+
+    function render(fields) {
+      list.innerHTML = "";
+      fields.forEach(function (f) {
+        var row = document.createElement("div");
+        row.className = "ba-field-row";
+        row.setAttribute("role", "listitem");
+        // Display pretty (word-spaced), edit raw: the rename input below
+        // still seeds from f.name untouched, and mutate() always sends
+        // the real CamelCase name — only this label's text is cosmetic.
+        var displayName = splitCamelCase(f.name);
+        var nameEl = document.createElement("span");
+        nameEl.className = "ba-field-name";
+        nameEl.tabIndex = 0;
+        nameEl.setAttribute("role", "button");
+        nameEl.setAttribute("aria-label", "Rename " + displayName);
+        nameEl.textContent = displayName;
+        var deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.className = "ba-field-delete";
+        deleteBtn.setAttribute("aria-label", "Delete " + displayName);
+        deleteBtn.textContent = "Delete";
+        row.appendChild(nameEl);
+        row.appendChild(deleteBtn);
+        list.appendChild(row);
+
+        function startRename() {
+          var input = document.createElement("input");
+          input.type = "text";
+          input.value = f.name;
+          input.className = "ba-field-rename-input";
+          input.setAttribute("aria-label", "Rename field " + f.name);
+          row.replaceChild(input, nameEl);
+          input.focus();
+          input.select();
+          var committed = false;
+          function commit() {
+            if (committed) return;
+            committed = true;
+            var newName = input.value.trim();
+            if (!newName || newName === f.name) { refresh(); return; }
+            mutate("rename", { ord: f.ord, newName: newName });
+          }
+          input.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.preventDefault(); commit(); }
+            else if (e.key === "Escape") { e.preventDefault(); committed = true; refresh(); }
+          });
+          input.addEventListener("blur", commit);
+        }
+        nameEl.addEventListener("click", startRename);
+        nameEl.addEventListener("keydown", function (e) { if (e.key === "Enter") startRename(); });
+
+        // Inline click-again-to-confirm — no dialog. A stray click just
+        // arms it; a click anywhere else (popover close, Escape) resets
+        // via the next render() from a fresh open.
+        deleteBtn.addEventListener("click", function () {
+          if (!deleteBtn.classList.contains("ba-armed")) {
+            deleteBtn.classList.add("ba-armed");
+            deleteBtn.textContent = "Confirm?";
+            return;
+          }
+          mutate("delete", { ord: f.ord });
+        });
+      });
+    }
+
+    function refresh() {
+      if (typeof pycmd !== "function") return;
+      pycmd("ba:fields:get", function (res) {
+        if (res && res.error) { showError(res.error); return; }
+        showError("");
+        render((res && res.fields) || []);
+      });
+    }
+    function mutate(op, extra) {
+      if (typeof pycmd !== "function") return;
+      var payload = Object.assign({ op: op }, extra);
+      pycmd("ba:fields:mutate:" + JSON.stringify(payload), function (res) {
+        if (res && res.error) { showError(res.error); return; }
+        showError("");
+        render((res && res.fields) || []);
+      });
+    }
+
+    addBtn.addEventListener("click", function () {
+      var name = newInput.value.trim();
+      if (!name) return;
+      mutate("add", { name: name });
+      newInput.value = "";
+    });
+    newInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); addBtn.click(); }
+    });
+
+    c.btn.addEventListener("click", function () {
+      if (!c.popover.hidden) refresh();
+    });
+  }
+
+  // Card styling: font/base size/answer size/alignment/image max-height,
+  // written into the note type's CSS via the same safe, idempotent
+  // override-block writer as before (card_styling.py's apply_styling) —
+  // only the chrome moved, from a QDialog to this popover. Explicit
+  // Apply/Reset (not live-as-you-type) since this changes every card of
+  // the note type, not just the current selection.
+  function buildStylingControl(container) {
+    var c = buildHotbarControl(container, "ba-styling", "Style", "Card styling", "Open card styling");
+    c.popover.classList.add("ba-styling-popover");
+    var aligns = [["left", "Left"], ["center", "Center"], ["right", "Right"]];
+    c.popover.innerHTML = '<div class="ba-styling-field"><label for="ba-style-font">Font</label>'
+      + '<div class="ba-font-combo"><input type="text" id="ba-style-font" placeholder="Card default" aria-label="Card font family" role="combobox" autocomplete="off" spellcheck="false">'
+      + '<div id="ba-style-font-dropdown" role="listbox" aria-label="Font suggestions" hidden></div></div></div>'
+      + '<div class="ba-styling-field"><label>Base size</label><div class="ba-stepper">'
+      + '<button type="button" class="ba-hotbar-btn" data-step="base:-1">−</button>'
+      + '<input type="number" id="ba-style-base" min="6" max="300" step="1" aria-label="Base text size">'
+      + '<button type="button" class="ba-hotbar-btn" data-step="base:1">+</button></div></div>'
+      + '<div class="ba-styling-field"><label>Answer size</label><div class="ba-stepper">'
+      + '<button type="button" class="ba-hotbar-btn" data-step="answer:-1">−</button>'
+      + '<input type="number" id="ba-style-answer" min="6" max="300" step="1" aria-label="Answer text size">'
+      + '<button type="button" class="ba-hotbar-btn" data-step="answer:1">+</button></div></div>'
+      + '<div class="ba-styling-field"><label>Alignment</label><div class="ba-align-group" role="group" aria-label="Text alignment">'
+      + aligns.map(function (a) { return '<button type="button" class="ba-hotbar-btn" data-align="' + a[0] + '">' + a[1] + '</button>'; }).join("")
+      + '</div></div>'
+      + '<div class="ba-styling-field"><label>Image max height</label><div class="ba-stepper">'
+      + '<button type="button" class="ba-hotbar-btn" data-step="image:-20">−</button>'
+      + '<input type="number" id="ba-style-image" min="20" max="4000" step="1" aria-label="Image max height">'
+      + '<button type="button" class="ba-hotbar-btn" data-step="image:20">+</button></div></div>'
+      + '<div class="ba-styling-error" role="alert" hidden></div>'
+      + '<div class="ba-styling-actions">'
+      + '<button type="button" class="ba-hotbar-btn" id="ba-style-reset">Reset</button>'
+      + '<button type="button" class="ba-hotbar-btn ba-primary" id="ba-style-apply">Apply</button>'
+      + '</div>';
+    var fontInput = c.popover.querySelector("#ba-style-font");
+    var fontDropdown = c.popover.querySelector("#ba-style-font-dropdown");
+    var baseInput = c.popover.querySelector("#ba-style-base");
+    var answerInput = c.popover.querySelector("#ba-style-answer");
+    var imageInput = c.popover.querySelector("#ba-style-image");
+    var alignBtns = c.popover.querySelectorAll("[data-align]");
+    var errorEl = c.popover.querySelector(".ba-styling-error");
+    var currentAlign = "center";
+
+    attachFontCombobox(fontInput, fontDropdown, "ba-style-font", function (f) { fontInput.value = f; });
+
+    function showError(msg) {
+      errorEl.textContent = msg || "";
+      errorEl.hidden = !msg;
+    }
+    function setAlign(value) {
+      currentAlign = value;
+      alignBtns.forEach(function (b) { b.classList.toggle("active", b.dataset.align === value); });
+    }
+    alignBtns.forEach(function (b) {
+      b.addEventListener("click", function () { setAlign(b.dataset.align); });
+    });
+    c.popover.querySelectorAll("[data-step]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var parts = b.dataset.step.split(":");
+        var target = parts[0] === "base" ? baseInput : parts[0] === "answer" ? answerInput : imageInput;
+        var delta = Number(parts[1]);
+        var min = Number(target.min), max = Number(target.max);
+        var next = Math.max(min, Math.min(max, (parseInt(target.value, 10) || min) + delta));
+        target.value = String(next);
+      });
+    });
+
+    function refresh() {
+      if (typeof pycmd !== "function") return;
+      pycmd("ba:styling:get", function (res) {
+        if (!res || res.error) { showError(res && res.error); return; }
+        showError("");
+        fontInput.value = res.font || "";
+        baseInput.value = res.base_size;
+        answerInput.value = res.answer_size;
+        imageInput.value = res.image_max_height;
+        setAlign(res.align || "center");
+      });
+    }
+    c.popover.querySelector("#ba-style-apply").addEventListener("click", function () {
+      if (typeof pycmd !== "function") return;
+      var payload = {
+        font: fontInput.value.trim(),
+        base_size: parseInt(baseInput.value, 10) || 20,
+        answer_size: parseInt(answerInput.value, 10) || 24,
+        align: currentAlign,
+        image_max_height: parseInt(imageInput.value, 10) || 500,
+      };
+      pycmd("ba:styling:apply:" + JSON.stringify(payload), function (res) {
+        if (res && res.error) { showError(res.error); return; }
+        showError("");
+        c.close();
+      });
+    });
+    c.popover.querySelector("#ba-style-reset").addEventListener("click", function () {
+      if (typeof pycmd !== "function") return;
+      pycmd("ba:styling:reset", function (res) {
+        if (res && res.error) { showError(res.error); return; }
+        refresh();
+      });
+    });
+
+    c.btn.addEventListener("click", function () {
+      if (!c.popover.hidden) refresh();
+    });
+  }
+
+  function ensureHotbar() {
     if (!editorPage) return;
     var nt = document.getElementById("notetype");
     if (!nt) return;
-    if (document.getElementById("ba-editor-menu-btn")) return;
+    if (document.getElementById("ba-hotbar")) return;
     // Positional, not text-matched: NotetypeButtons.svelte always renders
     // Fields then Cards, in that order — matching by English text prefix
     // would silently break on any non-English locale (the button text is
@@ -333,8 +602,8 @@
     // `#notetype .label-button { display: none !important; }` rule in
     // editor-tools.css doing the actual hiding (so there's no first-paint
     // flash while this function waits on the MutationObserver), a bug
-    // here would hide Fields/Cards with no menu ever appearing to
-    // replace them — a real functionality loss, not just a cosmetic one.
+    // here would hide Fields/Cards with no replacement ever appearing —
+    // a real functionality loss, not just a cosmetic one.
     var btns = nt.querySelectorAll(".label-button");
     var fieldsBtn = btns.length > 0 ? btns[0] : null;
     var cardsBtn = btns.length > 1 ? btns[1] : null;
@@ -349,49 +618,33 @@
     fieldsBtn.classList.add("ba-toolbar-button-hidden");
     cardsBtn.hidden = true;
     cardsBtn.classList.add("ba-toolbar-button-hidden");
-    var wrap = document.createElement("span");
-    wrap.className = "ba-editor-menu-wrap";
-    wrap.innerHTML = '<button type="button" id="ba-editor-menu-btn" aria-haspopup="true" aria-expanded="false" aria-label="More editor tools" title="More editor tools">⋯</button>'
-      + '<div id="ba-editor-menu" role="menu" hidden>'
-      + '<button type="button" role="menuitem" data-action="fields">Fields...</button>'
-      + '<button type="button" role="menuitem" data-action="card-styling">Card styling...</button>'
-      + '<button type="button" role="menuitem" data-action="advanced">Advanced: edit raw template...</button>'
-      + '</div>';
-    nt.appendChild(wrap);
-    ensureCompactFontSize(nt);
-    var editorMenuBtn = wrap.querySelector("#ba-editor-menu-btn"), editorMenu = wrap.querySelector("#ba-editor-menu");
-    function closeMenu() {
-      editorMenu.hidden = true;
-      editorMenuBtn.setAttribute("aria-expanded", "false");
-    }
-    editorMenuBtn.addEventListener("click", function (e) {
+
+    var hotbar = document.createElement("span");
+    hotbar.id = "ba-hotbar";
+    hotbar.className = "ba-hotbar";
+    nt.appendChild(hotbar);
+
+    buildFieldsControl(hotbar);
+    buildStylingControl(hotbar);
+    buildFontControl(hotbar);
+    buildSizeControl(hotbar);
+
+    // The one remaining popup, and it's Anki's own: proxy-clicks the
+    // hidden stock Cards button, same saveNow()+bridgeCommand flow
+    // NotetypeButtons.svelte always ran for it, unmodified.
+    var advanced = document.createElement("button");
+    advanced.type = "button";
+    advanced.className = "ba-hotbar-btn";
+    advanced.id = "ba-advanced-btn";
+    advanced.title = "Advanced: edit raw template";
+    advanced.setAttribute("aria-label", "Advanced: edit raw template");
+    advanced.textContent = "⋯";
+    advanced.addEventListener("click", function (e) {
       e.stopPropagation();
-      var opening = editorMenu.hidden;
-      editorMenu.hidden = !opening;
-      editorMenuBtn.setAttribute("aria-expanded", String(opening));
-      // See positionPopup's comment: a static CSS right:0 assumed this
-      // button sits at its container's right edge, which put the menu
-      // mostly off the left side of the viewport in a narrower pane
-      // (Browse) — reachable, technically, but indistinguishable from
-      // "the menu opens empty" at a glance. Position from the button's
-      // actual rect instead, every time it opens (the toolbar can reflow
-      // between opens).
-      if (opening) positionPopup(editorMenu, editorMenuBtn);
+      closeAllHotbarPopovers();
+      cardsBtn.click();
     });
-    editorMenu.addEventListener("click", function (e) {
-      var action = e.target && e.target.dataset && e.target.dataset.action;
-      if (!action) return;
-      closeMenu();
-      if (action === "fields") fieldsBtn.click();
-      else if (action === "advanced") cardsBtn.click();
-      else if (action === "card-styling" && typeof pycmd === "function") pycmd("ba:card-styling:open");
-    });
-    document.addEventListener("click", function (e) {
-      if (!editorMenu.hidden && !wrap.contains(e.target)) closeMenu();
-    });
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && !editorMenu.hidden) { e.preventDefault(); closeMenu(); }
-    }, true);
+    hotbar.appendChild(advanced);
   }
 
   // The stock "remove formatting" eraser (plus its own small dropdown
@@ -418,6 +671,28 @@
       eraserWrapper.hidden = true;
       eraserWrapper.classList.add("ba-toolbar-button-hidden");
     }
+  }
+
+  // "QuestionImage" renders, via addcard.css's text-transform:uppercase
+  // on .label-name, as "QUESTIONIMAGE" — capitalization alone never
+  // inserts a word break. Field names are real schema (deck-building
+  // automation and templates depend on the exact CamelCase — see
+  // card_styling.py's field mutations), so this only ever rewrites what
+  // lands on screen: the .label-name text node here, and the Fields
+  // popover's list below. Nothing here changes the underlying name;
+  // rename/add still read and write the raw value.
+  function splitCamelCase(name) {
+    return String(name)
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/([A-Za-z])(\d)/g, "$1 $2")
+      .replace(/(\d)([A-Za-z])/g, "$1 $2");
+  }
+  function ensureFieldLabelsSpaced() {
+    if (!editorPage) return;
+    document.querySelectorAll(".label-container .label-name").forEach(function (el) {
+      var spaced = splitCamelCase(el.textContent);
+      if (spaced !== el.textContent) el.textContent = spaced;
+    });
   }
 
   function hideSelection() {
@@ -615,8 +890,9 @@
   function boot() {
     if (editorPage) document.body.classList.add("ba-editor-tools-page");
     ensureToolbar();
-    ensureEditorMenu();
+    ensureHotbar();
     ensureEraserHidden();
+    ensureFieldLabelsSpaced();
     document.addEventListener("click", function (event) {
       var target = targetOf(event);
       if (target.tagName === "IMG" && fieldFor(target) && !target.classList.contains("mathjax")) {
@@ -656,8 +932,9 @@
     window.addEventListener("resize", function () { if (selected) positionSelection(); drawCrop(); });
     new MutationObserver(function () {
       ensureToolbar();
-      ensureEditorMenu();
+      ensureHotbar();
       ensureEraserHidden();
+      ensureFieldLabelsSpaced();
       if (selected) positionSelection();
       if (crop && (!crop.field.isConnected || !fieldFor(crop.field))) closeCrop();
     }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "contenteditable"] });

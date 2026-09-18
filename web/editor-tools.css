@@ -204,62 +204,19 @@ body.ba-editing #ba-text-tools {
 #ba-crop-dialog button[data-action=apply] { background: var(--primary, #2383d1); color: #fff; }
 #ba-crop-dialog button:disabled { opacity: .5; cursor: wait; }
 
-/* Consolidated "Fields..." / "Cards..." menu — one compact overflow button
-   in place of the two standalone toolbar buttons it replaces (both stay in
-   the DOM, just hidden; see ensureEditorMenu() in editor-tools.js).
-   !important: LabelButton's own compiled .label-button rule sets
-   display:flex with enough specificity to beat a plain inline style. */
+/* Unified hotbar — Fields, Card styling, Aa, Size, Advanced, every one the
+   same icon-button chrome, every popover the same shell. Replaces the
+   earlier QDialog + proxy-clicked stock Fields dialog + wide text-input
+   Size control the user rejected outright ("one unified pane... not to
+   have three pop-ups and two different-looking button types... think
+   about a document editor hotbar"). Fields.../Cards... stay hidden (not
+   removed — same reasoning as before) via the same !important rule;
+   .ba-toolbar-button-hidden below is shared with ensureEraserHidden()'s
+   fallback. */
 #notetype .label-button.ba-toolbar-button-hidden { display: none !important; }
-.ba-editor-menu-wrap { position: relative; display: inline-flex; }
-#ba-editor-menu-btn {
-  font: 16px/1 system-ui, sans-serif;
-  color: inherit;
-  background: transparent;
-  border: 1px solid var(--border, #8888);
-  border-radius: 4px;
-  height: 29px;
-  min-width: 29px;
-  padding: 0 6px;
-  cursor: pointer;
-}
-#ba-editor-menu-btn:hover, #ba-editor-menu-btn:focus-visible { background: #8883; }
-#ba-editor-menu {
-  /* position:fixed with top/left set by positionPopup() in
-     editor-tools.js — see its comment. A static right:0/top:100% assumed
-     this button sits at its positioned ancestor's right edge, which put
-     the menu mostly off the left edge of the viewport in Browse's
-     narrower pane (looked exactly like "the menu opens empty"). */
-  position: fixed;
-  z-index: 10030;
-  min-width: 210px;
-  padding: 4px;
-  font: 14px system-ui, sans-serif;
-  color: var(--fg, #242424);
-  background: var(--canvas-elevated, #fff);
-  border: 1px solid var(--border, #8888);
-  border-radius: 5px;
-  box-shadow: 0 3px 12px #0003;
-  box-sizing: border-box;
-}
-#ba-editor-menu[hidden] { display: none; }
-#ba-editor-menu button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  font: inherit;
-  color: inherit;
-  background: transparent;
-  padding: 7px 10px;
-  border: 0;
-  border-radius: 4px;
-  cursor: pointer;
-}
-#ba-editor-menu button:hover, #ba-editor-menu button:focus-visible { background: #8883; }
-/* Compact Aa/Size controls, folded directly into the icon toolbar next to
-   the "..." menu — same footprint as a stock IconButton, no separate
-   full-width row. */
-.ba-compact-font-wrap { position: relative; display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
-#ba-font-btn {
+.ba-hotbar { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
+.ba-hotbar-item { position: relative; display: inline-flex; }
+.ba-hotbar-btn {
   font: 600 13px/1 system-ui, sans-serif;
   color: inherit;
   background: transparent;
@@ -269,24 +226,59 @@ body.ba-editing #ba-text-tools {
   min-width: 29px;
   padding: 0 8px;
   cursor: pointer;
+  box-sizing: border-box;
 }
-#ba-font-btn:hover, #ba-font-btn:focus-visible { background: #8883; }
-.ba-compact-font-wrap #ba-size-input {
+.ba-hotbar-btn:hover, .ba-hotbar-btn:focus-visible { background: #8883; }
+.ba-hotbar-btn.active { background: var(--primary, #2383d1); color: #fff; border-color: var(--primary, #2383d1); }
+.ba-hotbar-btn.ba-primary { background: var(--primary, #2383d1); color: #fff; border-color: var(--primary, #2383d1); }
+.ba-hotbar-btn.ba-armed { background: #d33; color: #fff; border-color: #d33; }
+/* Shared popover shell — position:fixed with top/left/max-height set by
+   positionPopup() in editor-tools.js (same reasoning as the old
+   #ba-editor-menu had: a static right:0/top:100% assumes the trigger
+   sits at a positioned ancestor's right edge, which isn't true wherever
+   Fields/Cards happened to render). Every hotbar popover uses this same
+   class, so they all look like one family of controls, not ad hoc
+   pop-ups of different shapes. */
+.ba-popover {
+  position: fixed;
+  z-index: 10030;
+  min-width: 210px;
+  padding: 8px;
   font: 14px system-ui, sans-serif;
+  color: var(--fg, #242424);
+  background: var(--canvas-elevated, #fff);
+  border: 1px solid var(--border, #8888);
+  border-radius: 6px;
+  box-shadow: 0 3px 12px #0003;
+  box-sizing: border-box;
+}
+.ba-popover[hidden] { display: none; }
+.ba-popover input {
+  font: inherit;
   color: inherit;
-  background: transparent;
+  background: inherit;
   border: 1px solid var(--border, #8888);
   border-radius: 4px;
   height: 29px;
-  width: 52px;
-  padding: 0 4px;
-  text-align: center;
+  padding: 0 8px;
   box-sizing: border-box;
 }
-#ba-font-popover {
+.ba-popover label { display: block; font-size: 11.5px; color: var(--fg, #242424); opacity: .75; margin-bottom: 3px; }
+
+/* Font popover (both the text-formatting Aa and Card styling's font
+   field use the same combobox + dropdown pattern). Custom listbox, not
+   <input list=datalist>: a native datalist popup ignores
+   max-height/overflow-y in this QtWebEngine build — no working scroll
+   past the first screenful, wheel or keyboard — so a real scrollable div
+   replaces it everywhere a font list appears. */
+#ba-font-search, .ba-font-combo input { width: 220px; }
+.ba-popover [role="listbox"] {
   position: fixed;
-  z-index: 10030;
-  padding: 6px;
+  z-index: 10031;
+  min-width: 200px;
+  max-width: 320px;
+  overflow-y: auto;
+  padding: 4px;
   font: 14px system-ui, sans-serif;
   color: var(--fg, #242424);
   background: var(--canvas-elevated, #fff);
@@ -295,20 +287,71 @@ body.ba-editing #ba-text-tools {
   box-shadow: 0 3px 12px #0003;
   box-sizing: border-box;
 }
-#ba-font-popover[hidden] { display: none; }
-#ba-font-popover input {
+.ba-popover [role="listbox"][hidden] { display: none; }
+.ba-popover [role="option"] {
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ba-popover [role="option"].active,
+.ba-popover [role="option"]:hover { background: var(--primary, #2383d1); color: #fff; }
+
+/* Size popover: a compact +/- stepper instead of the old wide, visually
+   mismatched number input. */
+.ba-size-popover .ba-stepper { display: flex; align-items: center; gap: 4px; }
+.ba-stepper input { width: 56px; text-align: center; }
+
+/* Fields popover: add/rename/delete inline, no dialog. */
+.ba-fields-popover { width: 260px; }
+.ba-fields-list { max-height: 240px; overflow-y: auto; margin-bottom: 8px; }
+.ba-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 4px;
+  border-bottom: 1px solid var(--border, #8886);
+}
+.ba-field-row:last-child { border-bottom: 0; }
+.ba-field-name { flex: 1; cursor: text; padding: 2px 4px; border-radius: 3px; }
+.ba-field-name:hover, .ba-field-name:focus-visible { background: #8883; outline: none; }
+.ba-field-rename-input { flex: 1; height: 26px !important; }
+.ba-field-delete {
   font: inherit;
   color: inherit;
-  background: inherit;
+  background: transparent;
   border: 1px solid var(--border, #8888);
   border-radius: 4px;
-  height: 29px;
-  width: 220px;
+  height: 26px;
   padding: 0 8px;
-  box-sizing: border-box;
+  cursor: pointer;
+  flex-shrink: 0;
 }
-.nightMode #ba-text-tools, .nightMode #ba-image-menu, .nightMode #ba-crop-dialog, .nightMode #ba-editor-menu,
-.nightMode #ba-font-dropdown, .nightMode #ba-font-popover,
+.ba-field-delete:hover { background: #8883; }
+.ba-field-delete.ba-armed { background: #d33; color: #fff; border-color: #d33; }
+.ba-fields-add { display: flex; gap: 6px; }
+.ba-fields-add input { flex: 1; }
+.ba-fields-error, .ba-styling-error {
+  color: #d33;
+  font-size: 12px;
+  margin-top: 6px;
+}
+.ba-fields-error[hidden], .ba-styling-error[hidden] { display: none; }
+
+/* Card styling popover. */
+.ba-styling-popover { width: 260px; }
+.ba-styling-field { margin-bottom: 10px; }
+.ba-styling-field .ba-font-combo { position: relative; }
+.ba-styling-field .ba-font-combo input { width: 100%; }
+.ba-align-group { display: flex; gap: 4px; }
+.ba-align-group .ba-hotbar-btn { flex: 1; }
+.ba-styling-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+
+.nightMode #ba-text-tools, .nightMode #ba-image-menu, .nightMode #ba-crop-dialog, .nightMode .ba-popover,
+.nightMode .ba-popover [role="listbox"],
 html[data-rf-theme=dark] #ba-text-tools, html[data-rf-theme=dark] #ba-image-menu,
-html[data-rf-theme=dark] #ba-crop-dialog, html[data-rf-theme=dark] #ba-editor-menu,
-html[data-rf-theme=dark] #ba-font-dropdown, html[data-rf-theme=dark] #ba-font-popover { background: var(--canvas-elevated, #262626); color: #eee; }
+html[data-rf-theme=dark] #ba-crop-dialog, html[data-rf-theme=dark] .ba-popover,
+html[data-rf-theme=dark] .ba-popover [role="listbox"] { background: var(--canvas-elevated, #262626); color: #eee; }

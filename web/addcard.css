@@ -325,6 +325,18 @@ html[data-ba-editor] .field-container {
   border: 0 !important;
   margin-bottom: 14px !important;
   padding: 0 !important;
+  /* A flex/grid item's automatic minimum width defaults to its content's
+     min-content size — for an unbroken run (a long chemical/gene name, a
+     URL, a slide-notes paste with no spaces) that's the run's full
+     single-line width, which can exceed the pane's actual width even
+     though the item is nominally 100%. The item then grows past its
+     column, and .editor-field's overflow:hidden (below, for the rounded
+     card shape) hard-clips whatever doesn't fit — the reported bug:
+     field text truncated mid-word at the pane's edge. min-width: 0
+     overrides that default so the item can actually shrink to the
+     column's real width; overflow-wrap below then wraps what no longer
+     fits on one line instead of leaving it to overflow again. */
+  min-width: 0 !important;
 }
 
 /* Field label — small uppercase sans, like a section subhead. Quiet at
@@ -406,6 +418,7 @@ html[data-ba-editor] .editor-field {
   border: 1px solid var(--ba-line) !important;
   border-radius: var(--ba-radius) !important;
   overflow: hidden !important;
+  min-width: 0 !important;
   transition: border-color 160ms ease, background 160ms ease;
 }
 html[data-ba-editor] .editor-field:focus-within {
@@ -422,6 +435,15 @@ html[data-ba-editor] .plain-text-input {
   background: transparent !important;
   border: 0 !important;
   outline: none !important;
+  /* The actual wrap fix: without this, a run with no break opportunity
+     (long word/URL/pasted-no-space text) forces the field wider than its
+     column — see .field-container's min-width: 0 comment above for the
+     full mechanism. `anywhere` (not `break-word`) also lets the browser
+     use it when computing min-content size, not just at render time, so
+     it cooperates with the min-width: 0 fix instead of needing it to
+     already have taken effect. */
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
 }
 html[data-ba-editor] .rich-text-editable.empty::before {
   font-family: var(--ba-sans) !important;

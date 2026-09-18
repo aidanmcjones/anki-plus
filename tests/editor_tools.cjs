@@ -107,17 +107,22 @@ async function fixture(page, mode) {
       // Font/Size are free-typed comboboxes (any system font, any pixel
       // size), not closed <select> presets — see the double-"Font"-label
       // and preset-only-sizes fixes in editor-tools.js. In the real
-      // editor (every mode but study) they're compact controls folded
-      // into the icon toolbar: "Aa" pops a popover holding the font
-      // search box, Size is a plain box beside it — no full-width row.
-      // The reviewer's inline quick editor (study) keeps the always-
-      // visible full-row inputs, a different, simpler surface.
+      // editor (every mode but study) every control — Fields, Style, Aa,
+      // Size, Advanced — is the same uniform icon-button hotbar; Aa and
+      // Size each pop their own popover (a font search box; a +/-
+      // stepper), no full-width row and no visually distinct wide text
+      // input. The reviewer's inline quick editor (study) keeps the
+      // always-visible full-row inputs, a different, simpler surface.
       if (mode !== 'study') {
         await page.locator('#ba-font-btn').click();
         await page.locator('#ba-font-popover').waitFor({ state: 'visible' });
       }
       await page.getByLabel('Font family',{exact:true}).fill('Georgia');
       await page.getByLabel('Font family',{exact:true}).press('Tab');
+      if (mode !== 'study') {
+        await page.locator('#ba-size-btn').click();
+        await page.locator('#ba-size-popover').waitFor({ state: 'visible' });
+      }
       await page.getByLabel('Text size in pixels',{exact:true}).fill('24');
       await page.getByLabel('Text size in pixels',{exact:true}).press('Tab');
       const formatted = await page.evaluate(() => ({html:field.innerHTML,

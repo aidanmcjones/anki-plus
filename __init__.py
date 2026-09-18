@@ -1558,16 +1558,17 @@ def _on_js_message(handled, message, context):
         from .editor_tools import on_message
 
         return on_message(handled, message, context)
-    # "Card styling..." in the consolidated editor menu (web/editor-tools.js)
-    # — opens the simple styling panel instead of the raw Card Templates
-    # editor. "Fields..." and "Advanced: edit raw template..." in that same
-    # menu proxy-click Anki's own (hidden) stock buttons directly from JS,
-    # so only this one action needs a Python round trip.
-    if message == "ba:card-styling:open" and isinstance(context, Editor):
-        from .card_styling import open_card_styling
+    # The unified editor toolbar's Fields and Card styling popovers
+    # (web/editor-tools.js) — both inline, no windows of ours. Every
+    # ba:fields:*/ba:styling:* command returns JSON straight to the JS
+    # callback; see card_styling.py's on_message for the dispatch table.
+    # "Advanced: edit raw template..." is the one still-standing proxy
+    # click to a stock (hidden) Anki button/dialog — that's not routed
+    # through here, it's a plain JS .click() on the real button.
+    if message.startswith("ba:fields:") or message.startswith("ba:styling:"):
+        from .card_styling import on_message as _card_styling_on_message
 
-        open_card_styling(context)
-        return (True, None)
+        return _card_styling_on_message(handled, message, context)
     # Anki's deck browser emits `open:<did>` when a deck is clicked, which
     # normally lands on the intermediate Overview page. Skip that and go
     # straight into studying — same target as the single-deck hero.

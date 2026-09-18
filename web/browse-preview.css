@@ -28,6 +28,25 @@ html[data-ba-preview] body {
 
 html[data-ba-preview] #qa {
   padding: 26px 24px 20px;
+  /* reviewer.css sets #qa's overflow-y: auto and leaves overflow-x at
+     its default (visible) — CSS's overflow spec computes an
+     unspecified/visible axis to auto as soon as the OTHER axis is
+     anything but visible, so #qa is actually overflow-x: auto too. In
+     the full-width reviewer that's dormant (content rarely exceeds the
+     whole window), but this pane is ~460px, and any single unbreakable
+     run wider than that (a long field pasted with no spaces, a URL, a
+     technical term) becomes a real horizontal scroll surface — content
+     centers within that wider-than-visible box and, at scrollLeft 0,
+     reads as clipped on both edges: exactly the "text runs past the
+     edge, cut off mid-word" bug. Pin overflow-x explicitly so the
+     browser never computes it to auto here; overflow-wrap below wraps
+     the run instead of ever growing the box past the pane. */
+  overflow-x: hidden;
+  /* Inherited by default, so this alone reaches ordinary paragraph text;
+     an element inside #qa that sets its own white-space/overflow-wrap
+     (a note type's own <pre> or code block, say) still wins on its own
+     specificity, same as it would anywhere else. */
+  overflow-wrap: anywhere;
 }
 
 /* The pane is a panel inside a page, not a page — a hairline on the top
