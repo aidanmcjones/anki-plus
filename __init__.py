@@ -1562,13 +1562,19 @@ def _on_js_message(handled, message, context):
     # (web/editor-tools.js) — both inline, no windows of ours. Every
     # ba:fields:*/ba:styling:* command returns JSON straight to the JS
     # callback; see card_styling.py's on_message for the dispatch table.
-    # "Advanced: edit raw template..." is the one still-standing proxy
-    # click to a stock (hidden) Anki button/dialog — that's not routed
-    # through here, it's a plain JS .click() on the real button.
     if message.startswith("ba:fields:") or message.startswith("ba:styling:"):
         from .card_styling import on_message as _card_styling_on_message
 
         return _card_styling_on_message(handled, message, context)
+    # Arrow-key/‹›-button navigation through the Cards-view table while
+    # the full-screen editor is open (web/editor-tools.js). See
+    # browse_embed.navigate_card's own docstring for why it moves the
+    # table's row instead of loading a card directly.
+    if message.startswith("ba:cards:nav:"):
+        from . import browse_embed
+
+        direction = message[len("ba:cards:nav:"):]
+        return (True, browse_embed.navigate_card(direction))
     # Anki's deck browser emits `open:<did>` when a deck is clicked, which
     # normally lands on the intermediate Overview page. Skip that and go
     # straight into studying — same target as the single-deck hero.
@@ -4283,7 +4289,55 @@ def _setup_sidebar_shortcuts() -> None:
                 except Exception:
                     pass
             _push_video_occlusion()
-            return _orig_move_to_state(state, *args, **kwargs)
+            result = _orig_move_to_state(state, *args, **kwargs)
+            # Every one of these embeds covers mw.web with its own overlay
+            # widget for as long as it's open — sometimes for a long
+            # session (Browse, in particular). QtWebEngine throttles a
+            # covered page's compositor for performance, and doesn't
+            # always resume painting immediately just because the
+            # covering widget was deleteLater()'d above and the incoming
+            # state's HTML has already loaded underneath: confirmed live
+            # (Decks after a table-collapsed/full-screen Browse editor)
+            # — a direct DOM query right after this call already shows
+            # the correct deck-browser content, but the on-screen pixels
+            # stay stuck on the last frame the (now-gone) overlay painted
+            # for another ~2s until WebEngine's own idle recovery kicks
+            # in — a real user reads that as "Decks is just blank."
+            # mw.web is a QWebEngineView, not a plain QWidget — its actual
+            # pixels come from an out-of-process compositor. The
+            # `repaint()`/`processEvents()` idiom this codebase uses
+            # elsewhere for the (plain-QWidget) curtain overlays does NOT
+            # belong here: repaint() forces a synchronous wait on that
+            # compositor, and an earlier version of this fix that tried
+            # it hung the whole app outright (confirmed live — a real
+            # deadlock, not just a slow frame). update() only *schedules*
+            # a repaint through Qt's normal, async event queue — it never
+            # blocks — which is enough to make Qt reissue a paint/expose
+            # event for mw.web and let WebEngine notice it should resume
+            # compositing, without touching anything synchronous.
+            # One nudge measured ~0.7s to actually land on screen (down
+            # from ~2s with no nudge at all — confirmed live, both
+            # timings) — better, but still a visible gap the user would
+            # read as "blank". A single update() call apparently doesn't
+            # always catch the compositor at a moment it's ready to
+            # listen right after the overlay's teardown; a few staggered
+            # calls (all still async, still non-blocking) give it more
+            # chances to land, at negligible cost since each one is just
+            # a cheap schedule-a-repaint request.
+            try:
+                if QTimer is not None:
+                    def _force_web_repaint():
+                        try:
+                            w = getattr(mw, "web", None)
+                            if w is not None:
+                                w.update()
+                        except Exception:
+                            pass
+                    for delay in (0, 60, 150, 300):
+                        QTimer.singleShot(delay, _force_web_repaint)
+            except Exception:
+                pass
+            return result
 
         mw.moveToState = _patched_move_to_state  # type: ignore[assignment]
     except Exception:

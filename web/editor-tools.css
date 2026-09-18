@@ -232,6 +232,16 @@ body.ba-editing #ba-text-tools {
 .ba-hotbar-btn.active { background: var(--primary, #2383d1); color: #fff; border-color: var(--primary, #2383d1); }
 .ba-hotbar-btn.ba-primary { background: var(--primary, #2383d1); color: #fff; border-color: var(--primary, #2383d1); }
 .ba-hotbar-btn.ba-armed { background: #d33; color: #fff; border-color: #d33; }
+.ba-hotbar-btn:disabled { opacity: .35; cursor: default; }
+.ba-hotbar-btn:disabled:hover { background: transparent; }
+/* Subtle "you're at the end of the list" cue for ‹/› — a quick shake,
+   not a modal or a sound; disappears on its own. */
+@keyframes ba-nav-edge-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+.ba-hotbar-btn.ba-nav-edge { animation: ba-nav-edge-shake 180ms ease; }
 /* Shared popover shell — position:fixed with top/left/max-height set by
    positionPopup() in editor-tools.js (same reasoning as the old
    #ba-editor-menu had: a static right:0/top:100% assumes the trigger

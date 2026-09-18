@@ -896,6 +896,43 @@ def _open_add_in_browse(parent_mw: Any) -> None:
             pass
 
 
+def navigate_card(direction: str) -> dict:
+    """Move the Cards-view table's current row and load the note under it
+    into the editor — the arrow-key/‹›-button path for the full-screen
+    editor (web/editor-tools.js's hotbar nav buttons + keydown listener).
+
+    Deliberately NOT reimplemented: `Table.to_previous_row()`/
+    `to_next_row()` (stock aqt) move the same QItemSelectionModel a
+    manual row click moves, which fires the same selection-changed
+    signal Browser wires its own note-switch handling to — including
+    whatever it does with unsaved edits on the card being left. Using
+    them here means "arrow through cards" has *exactly* the save
+    semantics clicking another row already has, not a second
+    implementation of them that could drift out of sync.
+    """
+    br = _state.get("browser")
+    table = getattr(br, "table", None) if br is not None else None
+    if table is None:
+        return {"error": "Browse is not open."}
+    if direction == "prev":
+        if not table.has_previous():
+            return {"atEnd": True, "edge": "start", "hasPrevious": False, "hasNext": table.has_next()}
+        table.to_previous_row()
+    elif direction == "next":
+        if not table.has_next():
+            return {"atEnd": True, "edge": "end", "hasPrevious": table.has_previous(), "hasNext": False}
+        table.to_next_row()
+    else:
+        return {"error": "Unknown direction."}
+    card = table.get_current_card()
+    return {
+        "atEnd": False,
+        "cardId": card.id if card else None,
+        "hasPrevious": table.has_previous(),
+        "hasNext": table.has_next(),
+    }
+
+
 def drop_curtain() -> None:
     """Tear down the anti-flash curtain. Safe to call multiple times."""
     c = _state.pop("curtain", None)

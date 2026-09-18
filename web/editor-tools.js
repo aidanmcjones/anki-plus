@@ -6,6 +6,12 @@
   var dialog = null, crop = null;
   var imageObserver = new MutationObserver(function () { if (selected) positionSelection(); });
   var editorPage = !!document.querySelector('meta[name="ba-editor-tools"]');
+  // "add" | "browse" | "" (Edit Current, which addcard.js leaves stock —
+  // see its own header comment). Card-list arrow/button navigation only
+  // makes sense in Browse: Add Cards has no list of existing cards to
+  // move through.
+  var editorModeMeta = document.querySelector('meta[name="ba-editor-mode"]');
+  var editorMode = editorModeMeta ? editorModeMeta.content : "";
 
   function fieldFor(node) {
     var el = node && (node.nodeType === 1 ? node : node.parentElement);
@@ -590,6 +596,50 @@
     });
   }
 
+  // Arrow-key / ‹› button navigation through the Cards-view table, for
+  // the full-screen editor (table collapsed — see browse_embed.py's
+  // _set_table_collapsed). One function, two triggers, per the user's
+  // ask; both funnel through browse_embed.navigate_card, which moves
+  // Table's own row cursor rather than loading a card ourselves — same
+  // save semantics as clicking another row, not a second implementation
+  // of them.
+  var navPrevBtn = null, navNextBtn = null;
+  function isTypingContext() {
+    var active = document.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    if (!active) return false;
+    var tag = active.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+    return !!active.isContentEditable;
+  }
+  function updateNavButtons(hasPrevious, hasNext) {
+    if (navPrevBtn) navPrevBtn.disabled = !hasPrevious;
+    if (navNextBtn) navNextBtn.disabled = !hasNext;
+  }
+  function flashNavEdge(btn) {
+    if (!btn) return;
+    btn.classList.add("ba-nav-edge");
+    setTimeout(function () { btn.classList.remove("ba-nav-edge"); }, 220);
+  }
+  function navigateCard(direction, triggerBtn) {
+    if (editorMode !== "browse" || typeof pycmd !== "function") return;
+    pycmd("ba:cards:nav:" + direction, function (res) {
+      if (!res || res.error) return;
+      if (res.atEnd) {
+        flashNavEdge(triggerBtn || (direction === "prev" ? navPrevBtn : navNextBtn));
+        updateNavButtons(res.hasPrevious, res.hasNext);
+        return;
+      }
+      updateNavButtons(res.hasPrevious, res.hasNext);
+      // The loaded card's id is already visible via the editor's own
+      // note-load rendering (field values updating is the position
+      // signal — cheap and always accurate, no separate counter to keep
+      // in sync).
+    });
+  }
+
   function ensureHotbar() {
     if (!editorPage) return;
     var nt = document.getElementById("notetype");
@@ -626,6 +676,29 @@
     hotbar.className = "ba-hotbar";
     nt.appendChild(hotbar);
 
+    // ‹ › card-list navigation, same chrome as every other hotbar
+    // button. Browse only (editorMode) — Add Cards has no card list to
+    // move through. Shown whenever the pane is Browse's editor, not
+    // gated to the table-collapsed/full-screen state specifically: the
+    // card list stays reachable by click either way, so there's no
+    // layout reason to hide these only some of the time, and a
+    // consistent toolbar is simpler than one that gains/loses buttons
+    // as the table pane is dragged open or closed.
+    if (editorMode === "browse") {
+      navPrevBtn = document.createElement("button");
+      navPrevBtn.type = "button";
+      navPrevBtn.className = "ba-hotbar-btn";
+      navPrevBtn.id = "ba-nav-prev-btn";
+      navPrevBtn.title = "Previous card";
+      navPrevBtn.setAttribute("aria-label", "Previous card");
+      navPrevBtn.textContent = "‹";
+      navPrevBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        navigateCard("prev", navPrevBtn);
+      });
+      hotbar.appendChild(navPrevBtn);
+    }
+
     buildFieldsControl(hotbar);
     buildStylingControl(hotbar);
     buildFontControl(hotbar);
@@ -636,6 +709,21 @@
     // shows in the toolbar; raw template editing is still reachable
     // through Anki's own Tools -> Manage Note Types, unrelated to this
     // pane, which is fine — nothing here needs to proxy to it anymore.
+
+    if (editorMode === "browse") {
+      navNextBtn = document.createElement("button");
+      navNextBtn.type = "button";
+      navNextBtn.className = "ba-hotbar-btn";
+      navNextBtn.id = "ba-nav-next-btn";
+      navNextBtn.title = "Next card";
+      navNextBtn.setAttribute("aria-label", "Next card");
+      navNextBtn.textContent = "›";
+      navNextBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        navigateCard("next", navNextBtn);
+      });
+      hotbar.appendChild(navNextBtn);
+    }
   }
 
   // The stock "remove formatting" eraser (plus its own small dropdown
@@ -884,6 +972,28 @@
     ensureHotbar();
     ensureEraserHidden();
     ensureFieldLabelsSpaced();
+    if (editorMode === "browse") {
+      // Bare arrows, gated on focus rather than a modifier: this is the
+      // same key the card LIST itself already uses to move between rows
+      // (Table.to_previous_row/to_next_row are bound to Up/Down there
+      // too), so it matches what a user already knows rather than
+      // introducing a second convention. isTypingContext() is what keeps
+      // this from hijacking the caret in a field, the Fields-popover
+      // rename input, the font search box, the size stepper, etc. — bare
+      // arrows only navigate cards when focus is nowhere any of those
+      // are, which in practice means the editor chrome itself (a hotbar
+      // button, empty space) has focus or nothing does.
+      document.addEventListener("keydown", function (e) {
+        if (isTypingContext()) return;
+        if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+          e.preventDefault();
+          navigateCard("prev");
+        } else if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+          e.preventDefault();
+          navigateCard("next");
+        }
+      }, true);
+    }
     document.addEventListener("click", function (event) {
       var target = targetOf(event);
       if (target.tagName === "IMG" && fieldFor(target) && !target.classList.contains("mathjax")) {
