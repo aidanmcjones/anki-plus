@@ -485,6 +485,34 @@ def _is(context: Any, cls: Any) -> bool:
     return bool(cls) and isinstance(context, cls)
 
 
+_system_fonts_cache: Optional[str] = None
+
+
+def _system_fonts_meta() -> str:
+    """A `<meta>` tag carrying every font Qt can see installed on this
+    machine, as a URL-encoded JSON array. web/editor-tools.js reads it to
+    populate the Font control's <datalist> with real system fonts instead
+    of a small hardcoded list — CSP blocks inline <script> on editor pages
+    (see the ba-editor-mode meta a few lines below for the established
+    pattern), so a meta tag is the only way to hand JS this data. Cheap to
+    recompute but QFontDatabase.families() still does real work, so cache
+    it for the process lifetime — the installed font set doesn't change
+    while Anki is running.
+    """
+    global _system_fonts_cache
+    if _system_fonts_cache is None:
+        import json as _json
+
+        try:
+            from aqt.qt import QFontDatabase
+
+            families = sorted(set(QFontDatabase.families()))
+        except Exception:
+            families = []
+        _system_fonts_cache = _quote(_json.dumps(families))
+    return f'<meta name="ba-system-fonts" content="{_system_fonts_cache}">'
+
+
 # --------------------------------------------------------------------------- #
 # Theme + asset injection
 # --------------------------------------------------------------------------- #
@@ -841,6 +869,9 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
     # the progress bar element.
     if isinstance(context, Reviewer):
         web_content.css.append(f"{WEB}/reviewer.css")
+        web_content.css.append(f"{WEB}/editor-tools.css")
+        web_content.js.append(f"{WEB}/editor-tools.js")
+        web_content.head += _system_fonts_meta()
         if cfg.get("show_progress", True):
             web_content.js.append(f"{WEB}/reviewer.js")
     # Browse tab's rendered-card pane. Same stack as the reviewer — that's
@@ -858,6 +889,10 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             + '">'
         )
     if is_editor:
+        web_content.head += '<meta name="ba-editor-tools" content="1">'
+        web_content.head += _system_fonts_meta()
+        web_content.css.append(f"{WEB}/editor-tools.css")
+        web_content.js.append(f"{WEB}/editor-tools.js")
         # The same Editor class serves Add, Browse and Edit-Current. Add
         # and Browse both get the restyle (they're the two places you
         # actually live in); Edit-Current is left stock so the reviewer's
@@ -1519,6 +1554,20 @@ def _on_js_message(handled, message, context):
     return (True, None) when we handle it."""
     if not isinstance(message, str):
         return handled
+    if message.startswith("ba:image-crop:"):
+        from .editor_tools import on_message
+
+        return on_message(handled, message, context)
+    # "Card styling..." in the consolidated editor menu (web/editor-tools.js)
+    # — opens the simple styling panel instead of the raw Card Templates
+    # editor. "Fields..." and "Advanced: edit raw template..." in that same
+    # menu proxy-click Anki's own (hidden) stock buttons directly from JS,
+    # so only this one action needs a Python round trip.
+    if message == "ba:card-styling:open" and isinstance(context, Editor):
+        from .card_styling import open_card_styling
+
+        open_card_styling(context)
+        return (True, None)
     # Anki's deck browser emits `open:<did>` when a deck is clicked, which
     # normally lands on the intermediate Overview page. Skip that and go
     # straight into studying — same target as the single-deck hero.

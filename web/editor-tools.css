@@ -1,0 +1,188 @@
+/* Shared controls stay outside note HTML, including shadow-root fields. */
+body.ba-editor-tools-page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+body.ba-editor-tools-page > .note-editor { flex: 1 1 0; height: 0 !important; min-height: 0; }
+/* Hide Fields.../Cards... at first paint via CSS rather than waiting on
+   ensureEditorMenu()'s MutationObserver in editor-tools.js: a plain CSS
+   rule applies before any JS runs, so there is no window where the two
+   buttons render before the JS gets a chance to hide them and mount the
+   consolidated "..." menu in their place. ensureEditorMenu() still adds
+   .ba-toolbar-button-hidden (belt-and-suspenders, and what actually
+   fires once the menu is ready) — this rule just removes the timing
+   dependency for the *hide*, which is what a user could otherwise catch
+   as a flash of the old buttons. */
+body.ba-editor-tools-page #notetype .label-button { display: none !important; }
+#ba-text-tools, #ba-image-menu, #ba-crop-dialog {
+  font: 14px system-ui, sans-serif;
+  letter-spacing: 0;
+  color: var(--fg, #242424);
+  background: var(--canvas-elevated, #fff);
+  box-sizing: border-box;
+}
+#ba-text-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border, #9996);
+  flex: 0 0 auto;
+}
+#ba-text-tools .ba-tool { display: flex; align-items: center; margin: 0; }
+#ba-text-tools input {
+  font: inherit;
+  color: inherit;
+  background: inherit;
+  border: 1px solid var(--border, #8888);
+  border-radius: 4px;
+  height: 29px;
+  padding: 0 8px;
+  box-sizing: border-box;
+}
+#ba-text-tools #ba-font-input { width: 175px; }
+#ba-text-tools #ba-size-input { width: 72px; }
+#ba-text-tools[hidden], #ba-image-selection[hidden], #ba-image-menu[hidden] { display: none; }
+body.ba-editing #ba-text-tools {
+  position: fixed;
+  right: 12px;
+  top: 52px;
+  z-index: 10010;
+  border: 1px solid var(--border, #8888);
+  border-radius: 4px;
+  max-width: calc(100vw - 24px);
+}
+#ba-edit-bar { flex-wrap: wrap; width: max-content; max-width: calc(100vw - 24px); box-sizing: border-box; }
+#ba-edit-bar .ba-edit-fmt { flex-wrap: wrap; }
+#ba-edit-bar #ba-text-tools { position: static; border: 0; padding: 0 4px; background: transparent; color: inherit; }
+#ba-image-selection {
+  position: fixed;
+  z-index: 10020;
+  outline: 2px solid var(--primary, #2383d1);
+  pointer-events: none;
+  box-sizing: border-box;
+}
+#ba-image-selection button {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 1px solid white;
+  background: var(--primary, #2383d1);
+  border-radius: 1px;
+  pointer-events: auto;
+  touch-action: none;
+}
+#ba-image-selection [data-corner=nw] { left: -6px; top: -6px; cursor: nwse-resize; }
+#ba-image-selection [data-corner=ne] { right: -6px; top: -6px; cursor: nesw-resize; }
+#ba-image-selection [data-corner=sw] { left: -6px; bottom: -6px; cursor: nesw-resize; }
+#ba-image-selection [data-corner=se] { right: -6px; bottom: -6px; cursor: nwse-resize; }
+#ba-image-menu {
+  position: fixed;
+  z-index: 10030;
+  padding: 4px;
+  border: 1px solid var(--border, #8888);
+  border-radius: 5px;
+  box-shadow: 0 3px 12px #0003;
+}
+#ba-image-menu button, #ba-crop-dialog button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  padding: 7px 12px;
+  border: 1px solid var(--border, #8888);
+  border-radius: 4px;
+  cursor: pointer;
+}
+#ba-image-menu button { display: block; width: 100%; text-align: left; border: 0; }
+#ba-image-menu button:hover, #ba-image-menu button:focus-visible { background: #8883; }
+#ba-crop-dialog {
+  width: min(900px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  padding: 14px;
+  border: 1px solid var(--border, #8888);
+  border-radius: 6px;
+  overflow: auto;
+}
+#ba-crop-dialog::backdrop { background: #0009; }
+#ba-crop-dialog h2 { font: 600 18px system-ui, sans-serif; margin: 0 0 12px; }
+#ba-crop-stage { position: relative; width: fit-content; margin: auto; line-height: 0; overflow: hidden; }
+#ba-crop-stage img {
+  display: block !important;
+  width: auto !important;
+  height: auto !important;
+  max-width: 100% !important;
+  max-height: 60vh !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: white;
+  user-select: none;
+  pointer-events: none;
+}
+#ba-crop-stage { touch-action: none; cursor: crosshair; }
+#ba-crop-box {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid #fff;
+  outline: 1px solid #111;
+  box-shadow: 0 0 0 2000px #0008;
+  box-sizing: border-box;
+}
+#ba-crop-dialog footer { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+#ba-crop-dialog output { flex: 1; line-height: 1.4; }
+#ba-crop-dialog button[data-action=apply] { background: var(--primary, #2383d1); color: #fff; }
+#ba-crop-dialog button:disabled { opacity: .5; cursor: wait; }
+
+/* Consolidated "Fields..." / "Cards..." menu — one compact overflow button
+   in place of the two standalone toolbar buttons it replaces (both stay in
+   the DOM, just hidden; see ensureEditorMenu() in editor-tools.js).
+   !important: LabelButton's own compiled .label-button rule sets
+   display:flex with enough specificity to beat a plain inline style. */
+#notetype .label-button.ba-toolbar-button-hidden { display: none !important; }
+.ba-editor-menu-wrap { position: relative; display: inline-flex; }
+#ba-editor-menu-btn {
+  font: 16px/1 system-ui, sans-serif;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border, #8888);
+  border-radius: 4px;
+  height: 29px;
+  min-width: 29px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+#ba-editor-menu-btn:hover, #ba-editor-menu-btn:focus-visible { background: #8883; }
+#ba-editor-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 10030;
+  min-width: 210px;
+  padding: 4px;
+  font: 14px system-ui, sans-serif;
+  color: var(--fg, #242424);
+  background: var(--canvas-elevated, #fff);
+  border: 1px solid var(--border, #8888);
+  border-radius: 5px;
+  box-shadow: 0 3px 12px #0003;
+  box-sizing: border-box;
+}
+#ba-editor-menu[hidden] { display: none; }
+#ba-editor-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+#ba-editor-menu button:hover, #ba-editor-menu button:focus-visible { background: #8883; }
+.nightMode #ba-text-tools, .nightMode #ba-image-menu, .nightMode #ba-crop-dialog, .nightMode #ba-editor-menu,
+html[data-rf-theme=dark] #ba-text-tools, html[data-rf-theme=dark] #ba-image-menu,
+html[data-rf-theme=dark] #ba-crop-dialog, html[data-rf-theme=dark] #ba-editor-menu { background: var(--canvas-elevated, #262626); color: #eee; }
