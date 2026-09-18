@@ -4,9 +4,25 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 
+// A long-ish font list (mirrors real QFontDatabase output being 100+
+// entries) so tests can actually exercise scrolling, not just presence.
+const TEST_FONTS = Array.from({ length: 60 }, (_, i) => `Test Font ${String(i).padStart(2, '0')}`)
+  .concat(['Georgia', 'Arial', 'Monaco', 'Consolas']);
+
 async function fixture(page, mode) {
-  await page.setContent(`<html class="shrink-image nightMode"><head>${mode !== 'study' ? '<meta name="ba-editor-tools" content="1">' : ''}</head>
-    <body class="${mode === 'study' ? 'ba-editing' : ''}"><main style="margin:100px 20px;max-width:600px"><div id="host" class="rich-text-input"></div></main></body></html>`);
+  const fontsMeta = mode !== 'study'
+    ? `<meta name="ba-system-fonts" content="${encodeURIComponent(JSON.stringify(TEST_FONTS))}">`
+    : '';
+  // A mock #notetype group with two .label-button children stands in for
+  // NotetypeButtons.svelte's Fields.../Cards... row — real enough for
+  // ensureEditorMenu() (and the compact Aa/Size controls it builds
+  // alongside the "..." menu) to find and attach to, the same way it
+  // would against the real editor.
+  const notetypeMock = mode !== 'study'
+    ? '<div id="notetype"><button class="label-button">Fields...</button><button class="label-button">Cards...</button></div>'
+    : '';
+  await page.setContent(`<html class="shrink-image nightMode"><head>${mode !== 'study' ? '<meta name="ba-editor-tools" content="1">' : ''}${fontsMeta}</head>
+    <body class="${mode === 'study' ? 'ba-editing' : ''}">${notetypeMock}<main style="margin:100px 20px;max-width:600px"><div id="host" class="rich-text-input"></div></main></body></html>`);
   await page.addStyleTag({ path: path.join(root, 'web/editor-tools.css') });
   await page.evaluate(mode => {
     const canvas = document.createElement('canvas'); canvas.width = 1600; canvas.height = 1000;
@@ -90,7 +106,16 @@ async function fixture(page, mode) {
       });
       // Font/Size are free-typed comboboxes (any system font, any pixel
       // size), not closed <select> presets — see the double-"Font"-label
-      // and preset-only-sizes fixes in editor-tools.js.
+      // and preset-only-sizes fixes in editor-tools.js. In the real
+      // editor (every mode but study) they're compact controls folded
+      // into the icon toolbar: "Aa" pops a popover holding the font
+      // search box, Size is a plain box beside it — no full-width row.
+      // The reviewer's inline quick editor (study) keeps the always-
+      // visible full-row inputs, a different, simpler surface.
+      if (mode !== 'study') {
+        await page.locator('#ba-font-btn').click();
+        await page.locator('#ba-font-popover').waitFor({ state: 'visible' });
+      }
       await page.getByLabel('Font family',{exact:true}).fill('Georgia');
       await page.getByLabel('Font family',{exact:true}).press('Tab');
       await page.getByLabel('Text size in pixels',{exact:true}).fill('24');
@@ -101,6 +126,58 @@ async function fixture(page, mode) {
       assert.ok(formatted.html.includes('Unchanged text'));
       assert.deepEqual(errors,[]);
       console.log(`PASS ${mode}: no image expansion, resize, crop/cancel, font/size selection`);
+      await page.close();
+    }
+    // Font suggestion list: real scroll container (not a native datalist,
+    // which ignored max-height/overflow-y and had no working wheel or
+    // keyboard scroll in the target QtWebEngine build), type-ahead
+    // filtering, and keyboard navigation that scrolls the highlighted
+    // option into view.
+    {
+      const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
+      await fixture(page, 'full');
+      await page.locator('#ba-font-btn').click();
+      await page.locator('#ba-font-popover').waitFor({ state: 'visible' });
+      const input = page.getByLabel('Font family', { exact: true });
+      await input.click();
+      const dropdown = page.locator('#ba-font-dropdown');
+      await dropdown.waitFor({ state: 'visible' });
+      const allCount = await dropdown.locator('[role="option"]').count();
+      assert.equal(allCount, TEST_FONTS.length, 'dropdown should list every font up front');
+      const clientH = await dropdown.evaluate(el => el.clientHeight);
+      const scrollH = await dropdown.evaluate(el => el.scrollHeight);
+      assert.ok(scrollH > clientH, `list should overflow its box (client=${clientH} scroll=${scrollH})`);
+      // Real trackpad/wheel scrolling is the browser's own default action
+      // for a trusted wheel event over an overflow:auto box — standard
+      // behavior needing no code of ours, unlike the native <datalist>
+      // popup this replaces (which had no overflow-y hook at all). CDP's
+      // synthesized wheel input isn't reliably "trusted" enough to trigger
+      // that default action in every headless configuration (confirmed:
+      // even a raw dispatchEvent(new WheelEvent(...)) doesn't scroll a
+      // plain overflow:auto div in Chromium — trusted-only by design), so
+      // this is verified directly against the real target platform
+      // (QtWebEngine) instead of asserted here. What IS asserted here,
+      // reliably: the box genuinely overflows (above) and the assignable
+      // scrollTop actually moves content — the two things a broken
+      // scroll container would get wrong regardless of input method.
+      await dropdown.evaluate(el => { el.scrollTop = 50; });
+      assert.equal(await dropdown.evaluate(el => el.scrollTop), 50, 'scrollTop is not settling on this element');
+      // Keyboard nav: arrow down past the first screenful should scroll the
+      // highlighted option into view even if the mouse never touches it.
+      await dropdown.evaluate(el => { el.scrollTop = 0; });
+      for (let i = 0; i < 40; i++) await input.press('ArrowDown');
+      const scrollTopAfterKeys = await dropdown.evaluate(el => el.scrollTop);
+      assert.ok(scrollTopAfterKeys > 0, 'arrow-key navigation did not scroll the list');
+      const highlighted = await dropdown.locator('[role="option"].active').textContent();
+      assert.equal(highlighted, TEST_FONTS[40]);
+      // Type-ahead filtering: typing narrows the list to matching fonts.
+      await input.fill('');
+      await input.fill('georgia');
+      await dropdown.locator('[role="option"]').first().waitFor({ state: 'visible' });
+      const filteredCount = await dropdown.locator('[role="option"]').count();
+      assert.equal(filteredCount, 1);
+      assert.equal(await dropdown.locator('[role="option"]').first().textContent(), 'Georgia');
+      console.log('PASS font dropdown: scrolls (wheel + keyboard), lists all fonts, type-ahead filters');
       await page.close();
     }
     // A storage error must leave the original image and crop dialog intact.

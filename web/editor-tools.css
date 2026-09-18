@@ -11,6 +11,40 @@ body.ba-editor-tools-page > .note-editor { flex: 1 1 0; height: 0 !important; mi
    dependency for the *hide*, which is what a user could otherwise catch
    as a flash of the old buttons. */
 body.ba-editor-tools-page #notetype .label-button { display: none !important; }
+/* Delete the stock "remove formatting" eraser + its format-picker chevron
+   the same robust way: CSS at first paint (no MutationObserver timing
+   window), matched structurally rather than by translated button text.
+   .remove-format-button is a literal class name RemoveFormatButton.svelte
+   sets in source (not tr.*() UI text), so it's locale-independent and
+   directly selectable. The eraser icon itself has no class of its own;
+   reaching it needs one ancestor hop first — confirmed against the real
+   rendered DOM, RemoveFormatButton.svelte wraps each IconButton in its
+   own <svelte-css-wrapper> (for --border-*-radius custom props), and
+   WithFloating adds a further <span class="floating-reference"> around
+   the chevron's wrapper, so the structure is
+   [eraser's svelte-css-wrapper][span.floating-reference > svelte-css-wrapper > button.remove-format-button].
+   :has() reaches "whatever sits immediately before a floating-reference
+   that contains the chevron" without needing a "previous sibling of an
+   ancestor" selector, which plain CSS has no combinator for at all.
+   `html[data-ba-editor]` isn't cosmetic prefixing: addcard.css (loaded
+   after this file) carries `html[data-ba-editor] .icon-button { display:
+   inline-flex !important }`, and the chevron IS a .icon-button — its
+   higher specificity ((0,2,1) vs. a bare `body.ba-editor-tools-page
+   .remove-format-button`'s (0,2,0)) won even with matching !important on
+   both sides. Matching that same qualifier here brings specificity back
+   to a tie purely on selector shape, and BEATS it in practice because
+   this file still loses ties to something loaded later — so each rule
+   below adds one more class/attribute beyond addcard.css's two, putting
+   it strictly ahead regardless of load order. */
+html[data-ba-editor] body.ba-editor-tools-page .remove-format-button { display: none !important; }
+html[data-ba-editor] body.ba-editor-tools-page *:has(+ .floating-reference .remove-format-button) { display: none !important; }
+/* JS fallback for a WebEngine build without :has() support, and the
+   general-purpose hide class ensureEraserHidden()/ensureEditorMenu() add
+   directly to an element in JS: same specificity-boost reasoning — this
+   needs to be able to beat `html[data-ba-editor] .icon-button` too,
+   since some elements it's applied to (the chevron) are one. */
+html[data-ba-editor] body.ba-editor-tools-page .ba-toolbar-button-hidden,
+html[data-ba-editor] .ba-toolbar-button-hidden { display: none !important; }
 #ba-text-tools, #ba-image-menu, #ba-crop-dialog {
   font: 14px system-ui, sans-serif;
   letter-spacing: 0;
@@ -40,6 +74,41 @@ body.ba-editor-tools-page #notetype .label-button { display: none !important; }
 }
 #ba-text-tools #ba-font-input { width: 175px; }
 #ba-text-tools #ba-size-input { width: 72px; }
+.ba-font-tool { position: relative; }
+/* Custom listbox replacing <input list=datalist>: a native datalist
+   popup ignores max-height/overflow-y in this QtWebEngine build (no
+   working scroll past the first screenful, wheel or keyboard), so the
+   196-entry system font list needs a real scrollable div instead. Fixed
+   positioning + JS-computed top/left/max-height (positionPopup in
+   editor-tools.js) keeps it inside the viewport and never depends on an
+   ancestor's overflow/stacking context, unlike position:absolute would
+   inside a scrolling toolbar. */
+#ba-font-dropdown {
+  position: fixed;
+  z-index: 10030;
+  min-width: 200px;
+  max-width: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  font: 14px system-ui, sans-serif;
+  color: var(--fg, #242424);
+  background: var(--canvas-elevated, #fff);
+  border: 1px solid var(--border, #8888);
+  border-radius: 5px;
+  box-shadow: 0 3px 12px #0003;
+  box-sizing: border-box;
+}
+#ba-font-dropdown[hidden] { display: none; }
+#ba-font-dropdown [role="option"] {
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#ba-font-dropdown [role="option"].active,
+#ba-font-dropdown [role="option"]:hover { background: var(--primary, #2383d1); color: #fff; }
 #ba-text-tools[hidden], #ba-image-selection[hidden], #ba-image-menu[hidden] { display: none; }
 body.ba-editing #ba-text-tools {
   position: fixed;
@@ -155,9 +224,12 @@ body.ba-editing #ba-text-tools {
 }
 #ba-editor-menu-btn:hover, #ba-editor-menu-btn:focus-visible { background: #8883; }
 #ba-editor-menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 4px);
+  /* position:fixed with top/left set by positionPopup() in
+     editor-tools.js — see its comment. A static right:0/top:100% assumed
+     this button sits at its positioned ancestor's right edge, which put
+     the menu mostly off the left edge of the viewport in Browse's
+     narrower pane (looked exactly like "the menu opens empty"). */
+  position: fixed;
   z-index: 10030;
   min-width: 210px;
   padding: 4px;
@@ -183,6 +255,60 @@ body.ba-editing #ba-text-tools {
   cursor: pointer;
 }
 #ba-editor-menu button:hover, #ba-editor-menu button:focus-visible { background: #8883; }
+/* Compact Aa/Size controls, folded directly into the icon toolbar next to
+   the "..." menu — same footprint as a stock IconButton, no separate
+   full-width row. */
+.ba-compact-font-wrap { position: relative; display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
+#ba-font-btn {
+  font: 600 13px/1 system-ui, sans-serif;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border, #8888);
+  border-radius: 4px;
+  height: 29px;
+  min-width: 29px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+#ba-font-btn:hover, #ba-font-btn:focus-visible { background: #8883; }
+.ba-compact-font-wrap #ba-size-input {
+  font: 14px system-ui, sans-serif;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border, #8888);
+  border-radius: 4px;
+  height: 29px;
+  width: 52px;
+  padding: 0 4px;
+  text-align: center;
+  box-sizing: border-box;
+}
+#ba-font-popover {
+  position: fixed;
+  z-index: 10030;
+  padding: 6px;
+  font: 14px system-ui, sans-serif;
+  color: var(--fg, #242424);
+  background: var(--canvas-elevated, #fff);
+  border: 1px solid var(--border, #8888);
+  border-radius: 5px;
+  box-shadow: 0 3px 12px #0003;
+  box-sizing: border-box;
+}
+#ba-font-popover[hidden] { display: none; }
+#ba-font-popover input {
+  font: inherit;
+  color: inherit;
+  background: inherit;
+  border: 1px solid var(--border, #8888);
+  border-radius: 4px;
+  height: 29px;
+  width: 220px;
+  padding: 0 8px;
+  box-sizing: border-box;
+}
 .nightMode #ba-text-tools, .nightMode #ba-image-menu, .nightMode #ba-crop-dialog, .nightMode #ba-editor-menu,
+.nightMode #ba-font-dropdown, .nightMode #ba-font-popover,
 html[data-rf-theme=dark] #ba-text-tools, html[data-rf-theme=dark] #ba-image-menu,
-html[data-rf-theme=dark] #ba-crop-dialog, html[data-rf-theme=dark] #ba-editor-menu { background: var(--canvas-elevated, #262626); color: #eee; }
+html[data-rf-theme=dark] #ba-crop-dialog, html[data-rf-theme=dark] #ba-editor-menu,
+html[data-rf-theme=dark] #ba-font-dropdown, html[data-rf-theme=dark] #ba-font-popover { background: var(--canvas-elevated, #262626); color: #eee; }

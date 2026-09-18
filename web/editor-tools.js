@@ -87,6 +87,28 @@
   function escapeAttr(s) {
     return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   }
+  // Shared by the font suggestion list and the "..." editor menu: both are
+  // position:fixed popups anchored under a trigger element. A static CSS
+  // `right:0`/`top:100%` assumes the trigger sits at the right edge of a
+  // positioned ancestor — true for a classic top-right "more" button, but
+  // Fields/Cards (and now the "..." button that replaces them) render
+  // wherever NotetypeButtons.svelte put them, which is NOT the right edge
+  // of a narrow Browse editor pane. That mismatch pushed the "..." menu
+  // mostly off the left edge of the viewport (getBoundingClientRect().left
+  // came back around -151px on a real repro) — visually just a sliver, or
+  // nothing at all, exactly matching "the menu opens empty". Compute the
+  // position from the trigger's actual on-screen rect instead, clamped so
+  // the popup never leaves the viewport regardless of where the trigger
+  // ends up.
+  function positionPopup(popup, anchor) {
+    var r = anchor.getBoundingClientRect();
+    popup.style.top = (r.bottom + 4) + "px";
+    var width = popup.offsetWidth;
+    var maxLeft = Math.max(8, window.innerWidth - width - 8);
+    popup.style.left = Math.max(8, Math.min(r.left, maxLeft)) + "px";
+    var maxHeight = window.innerHeight - r.bottom - 12;
+    popup.style.maxHeight = Math.max(120, Math.min(320, maxHeight)) + "px";
+  }
   // Arbitrary pixel sizes, not a preset list — document.execCommand's
   // "fontSize" command only accepts the legacy 1-7 HTML size levels, so a
   // typed value like "37" is applied by wrapping the selection in a span
@@ -110,26 +132,110 @@
       rememberSelection(field);
     } catch (_) {}
   }
+  // Font is a custom combobox, not <input list=datalist>: a native
+  // datalist popup can't be styled (no max-height/overflow-y a browser is
+  // required to honor) and in this QtWebEngine build the 196-entry
+  // suggestion list rendered with no working scroll at all — arrow keys
+  // and wheel/trackpad both did nothing past the first screenful. A plain
+  // div-based listbox (same family as #ba-editor-menu and #ba-image-menu)
+  // gets a real scroll container plus keyboard nav we control directly.
+  // Shared by both the reviewer's full-row font input and the real
+  // editor's compact "Aa" popover — same filtering/keyboard/scroll
+  // behavior either way, just different trigger chrome around it.
+  function attachFontCombobox(input, dropdown, idPrefix, applyFn) {
+    var matches = [];
+    var highlight = -1;
+    function updateHighlight() {
+      var opts = dropdown.children;
+      for (var i = 0; i < opts.length; i++) {
+        var active = i === highlight;
+        opts[i].setAttribute("aria-selected", String(active));
+        opts[i].classList.toggle("active", active);
+        if (active) opts[i].scrollIntoView({ block: "nearest" });
+      }
+      input.setAttribute("aria-activedescendant", highlight >= 0 ? idPrefix + "-opt-" + highlight : "");
+    }
+    function close() {
+      dropdown.hidden = true;
+      input.setAttribute("aria-expanded", "false");
+      highlight = -1;
+    }
+    function open() {
+      var q = input.value.trim().toLowerCase();
+      var all = systemFonts();
+      matches = q ? all.filter(function (f) { return f.toLowerCase().indexOf(q) !== -1; }) : all;
+      if (!matches.length) { close(); return; }
+      dropdown.innerHTML = matches.map(function (f, i) {
+        return '<div role="option" id="' + idPrefix + '-opt-' + i + '" data-index="' + i + '">' + escapeAttr(f) + '</div>';
+      }).join("");
+      highlight = 0;
+      dropdown.hidden = false;
+      input.setAttribute("aria-expanded", "true");
+      positionPopup(dropdown, input);
+      updateHighlight();
+    }
+    function choose(index) {
+      var f = matches[index];
+      if (!f) return;
+      input.value = f;
+      close();
+      applyFn(f);
+    }
+    input.addEventListener("input", open);
+    input.addEventListener("focus", open);
+    input.addEventListener("keydown", function (e) {
+      if (dropdown.hidden) {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); open(); }
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        highlight = Math.min(highlight + 1, matches.length - 1);
+        updateHighlight();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        highlight = Math.max(highlight - 1, 0);
+        updateHighlight();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (highlight >= 0) choose(highlight);
+      } else if (e.key === "Escape") {
+        close();
+      }
+    });
+    // mousedown, not click: fires before the input's blur handler would
+    // otherwise close the dropdown out from under the click.
+    dropdown.addEventListener("mousedown", function (e) {
+      var opt = e.target.closest("[role=option]");
+      if (!opt) return;
+      e.preventDefault();
+      choose(Number(opt.dataset.index));
+    });
+    input.addEventListener("blur", function () { setTimeout(close, 150); });
+    input.addEventListener("change", function () { if (input.value) applyFn(input.value); });
+    return { open: open, close: close };
+  }
   function ensureToolbar() {
+    // The real editor (Add/Browse/Edit Current) gets compact Aa/Size
+    // controls folded into the icon toolbar instead — see
+    // ensureCompactFontSize(). This full-width row stays only for the
+    // reviewer's inline quick editor, a smaller, simpler surface where a
+    // dedicated row is the right call.
+    if (editorPage) return;
     if (!toolbar || !toolbar.isConnected) {
       toolbar = document.createElement("div");
       toolbar.id = "ba-text-tools";
       toolbar.setAttribute("role", "toolbar");
       toolbar.setAttribute("aria-label", "Text formatting");
-      var fonts = systemFonts();
       // A single label per control, carried by aria-label + placeholder —
       // no separate visible <label> text duplicating what the control
-      // itself already says. <input list> (a combobox, not a closed
-      // <select>) accepts any typed font name, not just one from the
-      // list; the <datalist> just gives searchable/type-ahead suggestions
-      // drawn from every font actually installed on this machine.
-      toolbar.innerHTML = '<span class="ba-tool"><input type="text" id="ba-font-input" list="ba-font-list" placeholder="Font" aria-label="Font family" autocomplete="off" spellcheck="false">'
-        + '<datalist id="ba-font-list">' + fonts.map(function (font) { return '<option value="' + escapeAttr(font) + '">'; }).join("") + '</datalist></span>'
+      // itself already says.
+      toolbar.innerHTML = '<span class="ba-tool ba-font-tool"><input type="text" id="ba-font-input" placeholder="Font" aria-label="Font family" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" spellcheck="false">'
+        + '<div id="ba-font-dropdown" role="listbox" aria-label="Font suggestions" hidden></div></span>'
         + '<span class="ba-tool"><input type="number" id="ba-size-input" placeholder="Size" aria-label="Text size in pixels" min="6" max="300" step="1"></span>';
       var fontInput = toolbar.querySelector("#ba-font-input");
-      fontInput.addEventListener("change", function () {
-        if (fontInput.value) format("fontName", fontInput.value);
-      });
+      var fontDropdown = toolbar.querySelector("#ba-font-dropdown");
+      attachFontCombobox(fontInput, fontDropdown, "ba-font", function (f) { format("fontName", f); });
       var sizeInput = toolbar.querySelector("#ba-size-input");
       function applySize() {
         var px = parseInt(sizeInput.value, 10);
@@ -145,11 +251,64 @@
       });
       document.body.prepend(toolbar);
     }
-    if (!editorPage) {
-      var group = document.querySelector("#ba-edit-bar .ba-edit-fmt");
-      if (group && toolbar.parentNode !== group) group.appendChild(toolbar);
+    var group = document.querySelector("#ba-edit-bar .ba-edit-fmt");
+    if (group && toolbar.parentNode !== group) group.appendChild(toolbar);
+    toolbar.hidden = !document.body.classList.contains("ba-editing");
+  }
+  // Compact replacement for the full-width row, folded directly into the
+  // stock icon toolbar next to B/I/U/etc: a small "Aa" button that pops
+  // the same searchable font combobox as above, and a narrow numeric size
+  // box — no separate row, no full-width text inputs, reclaiming the
+  // vertical space the row used to take.
+  function ensureCompactFontSize(nt) {
+    if (document.getElementById("ba-font-btn")) return;
+    var wrap = document.createElement("span");
+    wrap.className = "ba-compact-font-wrap";
+    wrap.innerHTML = '<button type="button" id="ba-font-btn" aria-haspopup="true" aria-expanded="false" title="Font family">Aa</button>'
+      + '<div id="ba-font-popover" hidden>'
+      + '<input type="text" id="ba-font-input" placeholder="Search fonts" aria-label="Font family" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" spellcheck="false">'
+      + '<div id="ba-font-dropdown" role="listbox" aria-label="Font suggestions" hidden></div>'
+      + '</div>'
+      + '<input type="number" id="ba-size-input" placeholder="Size" title="Text size in pixels" aria-label="Text size in pixels" min="6" max="300" step="1">';
+    nt.appendChild(wrap);
+    var fontBtn = wrap.querySelector("#ba-font-btn");
+    var fontPopover = wrap.querySelector("#ba-font-popover");
+    var fontInput = wrap.querySelector("#ba-font-input");
+    var fontDropdown = wrap.querySelector("#ba-font-dropdown");
+    var combobox = attachFontCombobox(fontInput, fontDropdown, "ba-font", function (f) { format("fontName", f); });
+    function closePopover() {
+      fontPopover.hidden = true;
+      fontBtn.setAttribute("aria-expanded", "false");
+      combobox.close();
     }
-    toolbar.hidden = !editorPage && !document.body.classList.contains("ba-editing");
+    fontBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var opening = fontPopover.hidden;
+      if (!opening) { closePopover(); return; }
+      fontPopover.hidden = false;
+      fontBtn.setAttribute("aria-expanded", "true");
+      positionPopup(fontPopover, fontBtn);
+      fontInput.value = "";
+      fontInput.focus();
+    });
+    document.addEventListener("click", function (e) {
+      if (!fontPopover.hidden && !wrap.contains(e.target)) closePopover();
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !fontPopover.hidden) { e.preventDefault(); closePopover(); }
+    }, true);
+    var sizeInput = wrap.querySelector("#ba-size-input");
+    function applySize() {
+      var px = parseInt(sizeInput.value, 10);
+      if (px) applyFontSizePx(px);
+    }
+    sizeInput.addEventListener("change", applySize);
+    sizeInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); applySize(); }
+    });
+    wrap.addEventListener("pointerdown", function () {
+      if (bookmark) rememberSelection(bookmark.field);
+    });
   }
 
   // Fields... and Cards... are two more standalone toolbar buttons on top
@@ -199,6 +358,7 @@
       + '<button type="button" role="menuitem" data-action="advanced">Advanced: edit raw template...</button>'
       + '</div>';
     nt.appendChild(wrap);
+    ensureCompactFontSize(nt);
     var editorMenuBtn = wrap.querySelector("#ba-editor-menu-btn"), editorMenu = wrap.querySelector("#ba-editor-menu");
     function closeMenu() {
       editorMenu.hidden = true;
@@ -209,6 +369,14 @@
       var opening = editorMenu.hidden;
       editorMenu.hidden = !opening;
       editorMenuBtn.setAttribute("aria-expanded", String(opening));
+      // See positionPopup's comment: a static CSS right:0 assumed this
+      // button sits at its container's right edge, which put the menu
+      // mostly off the left side of the viewport in a narrower pane
+      // (Browse) — reachable, technically, but indistinguishable from
+      // "the menu opens empty" at a glance. Position from the button's
+      // actual rect instead, every time it opens (the toolbar can reflow
+      // between opens).
+      if (opening) positionPopup(editorMenu, editorMenuBtn);
     });
     editorMenu.addEventListener("click", function (e) {
       var action = e.target && e.target.dataset && e.target.dataset.action;
@@ -224,6 +392,32 @@
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && !editorMenu.hidden) { e.preventDefault(); closeMenu(); }
     }, true);
+  }
+
+  // The stock "remove formatting" eraser (plus its own small dropdown
+  // chevron for picking which formats to strip) is RemoveFormatButton.
+  // svelte's two IconButtons — NOT plain adjacent siblings, confirmed by
+  // reading the actual rendered DOM: the chevron sits inside
+  // WithFloating's own <span class="floating-reference"> wrapper (plus a
+  // <svelte-css-wrapper> Svelte adds for its --border-*-radius custom
+  // props), and the eraser icon is that *span's* previous sibling — one
+  // level up from the chevron itself, in its own <svelte-css-wrapper>.
+  // The chevron's class ("remove-format-button" — a literal class name in
+  // source, not translated UI text) is stable and English-independent;
+  // reaching the eraser from it is positional the same way Fields/Cards
+  // are found above, just one ancestor hop first.
+  function ensureEraserHidden() {
+    var chevron = document.querySelector(".remove-format-button");
+    if (!chevron) return;
+    if (chevron.classList.contains("ba-toolbar-button-hidden")) return;
+    chevron.hidden = true;
+    chevron.classList.add("ba-toolbar-button-hidden");
+    var floatingRef = chevron.closest(".floating-reference");
+    var eraserWrapper = floatingRef && floatingRef.previousElementSibling;
+    if (eraserWrapper) {
+      eraserWrapper.hidden = true;
+      eraserWrapper.classList.add("ba-toolbar-button-hidden");
+    }
   }
 
   function hideSelection() {
@@ -422,6 +616,7 @@
     if (editorPage) document.body.classList.add("ba-editor-tools-page");
     ensureToolbar();
     ensureEditorMenu();
+    ensureEraserHidden();
     document.addEventListener("click", function (event) {
       var target = targetOf(event);
       if (target.tagName === "IMG" && fieldFor(target) && !target.classList.contains("mathjax")) {
@@ -462,6 +657,7 @@
     new MutationObserver(function () {
       ensureToolbar();
       ensureEditorMenu();
+      ensureEraserHidden();
       if (selected) positionSelection();
       if (crop && (!crop.field.isConnected || !fieldFor(crop.field))) closeCrop();
     }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "contenteditable"] });
