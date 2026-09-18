@@ -462,6 +462,25 @@ def _teardown_preview() -> None:
             _close_add_panel()
         except Exception:
             pass
+    # The PreviewPane owns its own AnkiWebView (a second, independent
+    # QWebEngineView, not `mw.web`). Its parent-chain eventually gets
+    # destroyed when `close_inline()` calls `overlay.deleteLater()`, but
+    # that's deferred to the next event-loop tick — and until then the
+    # preview's webview is still a fully live, painted widget. When the
+    # right pane is in Card (preview) mode, this is what the user actually
+    # sees sitting on top of the deck browser after switching states: not
+    # `mw.web` being slow to repaint (that's the separate, bounded paint-lag
+    # nudge below), but this second webview never having been told to stop.
+    # `PreviewPane.cleanup()` (mirrors `Previewer._on_close`) tears it down
+    # synchronously — same fix as the crash class upstream fixed in
+    # FindDuplicates, just for "stays visible" instead of "crashes on
+    # theme change". Must run before the deferred `overlay.deleteLater()`.
+    pane = _state.pop("preview", None)
+    if pane is not None:
+        try:
+            pane.cleanup()
+        except Exception:
+            pass
     hook = _state.pop("preview_hook", None)
     if hook is not None:
         try:

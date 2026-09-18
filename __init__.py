@@ -1692,7 +1692,14 @@ def _on_js_message(handled, message, context):
                     pass
             _push_video_occlusion()
             if getattr(mw, "state", None) != "deckBrowser":
-                mw.moveToState("deckBrowser")
+                mw.moveToState("deckBrowser")  # also nudges, via the patch below
+            else:
+                # mw.state never left "deckBrowser" (embeds are overlays,
+                # not real states), so moveToState — and the compositor
+                # nudge it triggers — is never reached from this branch.
+                # This was the actual gap behind "Decks left a stale
+                # pane": call the same nudge directly.
+                _nudge_web_repaint()
         elif cmd == "browse":
             for mod in ("addcard_embed", "stats_embed", "settings_embed"):
                 try:
@@ -3478,6 +3485,64 @@ def _push_video_occlusion() -> None:
         pass
 
 
+def _nudge_web_repaint() -> None:
+    """Wake `mw.web`'s compositor after an inline embed (Add/Browse/Stats/
+    Settings) stops covering it.
+
+    Every one of those embeds covers mw.web with its own overlay widget for
+    as long as it's open — sometimes for a long session (Browse, in
+    particular). QtWebEngine throttles a covered page's compositor for
+    performance, and doesn't always resume painting immediately just
+    because the covering widget was deleteLater()'d and the incoming
+    state's HTML has already loaded underneath: confirmed live (Decks
+    after a table-collapsed/full-screen Browse editor) — a direct DOM
+    query right after teardown already shows the correct deck-browser
+    content, but the on-screen pixels stay stuck on the last frame the
+    (now-gone) overlay painted for another ~2s until WebEngine's own idle
+    recovery kicks in — a real user reads that as "Decks is just blank."
+
+    mw.web is a QWebEngineView, not a plain QWidget — its actual pixels
+    come from an out-of-process compositor. The repaint()/processEvents()
+    idiom this codebase uses elsewhere for the (plain-QWidget) curtain
+    overlays does NOT belong here: repaint() forces a synchronous wait on
+    that compositor, and an earlier version of this fix that tried it hung
+    the whole app outright (confirmed live — a real deadlock, not just a
+    slow frame). update() only *schedules* a repaint through Qt's normal,
+    async event queue — it never blocks — which is enough to make Qt
+    reissue a paint/expose event for mw.web and let WebEngine notice it
+    should resume compositing, without touching anything synchronous.
+
+    A single nudge measured ~0.7s to actually land on screen (down from
+    ~2s with no nudge at all — confirmed live, both timings) — better, but
+    still a visible gap. A single update() call apparently doesn't always
+    catch the compositor at a moment it's ready to listen right after
+    teardown; a few staggered calls (all still async, still non-blocking)
+    give it more chances to land, at negligible cost since each one is
+    just a cheap schedule-a-repaint request.
+
+    Callers: `_patched_move_to_state` (a real state change, e.g. D from
+    the reviewer) AND the sidebar's `ba:decks` handler below — the latter
+    is the common case (embeds never change `mw.state`, so clicking Decks
+    from an open Browse/Add/etc. never goes through moveToState at all;
+    skipping this nudge there was the actual gap behind the "still
+    bugged" Decks report — moveToState was never being called at all)."""
+    if QTimer is None:
+        return
+    try:
+        def _do_update() -> None:
+            try:
+                w = getattr(mw, "web", None)
+                if w is not None:
+                    w.update()
+            except Exception:
+                pass
+
+        for delay in (0, 60, 150, 300):
+            QTimer.singleShot(delay, _do_update)
+    except Exception:
+        pass
+
+
 def on_deck_browser_did_render(deck_browser: DeckBrowser) -> None:
     # The deck browser re-shows the bottom strip and Anki (re)sets the window
     # title around render; re-assert our state on the next event-loop tick so
@@ -4290,53 +4355,9 @@ def _setup_sidebar_shortcuts() -> None:
                     pass
             _push_video_occlusion()
             result = _orig_move_to_state(state, *args, **kwargs)
-            # Every one of these embeds covers mw.web with its own overlay
-            # widget for as long as it's open — sometimes for a long
-            # session (Browse, in particular). QtWebEngine throttles a
-            # covered page's compositor for performance, and doesn't
-            # always resume painting immediately just because the
-            # covering widget was deleteLater()'d above and the incoming
-            # state's HTML has already loaded underneath: confirmed live
-            # (Decks after a table-collapsed/full-screen Browse editor)
-            # — a direct DOM query right after this call already shows
-            # the correct deck-browser content, but the on-screen pixels
-            # stay stuck on the last frame the (now-gone) overlay painted
-            # for another ~2s until WebEngine's own idle recovery kicks
-            # in — a real user reads that as "Decks is just blank."
-            # mw.web is a QWebEngineView, not a plain QWidget — its actual
-            # pixels come from an out-of-process compositor. The
-            # `repaint()`/`processEvents()` idiom this codebase uses
-            # elsewhere for the (plain-QWidget) curtain overlays does NOT
-            # belong here: repaint() forces a synchronous wait on that
-            # compositor, and an earlier version of this fix that tried
-            # it hung the whole app outright (confirmed live — a real
-            # deadlock, not just a slow frame). update() only *schedules*
-            # a repaint through Qt's normal, async event queue — it never
-            # blocks — which is enough to make Qt reissue a paint/expose
-            # event for mw.web and let WebEngine notice it should resume
-            # compositing, without touching anything synchronous.
-            # One nudge measured ~0.7s to actually land on screen (down
-            # from ~2s with no nudge at all — confirmed live, both
-            # timings) — better, but still a visible gap the user would
-            # read as "blank". A single update() call apparently doesn't
-            # always catch the compositor at a moment it's ready to
-            # listen right after the overlay's teardown; a few staggered
-            # calls (all still async, still non-blocking) give it more
-            # chances to land, at negligible cost since each one is just
-            # a cheap schedule-a-repaint request.
-            try:
-                if QTimer is not None:
-                    def _force_web_repaint():
-                        try:
-                            w = getattr(mw, "web", None)
-                            if w is not None:
-                                w.update()
-                        except Exception:
-                            pass
-                    for delay in (0, 60, 150, 300):
-                        QTimer.singleShot(delay, _force_web_repaint)
-            except Exception:
-                pass
+            # See `_nudge_web_repaint()` for why this is here and why it's
+            # update() and never repaint().
+            _nudge_web_repaint()
             return result
 
         mw.moveToState = _patched_move_to_state  # type: ignore[assignment]
