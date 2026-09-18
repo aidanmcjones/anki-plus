@@ -108,7 +108,7 @@ async function fixture(page, mode) {
       // size), not closed <select> presets — see the double-"Font"-label
       // and preset-only-sizes fixes in editor-tools.js. In the real
       // editor (every mode but study) every control — Fields, Style, Aa,
-      // Size, Advanced — is the same uniform icon-button hotbar; Aa and
+      // Size — is the same uniform icon-button hotbar; Aa and
       // Size each pop their own popover (a font search box; a +/-
       // stepper), no full-width row and no visually distinct wide text
       // input. The reviewer's inline quick editor (study) keeps the

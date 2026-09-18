@@ -204,7 +204,7 @@ body.ba-editing #ba-text-tools {
 #ba-crop-dialog button[data-action=apply] { background: var(--primary, #2383d1); color: #fff; }
 #ba-crop-dialog button:disabled { opacity: .5; cursor: wait; }
 
-/* Unified hotbar — Fields, Card styling, Aa, Size, Advanced, every one the
+/* Unified hotbar — Fields, Card styling, Aa, Size, every one the
    same icon-button chrome, every popover the same shell. Replaces the
    earlier QDialog + proxy-clicked stock Fields dialog + wide text-input
    Size control the user rejected outright ("one unified pane... not to

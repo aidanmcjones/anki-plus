@@ -262,12 +262,14 @@
   // editor hotbar. They all have the same formatting." Fields.../Cards...
   // are still two standalone stock buttons we fold away the same way as
   // before (hidden, never removed — addcard.js's own comment about that
-  // still applies), but nothing here proxy-clicks the stock Fields button
-  // anymore, and nothing here opens a QDialog: every popover is inline,
-  // in this same pane, built from plain divs styled to match. The one
-  // still-standing popup is Anki's own CardLayout dialog, reached only
-  // through the explicit "Advanced: edit raw template" button — the user
-  // carved that one out by name as acceptable stock chrome.
+  // still applies), but nothing here proxy-clicks either of them anymore,
+  // and nothing here opens a QDialog or any other window: every popover
+  // is inline, in this same pane, built from plain divs styled to match.
+  // (An earlier round kept one explicit "Advanced: edit raw template"
+  // button proxying to the stock Cards/CardLayout dialog; the user asked
+  // for it gone outright — "no one would ever use that" — so raw
+  // template editing is only reachable through Anki's own Tools -> Manage
+  // Note Types now, entirely outside this pane.)
   var hotbarPopovers = [];
   function closeAllHotbarPopovers(except) {
     hotbarPopovers.forEach(function (p) { if (p !== except) p.close(); });
@@ -628,23 +630,12 @@
     buildStylingControl(hotbar);
     buildFontControl(hotbar);
     buildSizeControl(hotbar);
-
-    // The one remaining popup, and it's Anki's own: proxy-clicks the
-    // hidden stock Cards button, same saveNow()+bridgeCommand flow
-    // NotetypeButtons.svelte always ran for it, unmodified.
-    var advanced = document.createElement("button");
-    advanced.type = "button";
-    advanced.className = "ba-hotbar-btn";
-    advanced.id = "ba-advanced-btn";
-    advanced.title = "Advanced: edit raw template";
-    advanced.setAttribute("aria-label", "Advanced: edit raw template");
-    advanced.textContent = "⋯";
-    advanced.addEventListener("click", function (e) {
-      e.stopPropagation();
-      closeAllHotbarPopovers();
-      cardsBtn.click();
-    });
-    hotbar.appendChild(advanced);
+    // No "..." / Advanced button — the user explicitly asked for it gone
+    // ("not necessary, no one would ever use that"). cardsBtn is still
+    // hidden above, same as fieldsBtn, so the stock Cards button never
+    // shows in the toolbar; raw template editing is still reachable
+    // through Anki's own Tools -> Manage Note Types, unrelated to this
+    // pane, which is fine — nothing here needs to proxy to it anymore.
   }
 
   // The stock "remove formatting" eraser (plus its own small dropdown
