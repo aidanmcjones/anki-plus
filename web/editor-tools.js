@@ -837,8 +837,12 @@
     event.preventDefault(); event.stopPropagation();
     var field = fieldFor(selected), r = selected.getBoundingClientRect();
     field.focus({ preventScroll: true });
+    // Growth is capped at the first ancestor with real room. A shrink-to-fit parent (flex
+    // item, inline-block) is exactly as wide as the image, which would cap growth at the
+    // current size: the image could shrink but never grow.
     var container = selected.parentElement;
-    while (container && !container.clientWidth) container = container.parentElement;
+    while (container && container !== document.body && container.clientWidth <= r.width + 2)
+      container = container.parentElement;
     drag = { img: selected, field: field, width: r.width, height: r.height,
       maxWidth: container?.clientWidth || innerWidth,
       x: event.clientX, y: event.clientY, corner: event.currentTarget.dataset.corner };
