@@ -133,6 +133,31 @@ async function fixture(page, mode) {
       console.log(`PASS ${mode}: no image expansion, resize, crop/cancel, font/size selection`);
       await page.close();
     }
+    // Regression: an image inside a shrink-to-fit parent (a centered flex row, as class decks use
+    // for answer images) must be able to GROW. The parent is exactly as wide as the image, so
+    // capping growth at parent.clientWidth froze the image at its current size.
+    {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
+    await fixture(page, 'study');
+    await page.evaluate(() => {
+      const img = document.querySelector('#host img');
+      const row = document.createElement('div'); row.style.cssText = 'display:flex;justify-content:center';
+      const item = document.createElement('div'); item.dataset.baField = 'AnswerImage'; item.contentEditable = 'true';
+      img.replaceWith(row); row.appendChild(item); item.appendChild(img);
+      img.style.width = '150px';
+    });
+    const flexImg = page.locator('#host img');
+    const flexBefore = await flexImg.boundingBox();
+    await flexImg.click();
+    await page.locator('#ba-image-selection').waitFor({state:'visible'});
+    const grow = await page.locator('[data-corner="se"]').boundingBox();
+    await page.mouse.move(grow.x + 6, grow.y + 6); await page.mouse.down();
+    await page.mouse.move(grow.x + 126, grow.y + 81, {steps:8}); await page.mouse.up();
+    const flexAfter = await flexImg.boundingBox();
+    assert.ok(flexAfter.width > flexBefore.width + 80, `image in a flex row could not grow (${flexBefore.width} -> ${flexAfter.width})`);
+    console.log('PASS image in a shrink-to-fit flex row can be enlarged');
+    await page.close();
+    }
     // Font suggestion list: real scroll container (not a native datalist,
     // which ignored max-height/overflow-y and had no working wheel or
     // keyboard scroll in the target QtWebEngine build), type-ahead
