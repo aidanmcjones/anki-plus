@@ -158,6 +158,56 @@ async function fixture(page, mode) {
     console.log('PASS image in a shrink-to-fit flex row can be enlarged');
     await page.close();
     }
+
+    // Regression: Delete / Backspace on a selected image removes it (undoably) and fires input.
+    for (const mode of ['study', 'browse']) {
+      const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
+      await fixture(page, mode);
+      await page.evaluate(() => { window.inputs = 0; field.addEventListener('input', () => window.inputs++); });
+      await page.locator('#host img').click();
+      await page.locator('#ba-image-selection').waitFor({ state: 'visible' });
+      await page.keyboard.press(mode === 'study' ? 'Delete' : 'Backspace');
+      assert.equal(await page.locator('#host img').count(), 0, `${mode}: image not deleted`);
+      assert.ok(await page.evaluate(() => window.inputs) >= 1, `${mode}: no input event after delete`);
+      assert.ok(await page.evaluate(() => field.textContent.includes('Alpha beta gamma') && field.textContent.includes('Unchanged text')), `${mode}: text damaged`);
+      assert.equal(await page.locator('#ba-image-selection').isHidden(), true);
+      // Undo brings the image back through the browser's own stack.
+      await page.evaluate(() => document.execCommand('undo'));
+      assert.equal(await page.locator('#host img').count(), 1, `${mode}: undo did not restore the image`);
+      await page.locator('#host img').click();
+      await page.locator('#ba-image-selection').waitFor({ state: 'visible' });
+      await page.keyboard.press('Escape');
+      assert.equal(await page.locator('#ba-image-selection').isHidden(), true, `${mode}: Escape did not clear the image selection`);
+      console.log(`PASS ${mode}: Delete removes a selected image, undo restores it, Escape clears the selection`);
+      await page.close();
+    }
+
+    // Regression: the +/- stepper (and the size trigger) must not steal the field's selection.
+    {
+      const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
+      await fixture(page, 'browse');
+      await page.evaluate(() => {
+        field.focus(); const node = field.querySelector('#words').firstChild;
+        const range = document.createRange(); range.setStart(node, 6); range.setEnd(node, 10);
+        const sel = field.getRootNode().getSelection?.() || window.getSelection();
+        sel.removeAllRanges(); sel.addRange(range);
+        field.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', bubbles: true, composed: true }));
+      });
+      const selText = () => page.evaluate(() => (field.getRootNode().getSelection?.() || window.getSelection()).toString());
+      await page.locator('#ba-size-btn').click();
+      await page.locator('#ba-size-popover').waitFor({ state: 'visible' });
+      assert.equal(await selText(), 'beta', 'opening the size popover deselected the text');
+      await page.locator('[data-step="1"]').click();
+      await page.locator('[data-step="1"]').click();
+      assert.equal(await selText(), 'beta', 'the + stepper deselected the text');
+      const sized = await page.evaluate(() => [...field.querySelectorAll('#words *')].map(el => [el.textContent, getComputedStyle(el).fontSize]));
+      assert.ok(sized.some(([t, sz]) => t === 'beta' && sz === '18px'), JSON.stringify(sized));
+      await page.locator('[data-step="-1"]').click();
+      const sized2 = await page.evaluate(() => [...field.querySelectorAll('#words *')].map(el => [el.textContent, getComputedStyle(el).fontSize]));
+      assert.ok(sized2.some(([t, sz]) => t === 'beta' && sz === '17px'), JSON.stringify(sized2));
+      console.log('PASS browse: size stepper keeps the selection and applies 16 -> 18 -> 17px');
+      await page.close();
+    }
     // Font suggestion list: real scroll container (not a native datalist,
     // which ignored max-height/overflow-y and had no working wheel or
     // keyboard scroll in the target QtWebEngine build), type-ahead
