@@ -83,9 +83,25 @@ it survives restarts without touching the collection schema:
                                        # (see `entry_mode`)
             "orig_conf": 1,           # preset to restore on clear
             "cloned_conf": 173…,      # preset we made (0 = none)
-            "orig_max_ivl": 36500     # ceiling to restore on clear
+            "orig_max_ivl": 36500,    # ceiling to restore on clear
+            "inherited_from": 17…     # optional; present when this entry
+                                       # was written by a cascade from an
+                                       # ancestor deck's deadline (see
+                                       # "Cascade" below). Absent = set on
+                                       # this deck directly.
         }
     }
+
+Cascade
+-------
+A deadline on "Exam 1" has to reach "Exam 1::03 Protein Folding": the
+ceiling lives on each deck's own preset, so capping the parent alone
+caps a deck that holds no cards. `set_deadline` therefore writes the
+same date/time/mode onto every descendant, marked `inherited_from`, and
+`set_mode` / `clear_deadline` on the ancestor follow those marked
+entries (and only those: a deadline the user set on a subdeck directly
+is its own and is left alone). `refresh_all` re-runs the cascade daily,
+so a subdeck created after the deadline was set picks it up too.
 """
 
 from __future__ import annotations
@@ -414,6 +430,61 @@ def menu_payload() -> Dict[str, str]:
     return out
 
 
+def descendants(col: Any, did: int) -> List[int]:
+    """Ids of every deck nested under `did` (any depth), by name prefix."""
+    try:
+        prefix = str(col.decks.name(did)) + "::"
+    except Exception:
+        return []
+    out: List[int] = []
+    for row in col.decks.all_names_and_ids():
+        try:
+            if int(row.id) != int(did) and str(row.name).startswith(prefix):
+                out.append(int(row.id))
+        except Exception:
+            continue
+    return out
+
+
+def _inherited_from(entry: Any, did: int) -> bool:
+    return isinstance(entry, dict) and str(entry.get("inherited_from", "")) == str(did)
+
+
+def _cascade(col: Any, did: int, parent: Dict[str, Any], state: Dict[str, Any]) -> int:
+    """Write `parent`'s deadline onto every descendant of `did` that does not
+    hold a deadline of its own, apply it, and record the result in `state`
+    (the caller saves). Returns how many descendants were touched.
+
+    The descendant keeps its own `orig_*` / `cloned_conf` bookkeeping — those
+    describe *its* preset — and only takes date, time and mode from the
+    ancestor. A descendant whose entry has no `inherited_from` was set by
+    the user directly and is skipped."""
+    touched = 0
+    for child in descendants(col, did):
+        cur = state.get(str(child))
+        if isinstance(cur, dict) and cur.get("date") and "inherited_from" not in cur:
+            continue  # the user's own deadline on this subdeck wins
+        entry = dict(cur or {})
+        entry["date"] = parent["date"]
+        entry.pop("time", None)
+        if parent.get("time"):
+            entry["time"] = parent["time"]
+        entry.pop("mode", None)
+        if parent.get("mode") in (MODE_MAINTAIN, MODE_PAUSE):
+            entry["mode"] = parent["mode"]
+        entry["inherited_from"] = int(did)
+        try:
+            entry, verified = _apply(col, child, entry)
+            if not verified:
+                _log(f"cascade {did}->{child}: preset restore did not verify")
+        except Exception as exc:
+            _log(f"cascade {did}->{child}: {exc!r}")
+            continue
+        state[str(child)] = entry
+        touched += 1
+    return touched
+
+
 # --------------------------------------------------------------------------- #
 # Preset handling
 # --------------------------------------------------------------------------- #
@@ -551,6 +622,9 @@ def effective_new_per_day(col: Any, did: int) -> int:
         return 20
 
 
+_cascading: List[int] = []   # re-entrancy guard for set_new_per_day's cascade
+
+
 def set_new_per_day(did: int, value: int) -> bool:
     """Raise (or lower) how many new cards this deck introduces a day.
 
@@ -611,6 +685,17 @@ def set_new_per_day(did: int, value: int) -> bool:
             cur["paused_limits"]["newLimit"] = limit
         state[str(did)] = cur
         _save_state(state)
+    # Subdecks that inherited this deadline get the same limit: each
+    # deck's own limit caps what it can contribute when the parent is
+    # studied, so raising the parent alone can still fall short.
+    if not _cascading:
+        _cascading.append(did)
+        try:
+            for child in descendants(col, did):
+                if _inherited_from(_state().get(str(child)), did):
+                    set_new_per_day(child, limit)
+        finally:
+            _cascading.clear()
     return paused or effective_new_per_day(col, did) == limit
 
 
@@ -768,10 +853,14 @@ def set_deadline(did: int, deadline: datetime.date,
     # entry with no `mode` key resolves through `entry_mode` → config
     # every time it's read, so the deck follows `deadline_passed_mode`
     # until the user actually answers the question in the dialog.
+    # Set here directly, so this deck's deadline is its own from now on,
+    # whatever an ancestor's cascade wrote before.
+    entry.pop("inherited_from", None)
     entry, verified = _apply(col, did, entry)
     if not verified:
         _log(f"set_deadline {did}: preset restore did not verify")
     state[str(did)] = entry
+    _cascade(col, did, entry, state)
     _save_state(state)
     _arm_next_deadline_timer()
 
@@ -790,6 +879,7 @@ def set_mode(did: int, mode: str) -> None:
     if not verified:
         _log(f"set_mode {did}: preset restore did not verify")
     state[str(did)] = entry
+    _cascade(col, did, entry, state)
     _save_state(state)
     _arm_next_deadline_timer()
 
@@ -807,6 +897,11 @@ def clear_deadline(did: int, notify: bool = False) -> None:
     another deadlined deck may be sharing it, and removing a preset is a
     schema-mod operation that would force a full sync."""
     col = getattr(mw, "col", None)
+    if col is not None:
+        # Descendants that only had this deck's deadline go back with it.
+        for child in descendants(col, did):
+            if _inherited_from(_state().get(str(child)), did):
+                clear_deadline(child)
     state = _state()
     entry = state.pop(str(did), None)
     _save_state(state)
@@ -873,6 +968,21 @@ def refresh_all(force: bool = False) -> int:
     if not force and cfg.get(LAST_CHECK_KEY) == today:
         return 0
     touched = 0
+    # Subdecks created since a deadline was set on their ancestor inherit
+    # it here (the cascade skips decks that already carry it).
+    state = _state()
+    for did_s, entry in list(state.items()):
+        if not isinstance(entry, dict) or not entry.get("date") or "inherited_from" in entry:
+            continue
+        try:
+            did = int(did_s)
+        except Exception:
+            continue
+        if not col.decks.get(did, default=False):
+            continue
+        fresh = [c for c in descendants(col, did) if not (state.get(str(c)) or {}).get("date")]
+        if fresh and _cascade(col, did, entry, state):
+            _save_state(state)
     for did_s in list(_state().keys()):
         try:
             did = int(did_s)
@@ -1422,8 +1532,20 @@ def show_dialog(did: int) -> None:
     title.setProperty("role", "title")
     root.addWidget(title)
 
-    sub = QLabel("Every card in this deck should be known by:")
+    col = getattr(mw, "col", None)
+    kids = len(descendants(col, did)) if col is not None else 0
+    origin = (_state().get(str(did)) or {}).get("inherited_from")
+    if origin:
+        sub_text = (f"Inherited from “{_deck_name(int(origin))}”. Setting a date here "
+                    "gives this deck its own deadline.")
+    elif kids:
+        sub_text = (f"Every card in this deck and its {kids} subdeck"
+                    f"{'s' if kids != 1 else ''} should be known by:")
+    else:
+        sub_text = "Every card in this deck should be known by:"
+    sub = QLabel(sub_text)
     sub.setProperty("role", "sub")
+    sub.setWordWrap(True)
     root.addWidget(sub)
 
     cal = QCalendarWidget()

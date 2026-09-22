@@ -96,7 +96,7 @@ class _FakeDecks:
         return self.decks[int(did)]["name"]
 
     def all_names_and_ids(self):
-        return [types.SimpleNamespace(id=i) for i in sorted(self.decks)]
+        return [types.SimpleNamespace(id=i, name=self.decks[i]["name"]) for i in sorted(self.decks)]
 
     def config_dict_for_deck_id(self, did):
         return copy.deepcopy(self.confs[int(self.decks[int(did)]["conf"])])
@@ -140,7 +140,7 @@ def _fresh_collection():
         cid = 9000 + i
         decks[did] = {"id": did, "name": f"Deck {i}", "conf": cid}
         confs[cid] = _preset(cid, f"Default — Deck {i}{dl.CLONE_SUFFIX}")
-    col = types.SimpleNamespace(decks=_FakeDecks(decks, confs))
+    col = types.SimpleNamespace(decks=_FakeDecks(decks, confs), sched=types.SimpleNamespace(today=0))
     _mw.col = col
     return col
 
@@ -446,6 +446,93 @@ def test_zeroed_clone_repair_leaves_healthy_and_non_clone_presets_alone():
     assert dl.repair_zeroed_clone_presets() == 0
     assert col.decks.confs[1]["new"]["perDay"] == 0
 
+
+
+# --------------------------------------------------------------------------- #
+# Cascade to subdecks
+# --------------------------------------------------------------------------- #
+def _tree():
+    """Exam 1 with three subdecks (one nested two deep), all on Default."""
+    col = _setup(config_mode=dl.MODE_PAUSE, state={})
+    col.decks.decks.update({
+        301: {"id": 301, "name": "Bio::Exam 1", "conf": 1},
+        302: {"id": 302, "name": "Bio::Exam 1::01 pKa", "conf": 1},
+        303: {"id": 303, "name": "Bio::Exam 1::02 Peptides", "conf": 1},
+        304: {"id": 304, "name": "Bio::Exam 1::02 Peptides::Extra", "conf": 1},
+        305: {"id": 305, "name": "Bio::Exam 10", "conf": 1},  # sibling: same prefix text, not a child
+    })
+    return col
+
+
+def _max_ivl(col, did):
+    return col.decks.config_dict_for_deck_id(did)["rev"]["maxIvl"]
+
+
+def test_deadline_on_a_parent_reaches_every_subdeck():
+    col = _tree()
+    dl.set_deadline(301, datetime.date(2099, 1, 1), time_of_day=datetime.time(14, 0))
+    st = _state_now()
+    for did in (302, 303, 304):
+        assert st[str(did)]["date"] == "2099-01-01", did
+        assert st[str(did)]["time"] == "14:00"
+        assert st[str(did)]["inherited_from"] == 301
+        assert _max_ivl(col, did) < 36500, f"{did} ceiling not capped"
+    assert "inherited_from" not in st["301"]
+    assert "305" not in st, "sibling 'Exam 10' must not be treated as a child of 'Exam 1'"
+    # Each subdeck got its own preset clone: Default is shared, so it is untouched.
+    assert col.decks.confs[1]["rev"]["maxIvl"] == 36500
+
+
+def test_subdecks_own_deadline_is_not_overwritten_by_the_parent():
+    col = _tree()
+    dl.set_deadline(303, datetime.date(2098, 6, 1))
+    dl.set_deadline(301, datetime.date(2099, 1, 1))
+    st = _state_now()
+    assert st["303"]["date"] == "2098-06-01" and "inherited_from" not in st["303"]
+    assert st["302"]["date"] == "2099-01-01"
+    # Setting it directly on a subdeck later makes that deadline its own.
+    dl.set_deadline(302, datetime.date(2097, 1, 1))
+    assert "inherited_from" not in _state_now()["302"]
+
+
+def test_mode_change_on_the_parent_follows_inherited_subdecks():
+    col = _tree()
+    dl.set_deadline(301, datetime.date(2020, 1, 1), mode=dl.MODE_PAUSE)
+    assert _limits(col, 302) == (0, 0) and _limits(col, 304) == (0, 0)
+    dl.set_mode(301, dl.MODE_MAINTAIN)
+    st = _state_now()
+    assert st["302"]["mode"] == dl.MODE_MAINTAIN
+    assert _limits(col, 302) == (None, None), "resumed subdeck should have its limits back"
+
+
+def test_clearing_the_parent_clears_inherited_subdecks_only():
+    col = _tree()
+    dl.set_deadline(303, datetime.date(2098, 6, 1))     # own
+    dl.set_deadline(301, datetime.date(2099, 1, 1))     # cascades to 302, 304
+    dl.clear_deadline(301)
+    st = _state_now()
+    assert "301" not in st and "302" not in st and "304" not in st
+    assert st["303"]["date"] == "2098-06-01"
+    assert _max_ivl(col, 302) == 36500 and _max_ivl(col, 304) == 36500
+
+
+def test_daily_refresh_gives_new_subdecks_the_parents_deadline():
+    col = _tree()
+    dl.set_deadline(301, datetime.date(2099, 1, 1))
+    col.decks.decks[306] = {"id": 306, "name": "Bio::Exam 1::09 Practice", "conf": 1}
+    dl.refresh_all(force=True)
+    st = _state_now()
+    assert st["306"]["date"] == "2099-01-01" and st["306"]["inherited_from"] == 301
+    assert _max_ivl(col, 306) < 36500
+
+
+def test_raising_the_parents_limit_follows_inherited_subdecks():
+    col = _tree()
+    dl.set_deadline(301, datetime.date(2099, 1, 1))
+    assert dl.set_new_per_day(301, 36)
+    assert col.decks.decks[302]["newLimit"] == 36
+    assert col.decks.decks[304]["newLimit"] == 36
+    assert col.decks.decks[305].get("newLimit") is None
 
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
