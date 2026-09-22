@@ -294,6 +294,15 @@
     container.appendChild(wrap);
     var btn = wrap.querySelector("#" + idBase + "-btn");
     var popover = wrap.querySelector("#" + idBase + "-popover");
+    // A toolbar button that takes focus on mousedown blurs the field, and
+    // the text selection the control is about to act on goes with it —
+    // "when I highlight text and click increase text size the text
+    // deselects". Buttons never need focus here; text inputs inside a
+    // popover do, so only buttons are exempted.
+    btn.addEventListener("mousedown", function (e) { e.preventDefault(); });
+    popover.addEventListener("mousedown", function (e) {
+      if (e.target.closest && e.target.closest("button")) e.preventDefault();
+    });
     var api = {
       close: function () {
         popover.hidden = true;
@@ -861,6 +870,25 @@
     if (drag) changed(drag.field);
     drag = null;
   }
+  function deleteSelectedImage() {
+    var img = resolveImage();
+    if (!img) { hideSelection(); return; }
+    var field = fieldFor(img);
+    if (!field) { hideSelection(); return; }
+    hideSelection();
+    field.focus({ preventScroll: true });
+    var removed = false;
+    try {
+      // Through the browser's own delete so it lands on the undo stack.
+      var sel = selectionFor(field), range = document.createRange();
+      range.selectNode(img);
+      sel.removeAllRanges(); sel.addRange(range);
+      removed = document.execCommand("delete") && !img.isConnected;
+    } catch (_) {}
+    if (!removed && img.isConnected) img.remove();
+    changed(field);
+    rememberSelection(field);
+  }
   function showMenu(event, img) {
     selectImage(img);
     if (!menu || !menu.isConnected) {
@@ -1029,8 +1057,26 @@
         // Escape cancels the crop, never the surrounding inline edit session.
         e.stopImmediatePropagation();
         if (e.key === "Escape") { e.preventDefault(); closeCrop(); }
-      } else if (e.key === "Escape" && menu && !menu.hidden) {
+        return;
+      }
+      if (e.key === "Escape" && menu && !menu.hidden) {
         e.preventDefault(); e.stopImmediatePropagation(); menu.hidden = true;
+        return;
+      }
+      if (!selected || (selectionBox && selectionBox.hidden)) return;
+      var target = targetOf(e), tag = target && target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "Backspace" || e.key === "Delete") {
+        // Clicking an image selects it (the handles) without putting a
+        // caret anywhere, so the browser has nothing to delete on its own.
+        e.preventDefault(); e.stopImmediatePropagation();
+        deleteSelectedImage();
+      } else if (e.key === "Escape") {
+        hideSelection();
+      } else if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) {
+        // Typing means the caret is where the action is; drop a stale
+        // image selection so a later Backspace edits text, not the image.
+        hideSelection();
       }
     }, true);
     window.addEventListener("scroll", function () { if (selected) positionSelection(); }, true);
