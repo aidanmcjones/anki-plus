@@ -78,3 +78,5 @@ containing one JSON object, exactly this shape:
 ```
 
 Style rule: never use em dashes anywhere you write (code comments, commit messages, docs, summaries). Use a comma, a colon, or a new sentence instead.
+
+Pull requests: never open a pull request (no `gh pr create`, no PR via the API). Push your fix branch only; the maintainer lands it on the one open PR for the base branch.

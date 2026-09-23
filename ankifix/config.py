@@ -154,6 +154,7 @@ class Config:
     app_disallowed_tools: List[str] = field(
         default_factory=lambda: [
             "Bash(git push --force*)", "Bash(git push -f*)",
+            "Bash(gh pr create*)", "Bash(gh pr *)", "Bash(gh api*)",
             "Bash(git checkout {base}*)", "Bash(git switch {base}*)",
             "Bash(git worktree*)", "Bash(git reset --hard*)",
             "Bash(make*)", "Bash(open*)", "Bash(pkill*)", "Bash(killall*)",
