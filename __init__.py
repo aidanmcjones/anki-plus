@@ -4758,10 +4758,11 @@ except Exception as _e:
 
 
 # macOS full screen: the auto-hidden "Anki+" title bar slides down over the
-# content when the cursor touches the top edge. fullscreen_inset pushes the
-# main window's content down by the bar's height while it is revealed, so
-# the sidebar wordmark and the top of the page stay visible. Needs `mw`
-# shown, so it attaches on main_window_did_init.
+# content when the cursor touches the top edge. fullscreen_inset reserves a
+# constant strip of that height at the top while the window is full screen
+# (set once on entering, removed once on leaving), so the bar reveals over
+# the strip instead of the sidebar wordmark and the top of the page. It
+# never reacts to the reveal itself. Attaches on main_window_did_init.
 try:
     from . import fullscreen_inset as _fullscreen_inset
 

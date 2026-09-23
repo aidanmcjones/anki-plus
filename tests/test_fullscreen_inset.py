@@ -1,14 +1,22 @@
-"""Regression tests for fullscreen_inset.py: in macOS full screen, the
-window's title bar ("Anki+") slides down over the content whenever the
-cursor reaches the top edge. Stock Qt leaves the content where it is, so the
-bar covers the sidebar wordmark and whatever sits at the top of the page.
-The add-on must push the content down by the bar's height while it is
-revealed, and pull it back up once the bar retracts.
+"""Regression tests for fullscreen_inset.py.
+
+Ticket 20260922-232122: in macOS full screen the hidden "Anki+" title bar
+slides down over the sidebar wordmark and the top of the page when the
+cursor touches the top edge.
+
+Ticket 20260923-102004: the first fix polled the cursor every 40 ms and
+moved the content down while the bar was out. That relayout under the
+cursor made macOS retract the bar, the poll removed the inset, the bar
+revealed again: a flicker loop about twice a second.
+
+The fix reserves a constant strip in full screen instead: applied once on
+entering, removed once on leaving, and nothing in between. These tests
+assert there is no timer and no cursor read at all, and that the margin
+changes exactly once per state change, whatever the cursor does.
 
 Runs standalone (no Anki or PyQt install needed):
 `python3 tests/test_fullscreen_inset.py`. `aqt` is stubbed with a small
-fake Qt: a main window with geometry, a screen, a cursor, and a timer that
-fires on demand.
+fake Qt whose QTimer and QCursor record any use.
 """
 
 import os
@@ -100,45 +108,36 @@ class QObject:
 
 
 class QTimer:
-    """Manual timer: the test fires it by hand."""
-    instances = []
+    """Records every construction or start; the module must never use it."""
+    created = 0
+    started = 0
 
-    def __init__(self, parent=None):
-        self._interval = 0
-        self._cb = None
-        self.active = False
+    def __init__(self, *a, **k):
+        QTimer.created += 1
         self.timeout = self
-        QTimer.instances.append(self)
-
-    def setInterval(self, ms):
-        self._interval = ms
-
-    def setTimerType(self, *a):
-        pass
 
     def connect(self, fn):
-        self._cb = fn
+        pass
 
-    def start(self):
-        self.active = True
+    def setInterval(self, ms):
+        pass
 
-    def stop(self):
-        self.active = False
+    def start(self, *a):
+        QTimer.started += 1
 
-    def isActive(self):
-        return self.active
-
-    def fire(self):
-        assert self.active, "timer fired while stopped"
-        self._cb()
+    @staticmethod
+    def singleShot(*a, **k):
+        QTimer.started += 1
 
 
 class QCursor:
-    _pos = _Point(500, 500)
+    """Records every read of the cursor position."""
+    reads = 0
 
     @classmethod
     def pos(cls):
-        return cls._pos
+        QCursor.reads += 1
+        return _Point(800, 0)
 
 
 class QColor:
@@ -271,14 +270,17 @@ _stub(
 
 import fullscreen_inset  # noqa: E402
 
+_orig_paper = fullscreen_inset._paper_color
+
 
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
 
 def _boot(screen_w=1728, screen_h=1117, menubar_h=24, titlebar_h=28):
-    QTimer.instances.clear()
-    QCursor._pos = _Point(500, 500)
+    QTimer.created = QTimer.started = 0
+    QCursor.reads = 0
+    fullscreen_inset._controller = None
     screen = _Screen(screen_w, screen_h, menubar_h)
     win = FakeMainWindow(screen, titlebar_h=titlebar_h)
     ctl = fullscreen_inset.install(win)
@@ -289,87 +291,99 @@ def _boot(screen_w=1728, screen_h=1117, menubar_h=24, titlebar_h=28):
     return win, ctl
 
 
-def _poll(win, x, y):
-    QCursor._pos = _Point(x, y)
-    timers = [t for t in QTimer.instances if t.active]
-    assert timers, "no active poll timer while fullscreen"
-    for t in timers:
-        t.fire()
-    return win.margins[1]
+def _assert_no_polling():
+    assert QTimer.created == 0, "fullscreen_inset created a QTimer"
+    assert QTimer.started == 0, "fullscreen_inset started a timer"
+    assert QCursor.reads == 0, "fullscreen_inset read the cursor position"
+
+
+def _churn(win):
+    """Everything the old loop reacted to: the window keeps getting Resize,
+    Move, Paint and Show events while the bar reveals and retracts."""
+    for t in (QEvent.Type.Resize, QEvent.Type.Move, QEvent.Type.Paint,
+              QEvent.Type.Show, QEvent.Type.Resize):
+        win.event(QEvent(t))
 
 
 # --------------------------------------------------------------------------- #
-# The reported bug: cursor to the top edge in full screen, content stays put
+# Tests
 # --------------------------------------------------------------------------- #
 
-def test_fullscreen_reveal_pushes_content_down_by_bar_height():
-    win, _ = _boot(menubar_h=24, titlebar_h=28)
-    win.enter_fullscreen(content_h=1117)  # no notch: content spans the screen
-    assert win.margins[1] == 0
-    # Cursor hits the very top edge: macOS slides menu bar + title bar down.
-    assert _poll(win, 800, 0) == 24 + 28
-    # It stays down while the cursor sits anywhere on the revealed bars...
-    assert _poll(win, 800, 40) == 52
-    assert _poll(win, 800, 51) == 52
-    # ...and retracts once the cursor leaves them.
-    assert _poll(win, 800, 52) == 0
-    assert _poll(win, 800, 400) == 0
+def test_module_has_no_timer_or_cursor_poll():
+    src = open(os.path.join(ROOT, "fullscreen_inset.py")).read()
+    for bad in ("QTimer", "startTimer", "QCursor", "POLL_MS", "RevealTracker"):
+        assert bad not in src, f"{bad} is back in fullscreen_inset.py"
 
 
-def test_notched_display_only_the_title_bar_covers_content():
-    # 16in MacBook Pro: 1117pt tall, 37pt menu-bar strip beside the notch.
-    # A fullscreen window sits below the strip, so only the title bar
-    # (28pt) drops over the content when the bars reveal.
+def test_notched_display_inset_applied_once_on_enter_removed_once_on_exit():
+    # 16in MacBook Pro: 37pt menu-bar strip beside the notch, so only the
+    # 28pt title bar can drop over the content.
     win, _ = _boot(screen_h=1117, menubar_h=37, titlebar_h=28)
-    win.enter_fullscreen(content_h=1117 - 37)
-    assert _poll(win, 800, 0) == 28
-    assert _poll(win, 800, 60) == 28   # still over the title bar (37..65)
-    assert _poll(win, 800, 65) == 0
-
-
-def test_approaching_without_touching_the_edge_does_nothing():
-    win, _ = _boot()
-    win.enter_fullscreen(content_h=1117)
-    assert _poll(win, 800, 5) == 0
-    assert _poll(win, 800, 1) == 0
-
-
-def test_cursor_on_another_screen_retracts():
-    win, _ = _boot(screen_w=1728)
-    win.enter_fullscreen(content_h=1117)
-    assert _poll(win, 800, 0) == 52
-    assert _poll(win, 2500, 0) == 0   # x outside this screen
-
-
-def test_leaving_fullscreen_clears_inset_and_stops_polling():
-    win, _ = _boot()
-    win.enter_fullscreen(content_h=1117)
-    assert _poll(win, 800, 0) == 52
-    win.leave_fullscreen()
-    assert win.margins[1] == 0
-    assert not any(t.active for t in QTimer.instances)
-    # Windowed: no timer, no margin, whatever the cursor does.
-    QCursor._pos = _Point(800, 0)
-    assert win.margins[1] == 0
-
-
-def test_windowed_never_polls():
-    win, _ = _boot()
-    assert not any(t.active for t in QTimer.instances)
     assert win.margin_calls == []
+    win.enter_fullscreen(content_h=1117 - 37)
+    assert win.margin_calls == [(0, 28, 0, 0)]
+    _churn(win)
+    # A repeated state-change notification in the same state is a no-op.
+    win.event(QEvent(QEvent.Type.WindowStateChange))
+    assert win.margin_calls == [(0, 28, 0, 0)]
+    win.leave_fullscreen()
+    assert win.margin_calls == [(0, 28, 0, 0), (0, 0, 0, 0)]
+    _churn(win)
+    win.event(QEvent(QEvent.Type.WindowStateChange))
+    assert win.margin_calls == [(0, 28, 0, 0), (0, 0, 0, 0)]
+    _assert_no_polling()
+
+
+def test_full_screen_without_notch_reserves_menu_and_title_bar():
+    win, _ = _boot(menubar_h=24, titlebar_h=28)
+    win.enter_fullscreen(content_h=1117)
+    assert win.margin_calls == [(0, 52, 0, 0)]
+    _churn(win)
+    assert win.margin_calls == [(0, 52, 0, 0)]
+    _assert_no_polling()
+
+
+def test_reveal_cannot_move_content():
+    # Simulate many reveal/retract cycles: whatever Qt events the reveal
+    # produces, the margin never changes while the window stays full screen.
+    win, _ = _boot(menubar_h=37)
+    win.enter_fullscreen(content_h=1080)
+    for _ in range(50):
+        _churn(win)
+    assert win.margin_calls == [(0, 28, 0, 0)]
+    _assert_no_polling()
+
+
+def test_strip_painted_in_paper_then_palette_restored():
+    win, _ = _boot(menubar_h=37)
+    orig = dict(win.palette().colors)
+    fullscreen_inset._paper_color = lambda: QColor("#123456")
+    try:
+        win.enter_fullscreen(content_h=1080)
+        assert win.palette().color(QPalette.ColorRole.Window).s == "#123456"
+        win.leave_fullscreen()
+        assert win.palette().colors == orig
+    finally:
+        fullscreen_inset._paper_color = _orig_paper
+
+
+def test_windowed_never_touches_margins():
+    win, _ = _boot()
+    _churn(win)
+    assert win.margin_calls == []
+    _assert_no_polling()
 
 
 def test_titlebar_height_is_measured_from_the_windowed_frame():
-    # A 22pt title bar (older look / different scale) must be honoured.
-    win, _ = _boot(menubar_h=24, titlebar_h=22)
-    win.enter_fullscreen(content_h=1117)
-    assert _poll(win, 800, 0) == 46
+    win, _ = _boot(menubar_h=37, titlebar_h=22)
+    win.enter_fullscreen(content_h=1080)
+    assert win.margin_calls == [(0, 22, 0, 0)]
 
 
 def test_config_off_installs_nothing():
     _AddonManager.cfg = {"fullscreen_bar_inset": False}
     try:
-        QTimer.instances.clear()
+        fullscreen_inset._controller = None
         screen = _Screen(1728, 1117, 24)
         win = FakeMainWindow(screen)
         ctl = fullscreen_inset.install(win)
@@ -379,20 +393,11 @@ def test_config_off_installs_nothing():
         _AddonManager.cfg = {}
 
 
-def test_reveal_tracker_pure_logic():
-    T = fullscreen_inset.RevealTracker
-    t = T(titlebar_h=28, menubar_h=24, menubar_over_content=True)
-    assert t.step(10) == 0
-    assert t.step(0) == 52
-    assert t.step(30) == 52
-    assert t.step(52) == 0
-    t2 = T(titlebar_h=28, menubar_h=37, menubar_over_content=False)
-    assert t2.step(0) == 28
-    assert t2.step(64) == 28
-    assert t2.step(65) == 0
-    # A cursor that is nowhere (other screen) always retracts.
-    t2.step(0)
-    assert t2.step(None) == 0
+def test_inset_pure_logic():
+    f = fullscreen_inset.fullscreen_inset
+    assert f(28, 37, False) == 28
+    assert f(28, 24, True) == 52
+    assert f(-5, 24, False) == 0
 
 
 if __name__ == "__main__":
