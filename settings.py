@@ -801,6 +801,10 @@ class AnkiDesignSettingsPage(QWidget):
         # Strong refs to button groups created in _build; Qt will drop
         # exclusivity if the group goes out of scope.
         self._radio_groups: List[QButtonGroup] = []
+        # config key -> callable(value) that checks that option in the
+        # matching _radio_row, as if clicked. Lets a dependent picker (the
+        # Scene / Nature-video choosers) switch Backdrop to its own mode.
+        self._radio_setters: Dict[str, Any] = {}
         self._build()
         self._apply_styles()
 
@@ -975,57 +979,7 @@ class AnkiDesignSettingsPage(QWidget):
             "Page colour in dark mode.",
         ))
 
-        # Backdrop — what sits behind the deck list and overview. Built
-        # bottom-up: the two dependent rows (scene picker, video picker +
-        # rotate interval) exist before the mode row so the mode row's
-        # on_change callback can enable/disable them by reference.
-        scene_row, _scene_combo = self._combo_row(
-            "scene", "shuffle",
-            [("shuffle", "Shuffle (all ten)")] + [
-                (name, name.capitalize())
-                for name in (
-                    "peaks", "dunes", "forest", "canyon", "lake",
-                    "volcano", "isles", "tundra", "spires", "ruins",
-                )
-            ],
-            "Scene",
-            "Which illustrated landscape shows when Backdrop is Scenes.",
-        )
-        video_section = self._video_selection_section()
-        rotate_row = self._duration_row(
-            "video_rotate_seconds", 300,
-            "Rotate video every",
-            "How often the nature-video backdrop crossfades to the next "
-            "clip. Values below 5 seconds are rounded up to 5 — anything "
-            "faster reads as a glitch rather than a change of scene — and "
-            "above 24 hours are capped at 24 hours. Choose “Never” to "
-            "loop a single clip without rotating.",
-        )
-
-        def _sync_backdrop_deps(mode: str) -> None:
-            scene_row.setEnabled(mode == "scene")
-            video_section.setEnabled(mode == "video")
-            rotate_row.setEnabled(mode == "video")
-
-        v.addWidget(self._radio_row(
-            "backdrop", "scene",
-            [
-                ("off", "Off"),
-                ("black", "Pure black"),
-                ("aurora", "Aurora"),
-                ("scene", "Scenes"),
-                ("video", "Nature video"),
-            ],
-            "Backdrop",
-            "What sits behind the deck list and overview. The reviewer "
-            "never gets one — motion behind a card you're recalling is a "
-            "distraction.",
-            on_change=_sync_backdrop_deps,
-        ))
-        _sync_backdrop_deps(self._g("backdrop", "scene"))
-        v.addWidget(scene_row)
-        v.addWidget(video_section)
-        v.addWidget(rotate_row)
+        self._add_backdrop_rows(v)
 
         def feature_row(key: str, label: str, default: bool, hint: str) -> QWidget:
             cb = QCheckBox(label)
@@ -1429,6 +1383,75 @@ class AnkiDesignSettingsPage(QWidget):
 
         outer.addWidget(footer)
 
+    def _add_backdrop_rows(self, v: QVBoxLayout) -> None:
+        """Backdrop — what sits behind the deck list and overview — plus
+        the rows that only matter in one of its modes: the Scene picker,
+        the Nature-video picker and the rotate interval.
+
+        The pickers are always live, whatever mode is active. They used to
+        be `setEnabled(False)` outside their own mode, but the page's
+        stylesheet gives a disabled dropdown or checkbox no distinct look,
+        so a user on Scenes who came to browse their nature library found
+        a dropdown that wouldn't open and a clip list that wouldn't scroll,
+        with nothing saying why. Instead, picking a scene or a clip
+        switches Backdrop to that mode — the same convention the
+        background rows use, where choosing a custom colour selects the
+        Custom radio — so a choice made here is never a dead action."""
+        scene_row, _scene_combo = self._combo_row(
+            "scene", "shuffle",
+            [("shuffle", "Shuffle (all ten)")] + [
+                (name, name.capitalize())
+                for name in (
+                    "peaks", "dunes", "forest", "canyon", "lake",
+                    "volcano", "isles", "tundra", "spires", "ruins",
+                )
+            ],
+            "Scene",
+            "Which illustrated landscape shows when Backdrop is Scenes. "
+            "Picking one switches Backdrop to Scenes.",
+            on_change=lambda _v: self._select_radio("backdrop", "scene"),
+        )
+        video_section = self._video_selection_section(
+            on_change=lambda: self._select_radio("backdrop", "video"),
+        )
+        rotate_row = self._duration_row(
+            "video_rotate_seconds", 300,
+            "Rotate video every",
+            "How often the nature-video backdrop crossfades to the next "
+            "clip. Values below 5 seconds are rounded up to 5 — anything "
+            "faster reads as a glitch rather than a change of scene — and "
+            "above 24 hours are capped at 24 hours. Choose “Never” to "
+            "loop a single clip without rotating.",
+        )
+
+        v.addWidget(self._radio_row(
+            "backdrop", "scene",
+            [
+                ("off", "Off"),
+                ("black", "Pure black"),
+                ("aurora", "Aurora"),
+                ("scene", "Scenes"),
+                ("video", "Nature video"),
+            ],
+            "Backdrop",
+            "What sits behind the deck list and overview. The reviewer "
+            "never gets one — motion behind a card you're recalling is a "
+            "distraction.",
+        ))
+        v.addWidget(scene_row)
+        v.addWidget(video_section)
+        v.addWidget(rotate_row)
+
+    def _select_radio(self, key: str, value: str) -> None:
+        """Check `value` in the `_radio_row` bound to config `key`, exactly
+        as if the user had clicked it: config is written and the row's
+        on_change runs. A no-op when it's already the checked option (Qt
+        emits no `toggled` for a checked button re-checked), so a picker
+        used in its own mode doesn't write config twice."""
+        setter = self._radio_setters.get(key)
+        if setter is not None:
+            setter(value)
+
     # ----- builders ----- #
     def _radio_row(self, key: str, default: str,
                    options: List[Tuple[str, str]],
@@ -1448,6 +1471,7 @@ class AnkiDesignSettingsPage(QWidget):
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(14)
         current = self._g(key, default)
+        buttons: Dict[str, QRadioButton] = {}
 
         def _choose(value: str) -> None:
             self._set(key, value)
@@ -1462,13 +1486,22 @@ class AnkiDesignSettingsPage(QWidget):
                 lambda checked, val=value: checked and _choose(val)
             )
             h.addWidget(rb)
+            buttons[value] = rb
         h.addStretch(1)
+
+        def _select(value: str) -> None:
+            rb = buttons.get(value)
+            if rb is not None and not rb.isChecked():
+                rb.setChecked(True)  # -> toggled -> _choose, like a click
+
+        self._radio_setters[key] = _select
         return _field_row(label, box, hint)
 
     def _combo_row(self, key: str, default: Any,
                     options: List[Tuple[Any, str]],
                     label: str, hint: Optional[str] = None,
-                    formatter: Optional[Any] = None) -> Tuple[QWidget, QComboBox]:
+                    formatter: Optional[Any] = None,
+                    on_change: Optional[Any] = None) -> Tuple[QWidget, QComboBox]:
         """QComboBox as a stacked field row. ``options`` is
         ``[(config_value, display_label), …]``. If the current config value
         isn't one of ``options`` (e.g. it names a video file that's since
@@ -1476,10 +1509,10 @@ class AnkiDesignSettingsPage(QWidget):
         opening Settings never silently rewrites it — only picking a
         different option does. Persistence is wired here, not left to the
         caller: `currentIndexChanged` writes straight to config on every
-        change. Returns ``(row, combo)`` so the caller can wire the row's
-        (not the combo's) enabled/disabled state against another field —
-        every current caller discards the combo half for exactly that
-        reason."""
+        change, then calls ``on_change(value)`` if given — for rows (like
+        Scene) that also need to nudge another field. Returns
+        ``(row, combo)`` so a caller can still get at the combo itself;
+        every current caller discards that half."""
         combo = QComboBox()
         current = self._g(key, default)
         values = [o[0] for o in options]
@@ -1491,9 +1524,14 @@ class AnkiDesignSettingsPage(QWidget):
             combo.addItem(opt_label, value)
         idx = combo.findData(current)
         combo.setCurrentIndex(idx if idx >= 0 else 0)
-        combo.currentIndexChanged.connect(
-            lambda _i, k=key, c=combo: self._set(k, c.currentData())
-        )
+
+        def _changed(_i: int) -> None:
+            value = combo.currentData()
+            self._set(key, value)
+            if on_change is not None:
+                on_change(value)
+
+        combo.currentIndexChanged.connect(_changed)
         return _field_row(label, combo, hint), combo
 
     def _duration_row(self, key: str, default: int, label: str,
@@ -1591,11 +1629,13 @@ class AnkiDesignSettingsPage(QWidget):
             options.append((entry["file"], entry.get("title") or entry["file"]))
         return options, "Which clip(s) play when Backdrop is Nature video."
 
-    def _video_selection_section(self) -> QWidget:
+    def _video_selection_section(self, on_change: Optional[Any] = None) -> QWidget:
         """Quick-pick combo (shuffle / one biome / one file) plus a
         scrollable checkbox list of every clip in the library, grouped
-        under biome headers. The two controls always agree with config
-        and with each other:
+        under biome headers. ``on_change``, if given, is called (no
+        arguments) after every user-driven config write from either
+        control — the Backdrop block uses it to switch to Nature video.
+        The two controls always agree with config and with each other:
 
         - Checking (or unchecking down to a non-empty subset of) any clip
           switches `video_selection` to the explicit `{"mode": "custom",
@@ -1652,7 +1692,8 @@ class AnkiDesignSettingsPage(QWidget):
 
         hint = QLabel(
             video_hint + " Check specific clips below to build an exact "
-            "rotation; picking an option above clears the checkboxes."
+            "rotation; picking an option above clears the checkboxes. "
+            "Either choice switches Backdrop to Nature video."
         )
         hint.setProperty("role", "hint")
         hint.setWordWrap(True)
@@ -1703,6 +1744,8 @@ class AnkiDesignSettingsPage(QWidget):
                 self._set("video_selection", "shuffle")
             combo.blockSignals(False)
             _sync_headers()
+            if on_change is not None:
+                on_change()
 
         def _bulk_set(members: List[QCheckBox], checked: bool) -> None:
             for cb in members:
@@ -1721,6 +1764,8 @@ class AnkiDesignSettingsPage(QWidget):
                 cb.blockSignals(False)
             _sync_headers()
             self._set("video_selection", value)
+            if on_change is not None:
+                on_change()
 
         for biome in _nature.biomes(videos):
             members = by_biome.get(biome, [])
