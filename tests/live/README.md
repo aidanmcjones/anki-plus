@@ -173,6 +173,14 @@ Rules for a good live test:
   becomes drag events and the release is eaten, as Qt's drag loop does),
   which is what makes the bug visible: on dfaefaa the sweep started a
   drag and selected nothing.
+- `test_sidebar_resize.py`: hover the left rail's right border with the
+  real mouse (a resize handle with a col-resize cursor must be there), then
+  drag it 80px right. Checks what the user sees: the rail widens with every
+  pointer move, the page content shifts by the same amount, the width is in
+  the add-on config (`sidebar_width`) and in `addcard.sidebar_w()`, it
+  survives a deck-list re-render and a collapse/expand round trip, and with
+  Browse open inline a drag on the edge moves the Qt overlay too. On
+  c7b48c1 (no handle, fixed 264px rail) every check fails.
 - Both Browse tests wait for the embed's opening curtain (a QFrame that
   covers the table for ~0.9 s) to drop before pressing; a press before
   that lands on the curtain and reaches nothing.

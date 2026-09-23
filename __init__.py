@@ -88,6 +88,31 @@ def _config() -> Dict[str, Any]:
     return mw.addonManager.getConfig(__name__) or {}
 
 
+def _addcard_mod():
+    """The addcard module, which owns the left rail's width arithmetic
+    (sidebar_w / sidebar_expanded_w / clamp_sidebar_w)."""
+    from . import addcard as _addcard
+    return _addcard
+
+
+def _reflow_embeds() -> None:
+    """Move any open inline overlay (Add/Browse/Settings/Stats) to the
+    rail's current width. Called right after the collapse state or the
+    user-dragged width is persisted, so the overlay doesn't sit at the old
+    offset until the next window resize corrects the gap."""
+    for mod in (
+        "addcard_embed", "browse_embed", "settings_embed", "stats_embed",
+    ):
+        try:
+            from importlib import import_module
+            _m = import_module("." + mod, __name__)
+            _reflow = getattr(_m, "reflow", None)
+            if _reflow is not None:
+                _reflow()
+        except Exception:
+            pass
+
+
 def _hero_mode(cfg: Optional[Dict[str, Any]] = None) -> bool:
     """True when the home page should show the single-deck hero: the user
     has exactly one top-level deck AND hasn't switched the hero off."""
@@ -801,6 +826,8 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             web_content.head += (
                 "<script>window.__baSidebarCollapsed = "
                 + _json.dumps(bool(cfg.get("sidebar_collapsed", False)))
+                + ";window.__baSidebarWidth = "
+                + _json.dumps(_addcard_mod().sidebar_expanded_w(cfg))
                 + ";</script>"
             )
         except Exception:
@@ -1738,17 +1765,20 @@ def _on_js_message(handled, message, context):
                 mw.addonManager.writeConfig(__name__, cfg2)
             except Exception:
                 pass
-            for mod in (
-                "addcard_embed", "browse_embed", "settings_embed", "stats_embed",
-            ):
-                try:
-                    from importlib import import_module
-                    _m = import_module("." + mod, __name__)
-                    _reflow = getattr(_m, "reflow", None)
-                    if _reflow is not None:
-                        _reflow()
-                except Exception:
-                    pass
+            _reflow_embeds()
+        elif cmd.startswith("sidebar-width:"):
+            # The user dragged the rail's right edge (sidebar.js sends one
+            # of these per gesture, on release). Persist the width the
+            # same way as the collapse state and move any open overlay to
+            # the new edge right away.
+            try:
+                width = _addcard_mod().clamp_sidebar_w(cmd[len("sidebar-width:"):])
+                cfg2 = mw.addonManager.getConfig(__name__) or {}
+                cfg2["sidebar_width"] = width
+                mw.addonManager.writeConfig(__name__, cfg2)
+            except Exception:
+                pass
+            _reflow_embeds()
         elif cmd == "website":
             try:
                 from aqt.utils import openLink
@@ -3577,6 +3607,8 @@ def on_webview_did_inject_style_into_page(webview) -> None:
             f"window.__baOpts={_json.dumps(_js_opts(cfg))};"
             f"window.__baSidebarCollapsed="
             f"{_json.dumps(bool(cfg.get('sidebar_collapsed', False)))};"
+            f"window.__baSidebarWidth="
+            f"{_json.dumps(_addcard_mod().sidebar_expanded_w(cfg))};"
         )
         webview.eval(theme_attr + seed + accent_style + css_inject + js_inject)
     except Exception:

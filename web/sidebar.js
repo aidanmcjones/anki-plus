@@ -465,6 +465,8 @@
     document.documentElement.setAttribute(
       "data-ba-sidebar", collapsedState ? "collapsed" : ""
     );
+    // The user's chosen width only applies while expanded (see stampWidth).
+    stampWidth();
     var btn = document.querySelector(".ba-side-collapse-btn");
     if (btn) {
       btn.setAttribute(
@@ -481,6 +483,78 @@
   window.__baSetSidebarCollapsed = function (collapsed) {
     applyCollapsed(collapsed, { silent: true });
   };
+
+  // ---- width (drag the right edge) ----------------------------------- //
+  // The user's chosen expanded width, in px. It rides on the same
+  // `--rf-side-w` custom property the collapse state swings, set inline on
+  // <html> so it wins over theme.css's 264px default; the inline value is
+  // removed while collapsed so the 64px rule can take over, and put back on
+  // expand. Python persists it as `sidebar_width` (see addcard.sidebar_w(),
+  // which the Qt overlays read, and the ba:sidebar-width pycmd handler).
+  var SIDE_W_DEFAULT = 264, SIDE_W_MIN = 200, SIDE_W_MAX = 480;
+  function clampWidth(px) {
+    px = Math.round(Number(px));
+    if (!isFinite(px)) return SIDE_W_DEFAULT;
+    return Math.max(SIDE_W_MIN, Math.min(SIDE_W_MAX, px));
+  }
+  var widthState = clampWidth(
+    (typeof window.__baSidebarWidth === "number") ? window.__baSidebarWidth
+                                                  : SIDE_W_DEFAULT);
+  function stampWidth() {
+    var root = document.documentElement;
+    if (collapsedState) root.style.removeProperty("--rf-side-w");
+    else root.style.setProperty("--rf-side-w", widthState + "px");
+  }
+  function applyWidth(px, opts) {
+    widthState = clampWidth(px);
+    stampWidth();
+    if (!opts || !opts.silent) send("sidebar-width:" + widthState);
+  }
+  window.__baSetSidebarWidth = function (px) { applyWidth(px, { silent: true }); };
+
+  // A thin fixed strip straddling the rail's right border. It sits beside
+  // the aside (not inside it) so the aside's overflow clipping can't hide
+  // it, and its `left` is driven by `--rf-side-w` so it tracks the edge
+  // through collapse and resize alike. sidebar.css shows a highlight on
+  // hover and hides it while collapsed. Plain mouse events: a real drag
+  // and a Qt-synthesised one both arrive as those.
+  function makeResizer() {
+    var h = document.createElement("div");
+    h.className = "ba-side-resizer";
+    h.setAttribute("role", "separator");
+    h.setAttribute("aria-orientation", "vertical");
+    h.setAttribute("aria-label", "Resize sidebar");
+    h.title = "Drag to resize";
+    var startX = 0, startW = 0;
+    function onMove(e) {
+      applyWidth(startW + (e.clientX - startX), { silent: true });
+      e.preventDefault();
+    }
+    function onUp(e) {
+      document.removeEventListener("mousemove", onMove, true);
+      document.removeEventListener("mouseup", onUp, true);
+      document.documentElement.removeAttribute("data-ba-resizing");
+      h.classList.remove("ba-side-resizer--active");
+      // One persist per gesture: the live moves were silent.
+      applyWidth(startW + (e.clientX - startX));
+    }
+    h.addEventListener("mousedown", function (e) {
+      if (e.button !== 0 || collapsedState) return;
+      e.preventDefault();
+      startX = e.clientX;
+      startW = widthState;
+      // Kills the width/padding transitions for the duration so the rail
+      // sticks to the pointer instead of easing after it.
+      document.documentElement.setAttribute("data-ba-resizing", "");
+      h.classList.add("ba-side-resizer--active");
+      document.addEventListener("mousemove", onMove, true);
+      document.addEventListener("mouseup", onUp, true);
+    });
+    h.addEventListener("dblclick", function () {
+      if (!collapsedState) applyWidth(SIDE_W_DEFAULT);
+    });
+    return h;
+  }
   // The sync row drives a small state machine:
   //
   //   idle  ──click──▶  active  ──result(ok)──▶  reveal-ok   ──▶  idle
@@ -555,6 +629,9 @@
     if (document.querySelector(".ba-side")) return;
     var aside = build();
     document.body.insertBefore(aside, document.body.firstChild || null);
+    var old = document.querySelector(".ba-side-resizer");
+    if (old) old.parentNode.removeChild(old);
+    document.body.insertBefore(makeResizer(), aside.nextSibling);
     document.body.classList.add("ba-with-side");
     if (pending.standing) applyStanding(pending.standing);
     if (pending.active)   applyActive(pending.active);
@@ -604,6 +681,10 @@
   try {
     if (window.__baSidebarCollapsed) {
       document.documentElement.setAttribute("data-ba-sidebar", "collapsed");
+    } else {
+      // Same for a user-chosen width: stamp it inline now so the first
+      // paint already has the page padded to the rail the user left.
+      document.documentElement.style.setProperty("--rf-side-w", widthState + "px");
     }
   } catch (e) {}
 

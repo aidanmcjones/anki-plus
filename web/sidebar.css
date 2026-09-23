@@ -47,6 +47,56 @@ body.ba-with-side {
   min-width: 0;
 }
 
+/* ---------------------------- RESIZE HANDLE ----------------------------
+   A 10px strip straddling the rail's right border (sidebar.js builds it as
+   a sibling of the aside). Invisible until hovered, then a 2px accent line
+   on the border tells the user the edge can be dragged. `left` follows
+   --rf-side-w so the handle rides the edge during a collapse animation and
+   while a drag moves it. Collapsed rails are icons-only and fixed at 64px,
+   so the handle is hidden there. */
+.ba-side-resizer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--rf-side-w, 264px) - 5px);
+  width: 10px;
+  cursor: col-resize;
+  z-index: 51;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: left 200ms cubic-bezier(.2, .8, .2, 1);
+}
+.ba-side-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  background: var(--rf-accent, #6c8cff);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.ba-side-resizer:hover::after,
+.ba-side-resizer--active::after {
+  opacity: 1;
+}
+:root[data-ba-sidebar="collapsed"] .ba-side-resizer {
+  display: none;
+}
+/* While a drag is live the rail must stick to the pointer, not ease after
+   it, and the page must not start a text selection under the moving mouse. */
+:root[data-ba-resizing] body.ba-with-side,
+:root[data-ba-resizing] .ba-side,
+:root[data-ba-resizing] .ba-side-resizer {
+  transition: none !important;
+}
+:root[data-ba-resizing] body {
+  cursor: col-resize;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 /* Shared rule for between-section breaks. */
 .ba-side-head,
 .ba-side-totals,

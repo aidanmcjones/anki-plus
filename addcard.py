@@ -101,12 +101,34 @@ def _config() -> Dict[str, Any]:
 # agree on which width is in effect.
 SIDEBAR_EXPANDED_W = 264
 SIDEBAR_COLLAPSED_W = 64
+# The expanded rail is user-resizable by dragging its right edge
+# (web/sidebar.js); `sidebar_width` in the config remembers the result.
+# Same bounds as the JS side, so a hand-edited config can't produce a rail
+# the page would refuse to draw.
+SIDEBAR_MIN_W = 200
+SIDEBAR_MAX_W = 480
+
+
+def clamp_sidebar_w(value: Any) -> int:
+    """`sidebar_width` as the page will actually honour it."""
+    try:
+        px = int(round(float(value)))
+    except (TypeError, ValueError):
+        return SIDEBAR_EXPANDED_W
+    return max(SIDEBAR_MIN_W, min(SIDEBAR_MAX_W, px))
+
+
+def sidebar_expanded_w(cfg: Optional[Dict[str, Any]] = None) -> int:
+    """The width the rail takes when expanded: the user's choice, or 264."""
+    cfg = cfg if cfg is not None else _config()
+    return clamp_sidebar_w(cfg.get("sidebar_width", SIDEBAR_EXPANDED_W))
 
 
 def sidebar_w(cfg: Optional[Dict[str, Any]] = None) -> int:
-    """Current left-rail width in px, from the persisted collapse state."""
+    """Current left-rail width in px, from the persisted collapse state and
+    the persisted user width."""
     cfg = cfg if cfg is not None else _config()
-    return SIDEBAR_COLLAPSED_W if cfg.get("sidebar_collapsed") else SIDEBAR_EXPANDED_W
+    return SIDEBAR_COLLAPSED_W if cfg.get("sidebar_collapsed") else sidebar_expanded_w(cfg)
 
 
 # --------------------------------------------------------------------------- #

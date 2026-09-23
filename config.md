@@ -93,6 +93,9 @@ in this file are the raw form the settings page writes.
   by the chevron next to the anki+ wordmark (collapsed = icons-only, 64px
   wide; expanded = 264px), not meant to be hand-edited — this just
   remembers what you last left it as, including across restarts.
+- **sidebar_width**: the expanded rail's width in px (200 to 480, default
+  264). Set by dragging the rail's right edge (double-click the edge to go
+  back to 264); like `sidebar_collapsed`, it just remembers what you did.
 - **show_today** — the today panel (cards · minutes + per-hour bars).
 - **show_streak** — the streak counter above the heatmap.
 - **show_heatmap**, **heatmap_weeks**, **heatmap_palette** — the review
