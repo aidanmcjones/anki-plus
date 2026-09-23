@@ -53,6 +53,7 @@
   "restyle_browse_editor": true,
   "congrats_redesign": true,
   "silent_sync": true,
+  "fullscreen_bar_inset": true,
   "font_serif": "",
   "font_sans": "",
   "sidebar_collapsed": false,

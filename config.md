@@ -245,6 +245,12 @@ in this file are the raw form the settings page writes.
   stock Add window.
 - **congrats_redesign** — the redesigned finished-deck page.
 - **silent_sync** — sync progress in the sidebar instead of a dialog.
+- **fullscreen_bar_inset** — in macOS full screen, the hidden "Anki+" title
+  bar slides down over the content when the cursor touches the top of the
+  screen. With this on, the content moves down by the bar's height while
+  the bar is revealed and back up once it retracts, so nothing at the top
+  of the page is covered. `false` leaves the content where it is, as stock
+  Anki does.
 
 ## Browse
 - **browse_restyle** — paint the Browser's Qt chrome (card table, column

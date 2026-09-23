@@ -4545,6 +4545,24 @@ except Exception as _e:
         pass
 
 
+# macOS full screen: the auto-hidden "Anki+" title bar slides down over the
+# content when the cursor touches the top edge. fullscreen_inset pushes the
+# main window's content down by the bar's height while it is revealed, so
+# the sidebar wordmark and the top of the page stay visible. Needs `mw`
+# shown, so it attaches on main_window_did_init.
+try:
+    from . import fullscreen_inset as _fullscreen_inset
+
+    gui_hooks.main_window_did_init.append(
+        lambda *a: _fullscreen_inset.install(mw)
+    )
+except Exception as _e:
+    try:
+        print(f"[anki-design] fullscreen_inset install failed: {_e}", flush=True)
+    except Exception:
+        pass
+
+
 # --------------------------------------------------------------------------- #
 # Dev hot-reload — web/ assets only, enabled by `make dev` (a .devmode file).
 #
