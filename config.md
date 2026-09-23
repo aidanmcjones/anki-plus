@@ -108,7 +108,18 @@ in this file are the raw form the settings page writes.
   state (Anki's synced flag), `"expanded"` opens everything on launch,
   `"collapsed"` closes every parent on launch.
 - **deck_drag_move** — drag a deck onto another to nest it (or onto the
-  top-level zone). "Move to…" in the deck menu is always available.
+  top-level zone). "Move to…" in the deck menu is always available. Drop
+  a deck on the top or bottom **edge** of a sibling instead to resort the
+  group: it lands just above or below that deck, so the top edge of the
+  first sibling puts it first and the bottom edge of the last puts it
+  last. An accent line shows where it will land; the middle of a row still
+  nests.
+- **deck_order** — the sort order those edge drops produce, keyed by
+  parent deck id (`"0"` for the top level) with the child ids in order.
+  Anki itself only sorts decks by name, so this lives here rather than in
+  the collection. Decks not in a list (new ones, or ones moved in from
+  another parent) follow the ranked ones in name order; ids that no longer
+  sit under that parent are ignored. Not meant to be hand-edited.
 - **deck_subsections** — **New subsection…** on a deck's menu, both on the
   deck list (the gear) and in the Browse sidebar (right-click). Name a
   heading — "Exam 1 Content" — and tick the sub-decks that belong under

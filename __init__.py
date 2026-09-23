@@ -1854,6 +1854,8 @@ def _on_js_message(handled, message, context):
                     _set_deck_collapsed(did, extra)
                 elif action == "reparent" and extra is not None:
                     _reparent_deck(did, extra)
+                elif action == "reorder" and extra is not None:
+                    _reorder_deck(did, extra)
                 elif action == "options":
                     try:
                         from aqt.deckoptions import display_options_for_deck_id
@@ -3050,6 +3052,120 @@ def _finished_deck_stats(did: int) -> Dict[str, Any]:
     return out
 
 
+# ---- Custom deck order -----------------------------------------------------
+# Anki sorts sibling decks by name and has no sort field, so "put this deck
+# at the top" has nowhere to live in the collection. The add-on keeps its
+# own order in its config: `deck_order` maps a parent deck id ("0" for the
+# top level) to the list of child ids in the order the user dragged them
+# into. Ranked siblings come first, in that order; anything not in the list
+# (a new deck, one moved in from elsewhere) follows in Anki's alphabetical
+# order. Ids that no longer sit under that parent are ignored, so a deleted
+# or reparented deck never breaks the list.
+DECK_ORDER_KEY = "deck_order"
+
+
+def _deck_order_state(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, list]:
+    cfg = cfg if cfg is not None else _config()
+    raw = cfg.get(DECK_ORDER_KEY)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _apply_deck_order(kids: list, ranked: Any, did_of: Any = None) -> list:
+    """Sort one sibling group: `ranked` (a list of deck ids) first, in that
+    order, then the rest in their incoming order. Stable, so Anki's
+    alphabetical order survives among the unranked."""
+    if did_of is None:
+        did_of = lambda n: int(getattr(n, "deck_id", 0) or 0)
+    rank: Dict[int, int] = {}
+    for i, d in enumerate(ranked or []):
+        try:
+            rank.setdefault(int(d), i)
+        except (TypeError, ValueError):
+            continue
+    if not rank:
+        return list(kids)
+    tail = len(rank)
+    indexed = list(enumerate(kids))
+    indexed.sort(key=lambda p: (rank.get(did_of(p[1]), tail), p[0]))
+    return [k for _, k in indexed]
+
+
+def _ordered_children(node: Any, order: Dict[str, list]) -> list:
+    """A tree node's children in display order (see DECK_ORDER_KEY)."""
+    kids = list(getattr(node, "children", []) or [])
+    did = int(getattr(node, "deck_id", 0) or 0)
+    return _apply_deck_order(kids, order.get(str(did)))
+
+
+def _reordered_siblings(order: list, src: int, target: int, where: str):
+    """Move `src` to sit just before/after `target` in a sibling list.
+    Returns the new list, or None when the move makes no sense (either id
+    missing from the group, the deck dropped on itself, or an unknown
+    position)."""
+    if where not in ("before", "after") or src == target:
+        return None
+    if src not in order or target not in order:
+        return None
+    out = [d for d in order if d != src]
+    at = out.index(target) + (1 if where == "after" else 0)
+    out.insert(at, src)
+    return out
+
+
+def _sibling_group(did: int):
+    """(parent did, [sibling dids in display order]) for a deck, or None."""
+    order = _deck_order_state()
+
+    def walk(node):
+        kids = _ordered_children(node, order)
+        ids = [int(getattr(k, "deck_id", 0) or 0) for k in kids]
+        if did in ids:
+            return int(getattr(node, "deck_id", 0) or 0), ids
+        for k in kids:
+            found = walk(k)
+            if found:
+                return found
+        return None
+
+    try:
+        return walk(mw.col.sched.deck_due_tree())
+    except Exception:
+        return None
+
+
+def _reorder_deck(did: int, extra: Any) -> None:
+    """`ba:deck:reorder:<did>:<target>:<before|after>` from the deck list:
+    drop a deck on the top or bottom edge of a sibling to resort the group.
+    Writes the whole sibling order to the add-on config so the next render
+    (and every one after it) shows the new order."""
+    try:
+        target_raw, where = str(extra).split(":", 1)
+        target = int(target_raw.strip())
+        where = where.strip()
+    except Exception:
+        return
+    group = _sibling_group(did)
+    if not group or target not in group[1]:
+        return
+    parent, order = group
+    new_order = _reordered_siblings(order, did, target, where)
+    if new_order is None:
+        return
+    try:
+        cfg = _config()
+        state = _deck_order_state(cfg)
+        state[str(parent)] = new_order
+        cfg[DECK_ORDER_KEY] = state
+        mw.addonManager.writeConfig(__name__, cfg)
+    except Exception:
+        return
+    try:
+        if getattr(mw, "state", "") == "deckBrowser":
+            mw.deckBrowser.refresh()
+    except Exception:
+        pass
+
+
 def _full_deck_tree_payload() -> list:
     """Flat list of EVERY deck (top + descendants), tagged with depth and
     counts. Used to render the home-page deck list with the same JS render
@@ -3058,6 +3174,7 @@ def _full_deck_tree_payload() -> list:
     out: list = []
     try:
         tree = mw.col.sched.deck_due_tree()
+        order = _deck_order_state()
         try:
             current_did = int(mw.col.decks.get_current_id())
         except Exception:
@@ -3078,7 +3195,7 @@ def _full_deck_tree_payload() -> list:
             n = int(getattr(node, "new_count", 0) or 0)
             l = int(getattr(node, "learn_count", 0) or 0)
             r = int(getattr(node, "review_count", 0) or 0)
-            kids = list(getattr(node, "children", []) or [])
+            kids = _ordered_children(node, order)
             kid_rows: list = []
             for c in kids:
                 kid_rows.extend(visit(c, depth + 1))
@@ -3127,6 +3244,7 @@ def _filtered_deck_tree(exclude_did: int) -> list:
     try:
         exclude = set(int(x) for x in _deck_and_descendant_ids(int(exclude_did)))
         tree = mw.col.sched.deck_due_tree()
+        order = _deck_order_state()
 
         def visit(node, depth):
             did = int(getattr(node, "deck_id", 0) or 0)
@@ -3136,7 +3254,7 @@ def _filtered_deck_tree(exclude_did: int) -> list:
             # Sum descendant work so a parent with empty self but stocked kids
             # still surfaces as a row (we still show kids individually).
             sub_total = n + l + r
-            kids = list(getattr(node, "children", []) or [])
+            kids = _ordered_children(node, order)
             kid_rows: list = []
             for c in kids:
                 kid_rows.extend(visit(c, depth + 1))
