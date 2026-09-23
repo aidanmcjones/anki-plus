@@ -15,7 +15,13 @@ Covered here:
   (e) a webview that can't be evaluated (no #qa page reachable) still
       writes a ticket — capture degrades to nulls/empties, nothing raises;
   (f) index.md accumulates one row per ticket, with pipe characters in the
-      note escaped.
+      note escaped;
+  (g) a webview that never calls back (the renderer crashed and the window
+      went grey, ticket 20260923-153047) does not hang the report: the Qt
+      screenshot is taken first, the capture times out after 3 s, and the
+      ticket is filed with capture.note "webview unresponsive"; a late
+      callback after that changes nothing, and a timer that fires after a
+      normal capture changes nothing either.
 
 Runs standalone (no Anki install needed):
 `python3 tests/test_bug_report.py`. Stubs aqt before import, same approach
@@ -80,6 +86,38 @@ class _FakeWebview:
         if self.raises:
             raise RuntimeError("webview gone")
         cb(self.payload)
+
+
+class _SilentWebview:
+    """A dead renderer: evalWithCallback is accepted and never answered.
+    `answer()` delivers the callback late, as a recovered page might."""
+
+    def __init__(self):
+        self.calls = 0
+        self.cb = None
+
+    def evalWithCallback(self, js, cb):
+        self.calls += 1
+        self.cb = cb
+
+    def answer(self, payload):
+        if self.cb:
+            self.cb(payload)
+
+
+class _FakeTimers:
+    """Collects _schedule(ms, fn) calls so a test can fire them."""
+
+    def __init__(self):
+        self.pending = []
+
+    def __call__(self, ms, fn):
+        self.pending.append((ms, fn))
+
+    def fire_all(self):
+        pending, self.pending = self.pending, []
+        for _ms, fn in pending:
+            fn()
 
 
 class _FakeCard:
@@ -287,6 +325,68 @@ def test_unreachable_webview_still_writes_a_ticket():
     assert capture["console_errors"] == []
     if ankibug_schema is not None:
         ankibug_schema.validate(ticket)
+    shutil.rmtree(tdir, ignore_errors=True)
+
+
+def test_dead_webview_times_out_and_still_files_the_ticket():
+    tdir = _tmp_tickets_dir()
+    web = _SilentWebview()
+    card = _FakeCard()
+    _reset_mw(web=web, reviewer=_FakeReviewer(state="answer", card=card), state="review")
+    timers = _FakeTimers()
+    saved = br._schedule
+    br._schedule = timers
+    done = []
+    try:
+        br.create_ticket("Window went grey", "next card", True, on_done=done.append)
+        # Nothing filed yet, nothing blocked: create_ticket returned.
+        assert done == [], "ticket filed before the capture had a chance"
+        assert web.calls == 1
+        assert [ms for ms, _ in timers.pending] == [3000], timers.pending
+        tid_dir = os.path.join(tdir, os.listdir(tdir)[0])
+        # The Qt screenshot was taken before the page was asked anything.
+        assert os.path.exists(os.path.join(tid_dir, "screenshot.png"))
+        timers.fire_all()
+        assert len(done) == 1, "the timeout did not file the ticket"
+        ticket = done[0]
+        cap = ticket["capture"]
+        assert "webview unresponsive" in cap.get("note", ""), cap
+        assert cap["screenshot_path"] == "screenshot.png"
+        assert cap["qa_html_path"] is None
+        assert ticket["reviewer"]["card_id"] == card.id
+        with open(os.path.join(tid_dir, "ticket.json")) as fh:
+            on_disk = json.load(fh)
+        assert on_disk["capture"]["note"] == cap["note"]
+        if ankibug_schema is not None:
+            ankibug_schema.validate(ticket)
+        # The page answering late does not file it twice or rewrite it.
+        web.answer({"qa_html": "<div id=qa>late</div>", "visible_text": "late", "console_errors": []})
+        assert len(done) == 1
+        assert not os.path.exists(os.path.join(tid_dir, "qa.html"))
+        with open(os.path.join(tdir, "index.md")) as fh:
+            assert sum(1 for ln in fh if ln.startswith("| 2")) == 1
+    finally:
+        br._schedule = saved
+    shutil.rmtree(tdir, ignore_errors=True)
+
+
+def test_timeout_after_a_normal_capture_changes_nothing():
+    tdir = _tmp_tickets_dir()
+    _reset_mw(web=_FakeWebview(payload={
+        "qa_html": "<div id=qa>ok</div>", "visible_text": "ok", "console_errors": [],
+    }))
+    timers = _FakeTimers()
+    saved = br._schedule
+    br._schedule = timers
+    done = []
+    try:
+        br.create_ticket("Normal report", "", False, on_done=done.append)
+        assert len(done) == 1
+        assert "note" not in done[0]["capture"]
+        timers.fire_all()
+        assert len(done) == 1, "the stale timeout filed a second ticket"
+    finally:
+        br._schedule = saved
     shutil.rmtree(tdir, ignore_errors=True)
 
 

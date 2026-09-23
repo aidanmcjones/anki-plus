@@ -215,3 +215,20 @@ Rules for a good live test:
 - Both Browse tests wait for the embed's opening curtain (a QFrame that
   covers the table for ~0.9 s) to drop before pressing; a press before
   that lands on the curtain and reaches nothing.
+- `test_render_memory.py`: opens the real reviewer on a 40-card deck with
+  the FunBiochem-E1 note type CSS (read from the Exam 1 .apkg when it is
+  on disk, else an embedded copy: px sizes, sub/sup, a table, a
+  slide-sized answer image) and answers 300 card views (show answer,
+  Good). After 10 views and every 50 it reads the page's total `<style>`
+  text, CSSOM rule count, DOM element count, JS heap and the renderer's
+  RSS; style text, rules and elements must stay within 5 percent of the
+  10-view values and the heap within 20 MB. `RF_MEM_VIEWS` changes the
+  count. It passes on 81ed6d5 too: the page was not growing (ticket
+  20260923-153047).
+- `test_renderer_recovery.py`: SIGKILLs the real renderer process under the
+  reviewer and checks the page is live again, still in the reviewer, on
+  the same unanswered card, and the answer can be revealed; the same for
+  the deck list; repeated deaths stop being reloaded; and with the page
+  dead for good, the bug-report capture files a ticket within 5 s with
+  "webview unresponsive". On 81ed6d5 six of its checks fail: the window
+  stays a dead page and the bug report waits on it.
