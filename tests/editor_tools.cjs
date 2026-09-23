@@ -274,16 +274,38 @@ async function fixture(page, mode) {
     await page.locator('#host img').click({button:'right'});await page.getByRole('menuitem').click();
     const oldWrites = await page.evaluate(()=>crops.length);
     await page.evaluate(()=>window.noteId=2);
-    await page.locator('[data-action="apply"]').click();
+    // The dialog may already have self-closed here: resolveImage()'s note
+    // check runs off the document-wide MutationObserver in boot() (any
+    // childList mutation in <body>, including the crop dialog's own
+    // drawCrop() re-render when the preview image's async decode finishes),
+    // so it can retire a stale-note crop dialog before this script ever
+    // gets to click Apply. That is the safer outcome, not a bug, but it
+    // means a Playwright locator .click() here is racy: if the dialog
+    // vanishes mid-poll Playwright treats the detached target as "not
+    // stable" and retries forever until its 30s timeout. Dispatch the
+    // click directly in the page instead, which is synchronous and simply
+    // no-ops if the button is already gone (verifying the same invariant:
+    // a stale crop is never written, however it was discovered).
+    await page.evaluate(() => { document.querySelector('[data-action="apply"]')?.click(); });
     assert.equal(await page.evaluate(()=>crops.length),oldWrites);
     assert.equal(await page.locator('#ba-crop-dialog').count(),0);
     console.log('PASS switching notes cannot apply a stale crop');
-    await page.setViewportSize({width:375,height:600});await fixture(page,'full');
-    await page.locator('#host img').click({button:'right'});await page.getByRole('menuitem').click();
-    const bounds=await page.locator('#ba-crop-dialog').boundingBox();
+    await page.close();
+    // A fresh page, not setViewportSize + a second fixture() on the same
+    // page: page.setContent() reuses the existing window (confirmed: a
+    // global set before it survives after it), so editor-tools.js's
+    // `if (window.__baEditorTools) return;` boot guard would make the
+    // second fixture() a no-op and leave the new document's image with no
+    // context-menu/crop wiring at all (getByRole('menuitem') then hangs
+    // forever, since no menu is ever created).
+    const narrowPage = await browser.newPage({ viewport: { width: 375, height: 600 } });
+    await fixture(narrowPage,'full');
+    await narrowPage.locator('#host img').click({button:'right'});await narrowPage.getByRole('menuitem').click();
+    const bounds=await narrowPage.locator('#ba-crop-dialog').boundingBox();
     assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 375);
     assert.ok(bounds.y >= 0 && bounds.y + bounds.height <= 600);
-    await page.screenshot({path:path.join(root,'out','editor-crop-narrow.png')});
+    await narrowPage.screenshot({path:path.join(root,'out','editor-crop-narrow.png')});
     console.log('PASS narrow-window crop layout');
+    await narrowPage.close();
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
