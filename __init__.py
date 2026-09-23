@@ -404,6 +404,7 @@ def _js_opts(
         },
         "reviewer": {
             "clickToReveal": bool(cfg.get("click_to_reveal", True)),
+            "arrowKeyGrading": bool(cfg.get("arrow_key_grading", True)),
             "pressFeedback": bool(cfg.get("press_feedback", True)),
             "cardStyling": bool(cfg.get("reviewer_card_styling", True)),
             "answerButtons": str(cfg.get("reviewer_answer_buttons", "intervals")),

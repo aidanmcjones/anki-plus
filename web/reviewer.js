@@ -637,6 +637,70 @@
     }
   }
 
+  // Arrow-key grading (config: arrow_key_grading). Question side: any arrow
+  // reveals the answer, same as Space. Answer side: Up = Easy, Right = Good,
+  // Left = Hard, Down = Again, sent as the stock reviewer's own "easeN" link.
+  // Stays out of the way while typing (focused input / textarea / select /
+  // contenteditable, the quick editor's body.ba-editing) or while one of our
+  // dialogs (cmdk palette, popovers) is open; only then is the default
+  // scroll suppressed. Installed once per page (reviewer.js can be re-eval'd).
+  var ARROW_EASE = { ArrowUp: 4, ArrowRight: 3, ArrowLeft: 2, ArrowDown: 1 };
+
+  function arrowTypingOrModal() {
+    var body = document.body;
+    if (body && body.classList.contains("ba-editing")) return true;
+    var a = document.activeElement;
+    if (a) {
+      var tag = (a.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select"
+          || a.isContentEditable) return true;
+    }
+    if (document.querySelector('.ba-cmdk-back[data-open="true"]')) return true;
+    var dlgs = document.querySelectorAll(
+      'dialog[open], [aria-modal="true"], [role="dialog"]');
+    for (var i = 0; i < dlgs.length; i++) {
+      var d = dlgs[i];
+      // The palette's panel stays in the DOM when closed; checked above.
+      if (d.classList.contains("ba-cmdk") || d.hidden) continue;
+      if (d.getClientRects().length) return true;
+    }
+    return false;
+  }
+
+  // Ease numbers the scheduler offers for this card, read from the ease
+  // chips __baSetEase un-hides. None found (native answer-bar mode) means
+  // the v3 scheduler's fixed 4 buttons.
+  function arrowButtonCount() {
+    var n = 0;
+    document.querySelectorAll(".ba-rv-ease-key[data-ease]").forEach(function (b) {
+      var e = parseInt(b.getAttribute("data-ease"), 10);
+      if (!b.hidden && e > n) n = e;
+    });
+    return n || 4;
+  }
+
+  function onArrowGradeKeydown(e) {
+    var ease = ARROW_EASE[e.key];
+    if (!ease || e.defaultPrevented) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (rvOpts().arrowKeyGrading === false) return;
+    if (arrowTypingOrModal()) return;
+    e.preventDefault();
+    if (e.repeat) return;  // holding a key must not grade a run of cards
+    if (!hasAnswerRevealed()) {
+      try { pycmd("ans"); } catch (_) {}
+      return;
+    }
+    // Fewer buttons: Again stays Again, anything above the top clamps to it.
+    ease = Math.min(ease, arrowButtonCount());
+    try { pycmd("ease" + ease); } catch (_) {}
+  }
+
+  if (!window.__baArrowGrading) {
+    window.__baArrowGrading = true;
+    document.addEventListener("keydown", onArrowGradeKeydown);
+  }
+
   function boot() {
     ensureBar();
     wrapAnswer();

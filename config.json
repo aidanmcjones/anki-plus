@@ -29,6 +29,7 @@
   "reviewer_card_styling": true,
   "reviewer_answer_buttons": "intervals",
   "click_to_reveal": true,
+  "arrow_key_grading": true,
   "press_feedback": true,
   "reviewer_hide_answer": true,
   "reviewer_prev_card": true,

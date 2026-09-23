@@ -135,6 +135,11 @@ in this file are the raw form the settings page writes.
   answer) or `"native"` (Anki's Again / Hard / Good / Easy bar).
 - **show_progress** — progress strip across the top of the reviewer.
 - **click_to_reveal** — clicking the card shows the answer.
+- **arrow_key_grading**: grade with the arrow keys. Up = Easy, Right =
+  Good, Left = Hard, Down = Again. On the question side any arrow shows the
+  answer (like Space) without grading. Ignored while you type in a field or
+  the quick editor, or while the command palette is open. `false` gives the
+  arrows back to scrolling.
 - **press_feedback** — the bloom animation when grading.
 - **reviewer_hide_answer** — a quiet "Hide Answer" button in the bottom-right
   corner while the answer is showing (also `H`). Returns to the question

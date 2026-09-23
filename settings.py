@@ -1155,6 +1155,11 @@ class AnkiDesignSettingsPage(QWidget):
             "Anywhere on the card works like Space.",
         ))
         v.addWidget(feature_row(
+            "arrow_key_grading", "Grade with arrow keys", True,
+            "Up Easy, Right Good, Left Hard, Down Again. On the question "
+            "side any arrow shows the answer.",
+        ))
+        v.addWidget(feature_row(
             "press_feedback", "Press feedback", True,
             "A soft bloom from the key you graded with.",
         ))
