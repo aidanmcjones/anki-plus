@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-STATUSES = ("new", "fixing", "fixed", "failed", "wontfix")
+STATUSES = ("new", "fixing", "fixed", "needs-review", "failed", "wontfix")
 KINDS = ("app", "deck", "unknown")
 
 

@@ -13,6 +13,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from ankifix import agent as agent_mod  # noqa: E402
+from ankifix import apply as apply_mod  # noqa: E402
 from ankifix import cli, prompts, runner  # noqa: E402
 from ankifix.classify import classify  # noqa: E402
 from ankifix.config import Config  # noqa: E402
@@ -50,6 +52,17 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
     ;;
   nofix)
     echo '{"type":"result","subtype":"error_max_turns","is_error":true,"num_turns":60,"result":"ran out"}'
+    ;;
+  needs_review)
+    echo 'fixed' > fixed.txt
+    echo 'print("ok")' > tests/test_fake_bug.py
+    git add -A >/dev/null
+    git commit -q -m "Fix the fake bug, harness not fully green
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+    git push -q -u origin "$(git rev-parse --abbrev-ref HEAD)" 2>/dev/null
+    echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"node tests/reviewer_click.cjs"}}]}}'
+    echo '{"type":"result","subtype":"success","is_error":false,"num_turns":9,"total_cost_usd":0.55,"session_id":"fake-session-1","result":"Fixed but one pre-existing unrelated test still fails.\n\n```ankifix-result\n{\"status\": \"fixed\", \"tests_green\": false, \"tests\": [\"node tests/reviewer_click.cjs\"], \"reproduced\": true, \"pushed\": true, \"summary\": \"Root cause X; fixed Y; one unrelated pre-existing test still fails.\"}\n```\n"}'
     ;;
 esac
 exit 0
@@ -107,6 +120,11 @@ def env(tmp_path, monkeypatch):
     cfg.deck_build_dir = build
     cfg.deck_python = "/x/fb-anki/bin/python"
     cfg.node_path = "/fake/node_modules"
+    # Off by default in tests: notify() can pop a real macOS notification, and
+    # auto_apply drives real `git format-patch`/`git apply` against env["repo"].
+    # Both get their own dedicated tests below with these turned on deliberately.
+    cfg.notify = False
+    cfg.auto_apply = False
     return {"cfg": cfg, "repo": repo, "build": build, "fake": fake_dir, "tmp": tmp_path, "course": course}
 
 
@@ -273,6 +291,22 @@ def test_app_run_end_to_end(env):
     assert f"| {t['id']} |" in idx and "| app | fixed |" in idx
 
 
+def test_app_run_fixed_but_not_green_is_needs_review(env, monkeypatch):
+    monkeypatch.setenv("FAKE_MODE", "needs_review")
+    cfg = env["cfg"]
+    t = make_ticket(cfg)
+    out = runner.run_ticket(t["id"], cfg, echo=lambda *a: None)
+    assert out["status"] == "needs-review", out["fix"]["summary"]
+    assert len(out["fix"]["commits"]) == 1
+    assert "needs human review" in out["fix"]["summary"]
+    idx = (cfg.tickets_dir / "index.md").read_text()
+    assert "| needs-review |" in idx
+    # needs-review is a completed-ish state: re-running without --force is refused,
+    # same as fixed/wontfix/fixing.
+    with pytest.raises(runner.AnkifixError):
+        runner.run_ticket(t["id"], cfg, echo=lambda *a: None)
+
+
 def test_app_run_without_commit_fails(env, monkeypatch):
     monkeypatch.setenv("FAKE_MODE", "nofix")
     cfg = env["cfg"]
@@ -359,3 +393,197 @@ def test_parse_transcript_takes_last_block(tmp_path):
     log.write_text("not json\n" + json.dumps(ev) + "\n")
     p = runner.parse_transcript(log)
     assert p["block"] == {"status": "fixed", "tests_green": True}
+
+
+# -------------------------------------------------------------------- notify
+def test_notify_noop_when_disabled(monkeypatch):
+    called = []
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: called.append(a))
+    cfg = Config()
+    cfg.notify = False
+    runner.notify(cfg, "hello")
+    assert called == []
+
+
+def test_notify_prefers_terminal_notifier(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(runner.subprocess, "run", lambda args, **k: calls.append(args))
+    cfg = Config()
+    cfg.notify = True
+    runner.notify(cfg, "ankifix: t1 fixed")
+    assert len(calls) == 1
+    assert calls[0][0] == "terminal-notifier"
+    assert "ankifix: t1 fixed" in calls[0]
+
+
+def test_notify_falls_back_to_osascript(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner.shutil, "which", lambda name: "/usr/bin/osascript" if name == "osascript" else None)
+    monkeypatch.setattr(runner.subprocess, "run", lambda args, **k: calls.append(args))
+    cfg = Config()
+    cfg.notify = True
+    runner.notify(cfg, "ankifix: t1 needs-review")
+    assert len(calls) == 1
+    assert calls[0][0] == "osascript"
+    assert "ankifix: t1 needs-review" in calls[0][2]
+
+
+def test_notify_noop_when_nothing_available(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner.shutil, "which", lambda name: None)
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: calls.append(a))
+    cfg = Config()
+    cfg.notify = True
+    runner.notify(cfg, "hello")
+    assert calls == []
+
+
+def test_watch_notifies_and_auto_applies(env, monkeypatch):
+    cfg = env["cfg"]
+    cfg.notify = True
+    cfg.auto_apply = True
+    notified = []
+    monkeypatch.setattr(runner, "notify", lambda c, msg: notified.append(msg))
+    applied = []
+    monkeypatch.setattr(apply_mod, "apply_ticket", lambda tid, c, echo=print: applied.append(tid))
+    t = make_ticket(cfg)
+    n = runner.watch(cfg, interval=0, once=True, echo=lambda *a: None)
+    assert n == 1
+    assert notified == [f"ankifix: {t['id']} fixed"]
+    assert applied == [t["id"]]
+
+
+def test_watch_does_not_auto_apply_when_disabled(env, monkeypatch):
+    cfg = env["cfg"]
+    cfg.notify = False
+    cfg.auto_apply = False
+    applied = []
+    monkeypatch.setattr(apply_mod, "apply_ticket", lambda tid, c, echo=print: applied.append(tid))
+    make_ticket(cfg)
+    runner.watch(cfg, interval=0, once=True, echo=lambda *a: None)
+    assert applied == []
+
+
+# --------------------------------------------------------------------- apply
+def _apply_ticket_dict(tid, branch, base, tests=None):
+    return {
+        "schema": 1, "id": tid, "created": "2026-09-22T21:45:03-05:00", "source": "terminal",
+        "note": "apply test", "status": "fixed", "kind": "app",
+        "app": {"anki_version": None, "addon_repo": None, "branch": base, "commit": None, "dirty": False},
+        "reviewer": {"state": None, "card_id": None, "note_id": None, "notetype": None, "deck": None,
+                     "template_ord": None},
+        "deck_build": None, "capture": None,
+        "fix": {"branch": branch, "commits": ["abc123"], "tests": tests or [], "log_path": "fix.log",
+                "started": "2026-09-22T21:46:00-05:00", "finished": "2026-09-22T21:50:00-05:00",
+                "summary": "fixed"},
+    }
+
+
+@pytest.fixture
+def apply_repo(tmp_path):
+    """base branch `main` + a fix branch `fix/t1` with one commit changing
+    a.txt's middle line. Left checked out on `main` (clean)."""
+    repo = tmp_path / "apply-repo"
+    repo.mkdir()
+    sh(repo, "git", "init", "-q", "-b", "main")
+    sh(repo, "git", "config", "user.name", "Test")
+    sh(repo, "git", "config", "user.email", "test@example.com")
+    (repo / "a.txt").write_text("line1\nline2\nline3\n")
+    (repo / "b.txt").write_text("other\n")
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "commit", "-q", "-m", "init")
+    sh(repo, "git", "branch", "fix/t1")
+    sh(repo, "git", "checkout", "-q", "fix/t1")
+    (repo / "a.txt").write_text("line1\nCHANGED\nline3\n")
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "commit", "-q", "-m", "Fix the fake bug\n\nCo-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>")
+    sh(repo, "git", "checkout", "-q", "main")
+
+    cfg = Config()
+    cfg.app_repo = repo
+    cfg.app_base_branch = "main"
+    cfg.tickets_dir = tmp_path / "AnkiTickets"
+    cfg.notify = False
+    return {"cfg": cfg, "repo": repo}
+
+
+def test_apply_ticket_non_overlapping_dirty_tree(apply_repo):
+    cfg, repo = apply_repo["cfg"], apply_repo["repo"]
+    (repo / "b.txt").write_text("other\nDIRTY EDIT\n")  # untouched by the fix commit
+    t = _apply_ticket_dict("20260922-220000-apply-ok", "fix/t1", "main")
+    save_ticket(cfg.tickets_dir, t)
+
+    out = apply_mod.apply_ticket(t["id"], cfg, echo=lambda *a: None)
+
+    assert "CHANGED" in (repo / "a.txt").read_text()
+    assert "DIRTY EDIT" in (repo / "b.txt").read_text()  # dirty edit preserved
+    assert sh(repo, "git", "log", "--oneline", "-1") .endswith("init")  # no commit created
+    assert sh(repo, "git", "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    applied = out["fix"]["applied"]
+    assert applied["patch"] == "apply.patch"
+    assert applied["tests_passed"] is True
+    assert (cfg.tickets_dir / t["id"] / "apply.patch").is_file()
+    reread = load_ticket(cfg.tickets_dir, t["id"])
+    assert reread["fix"]["applied"] == applied
+
+
+def test_apply_ticket_overlapping_dirty_tree_leaves_tree_untouched(apply_repo):
+    cfg, repo = apply_repo["cfg"], apply_repo["repo"]
+    # dirty edit to the exact line the fix commit also changes -> no context match
+    (repo / "a.txt").write_text("line1\nDIRTY CONFLICT\nline3\n")
+    t = _apply_ticket_dict("20260922-220100-apply-conflict", "fix/t1", "main")
+    save_ticket(cfg.tickets_dir, t)
+
+    with pytest.raises(runner.AnkifixError):
+        apply_mod.apply_ticket(t["id"], cfg, echo=lambda *a: None)
+
+    assert (repo / "a.txt").read_text() == "line1\nDIRTY CONFLICT\nline3\n"  # untouched
+    assert sh(repo, "git", "log", "--oneline", "-1") .endswith("init")  # no commit created
+    reread = load_ticket(cfg.tickets_dir, t["id"])
+    assert "error" in reread["fix"]["applied"]
+    assert "patch" not in reread["fix"]["applied"]
+
+
+def test_apply_ticket_rejects_deck_kind(apply_repo):
+    cfg = apply_repo["cfg"]
+    t = _apply_ticket_dict("20260922-220200-apply-deck", "fix/t1", "main")
+    t["kind"] = "deck"
+    save_ticket(cfg.tickets_dir, t)
+    with pytest.raises(runner.AnkifixError):
+        apply_mod.apply_ticket(t["id"], cfg, echo=lambda *a: None)
+
+
+def test_apply_ticket_rejects_no_fix_branch(apply_repo):
+    cfg = apply_repo["cfg"]
+    t = _apply_ticket_dict("20260922-220300-apply-nobranch", None, "main")
+    save_ticket(cfg.tickets_dir, t)
+    with pytest.raises(runner.AnkifixError):
+        apply_mod.apply_ticket(t["id"], cfg, echo=lambda *a: None)
+
+
+# --------------------------------------------------------------- launchd agent
+def test_write_plist_contents(tmp_path):
+    dest = agent_mod.write_plist(
+        tmp_path / "com.aidanjones.ankifix-watch.plist",
+        ankifix_bin="/x/bin/ankifix", interval=20,
+        log_path=str(tmp_path / "ankifix-watch.log"), path_env="/a/bin:/b/bin",
+    )
+    assert dest.is_file()
+    import plistlib
+    data = plistlib.loads(dest.read_bytes())
+    assert data["Label"] == agent_mod.LABEL
+    assert data["ProgramArguments"] == ["/x/bin/ankifix", "--watch", "--interval", "20"]
+    assert data["RunAtLoad"] is True
+    assert data["KeepAlive"] is True
+    assert data["StandardOutPath"] == str(tmp_path / "ankifix-watch.log")
+    assert data["StandardErrorPath"] == str(tmp_path / "ankifix-watch.log")
+    assert data["EnvironmentVariables"] == {"PATH": "/a/bin:/b/bin"}
+
+
+def test_install_agent_refuses_when_watch_already_running(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_mod, "running_watch_pids", lambda: [99999])
+    dest = tmp_path / "x.plist"
+    with pytest.raises(runner.AnkifixError):
+        agent_mod.install_agent(plist_path=dest)
+    assert not dest.exists()

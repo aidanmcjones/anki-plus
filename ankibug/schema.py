@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 SCHEMA_VERSION = 1
 
 SOURCES = ("hotkey", "terminal", "chat")
-STATUSES = ("new", "fixing", "fixed", "failed", "wontfix")
+STATUSES = ("new", "fixing", "fixed", "needs-review", "failed", "wontfix")
 KINDS = ("app", "deck", "unknown")
 REVIEWER_STATES = ("question", "answer", None)
 

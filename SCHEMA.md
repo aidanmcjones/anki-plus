@@ -17,7 +17,7 @@ note is empty the slug falls back to `ticket`.
 | `created` | str | ISO 8601 local time, e.g. `2026-09-22T21:45:03-05:00` |
 | `source` | str | one of `hotkey`, `terminal`, `chat` |
 | `note` | str | the user's free-text description of the bug |
-| `status` | str | one of `new`, `fixing`, `fixed`, `failed`, `wontfix` |
+| `status` | str | one of `new`, `fixing`, `fixed`, `needs-review`, `failed`, `wontfix` |
 | `kind` | str | one of `app`, `deck`, `unknown` |
 | `app` | object | see below |
 | `reviewer` | object | see below |
@@ -41,6 +41,13 @@ Environment info about the Anki+ / anki-design checkout at ticket time.
 
 All fields may be `null` if they could not be determined (e.g. git not
 available, `.version` file missing).
+
+`status: needs-review` (set only by `ankifix`, for `kind: app` tickets) means
+a fix branch exists, has commits, and Claude's own result block says
+`status: fixed` - but `tests_green` in that block is `false`, so the harness
+(the fixer's own new test, or pre-existing unrelated failures it could not
+clear) isn't fully green. It is a completed-ish state like `fixed`:
+re-running the ticket needs `--force`.
 
 ### `reviewer`
 
@@ -109,8 +116,24 @@ only ever writes `null` here (or leaves an existing value alone via
   "log_path": "capture.log",
   "started": "2026-09-22T21:50:00-05:00",
   "finished": null,
-  "summary": null
+  "summary": null,
+  "applied": null
 }
+```
+
+`applied` (object or `null`, `kind: app` only) is written by
+`ankifix apply` / `ankibug`'s `auto_apply` watch step, after `fix.branch` has
+been patched into the live add-on checkout:
+
+```json
+{"at": "2026-09-22T22:05:00-05:00", "patch": "apply.patch", "tests_passed": true}
+```
+
+or, if `git apply --check` failed against the checkout's current working
+tree:
+
+```json
+{"at": "2026-09-22T22:05:00-05:00", "error": "patch does not apply: ..."}
 ```
 
 ## On-disk layout

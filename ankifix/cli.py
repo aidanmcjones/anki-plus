@@ -6,9 +6,70 @@ import shlex
 import sys
 from typing import List, Optional
 
+from . import agent as agent_mod
+from . import apply as apply_mod
 from .config import load_config
 from .runner import AnkifixError, LockBusy, plan, run_ticket, ticket_lock, watch
 from .tickets import load_ticket, write_index
+
+SUBCOMMANDS = ("apply", "install-agent", "uninstall-agent")
+
+
+def build_apply_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        prog="ankifix apply",
+        description="Apply an app ticket's fix branch to the live add-on checkout "
+        "(git apply --check then git apply; no commit).",
+    )
+    ap.add_argument("ticket_id")
+    ap.add_argument("--config", help="config JSON (default ~/.config/ankifix/config.json)")
+    return ap
+
+
+def build_install_agent_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        prog="ankifix install-agent",
+        description="Write and load the com.aidanjones.ankifix-watch LaunchAgent "
+        "(RunAtLoad + KeepAlive). Refuses if a non-launchd `ankifix --watch` is running.",
+    )
+    ap.add_argument("--interval", type=float, default=20, help="--watch poll interval in seconds (default 20)")
+    ap.add_argument("--config", help="config JSON (default ~/.config/ankifix/config.json)")
+    return ap
+
+
+def build_uninstall_agent_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        prog="ankifix uninstall-agent",
+        description="Unload and remove the com.aidanjones.ankifix-watch LaunchAgent.",
+    )
+    ap.add_argument("--config", help="config JSON (default ~/.config/ankifix/config.json)")
+    return ap
+
+
+def cmd_apply(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    try:
+        apply_mod.apply_ticket(args.ticket_id, cfg)
+        return 0
+    except (AnkifixError, FileNotFoundError) as e:
+        print(f"ankifix: {e}", file=sys.stderr)
+        return 2
+
+
+def cmd_install_agent(args: argparse.Namespace) -> int:
+    load_config(args.config)  # validates --config even though the plist doesn't need it
+    try:
+        agent_mod.install_agent(interval=args.interval)
+        return 0
+    except AnkifixError as e:
+        print(f"ankifix: {e}", file=sys.stderr)
+        return 2
+
+
+def cmd_uninstall_agent(args: argparse.Namespace) -> int:
+    load_config(args.config)
+    agent_mod.uninstall_agent()
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,11 +90,35 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--model", help="claude --model (default: claude's default)")
     ap.add_argument("--force", action="store_true", help="run even if the ticket is fixed/fixing/wontfix")
     ap.add_argument("--reindex", action="store_true", help="only regenerate index.md")
+    ap.add_argument(
+        "--notify", dest="notify", action="store_true", default=None,
+        help="with --watch: post a macOS notification after each ticket (default: on; see the "
+        "notify config key)",
+    )
+    ap.add_argument(
+        "--no-notify", dest="notify", action="store_false",
+        help="with --watch: disable the notification set by the notify config key",
+    )
     ap.add_argument("--config", help="config JSON (default ~/.config/ankifix/config.json)")
     return ap
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    # Manual dispatch (like ankibug's cli): only an exact, bare argv[0] is a
+    # subcommand, since the default form's ticket_id positional could in
+    # principle collide - it never does in practice (ticket ids start with
+    # a timestamp) but this keeps the same discipline as ankibug/cli.py.
+    if argv and argv[0] in SUBCOMMANDS:
+        name, rest = argv[0], argv[1:]
+        if name == "apply":
+            return cmd_apply(build_apply_parser().parse_args(rest))
+        if name == "install-agent":
+            return cmd_install_agent(build_install_agent_parser().parse_args(rest))
+        if name == "uninstall-agent":
+            return cmd_uninstall_agent(build_uninstall_agent_parser().parse_args(rest))
+
     args = build_parser().parse_args(argv)
     cfg = load_config(args.config)
     if args.max_turns:
@@ -44,6 +129,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         cfg.max_budget_usd = args.max_budget_usd
     if args.model:
         cfg.model = args.model
+    if args.notify is not None:
+        cfg.notify = args.notify
 
     if args.reindex:
         print(write_index(cfg.tickets_dir))

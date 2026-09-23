@@ -64,6 +64,25 @@ def ticket_lock(tickets_dir: Path) -> Iterator[None]:
             fh.close()
 
 
+# ------------------------------------------------------------------ notify
+def notify(cfg: Config, message: str) -> None:
+    """Best-effort macOS notification. No-op if disabled or nothing to post with."""
+    if not cfg.notify:
+        return
+    try:
+        if shutil.which("terminal-notifier"):
+            subprocess.run(
+                ["terminal-notifier", "-title", "ankifix", "-message", message],
+                check=False, capture_output=True, timeout=5,
+            )
+            return
+        if shutil.which("osascript"):
+            script = 'display notification {} with title "ankifix"'.format(json.dumps(message))
+            subprocess.run(["osascript", "-e", script], check=False, capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        pass  # a notification failure must never fail the run
+
+
 # ---------------------------------------------------------------------- git
 def git(cwd: Path, *args: str, check: bool = True) -> str:
     p = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
@@ -110,7 +129,10 @@ def _fmt(rules: List[str], **kw: str) -> List[str]:
 
 def build_command(cfg: Config, kind: str, ticket_id: str, add_dirs: List[Path]) -> List[str]:
     if kind == "app":
-        kw = dict(remote=cfg.app_remote, branch=cfg.branch_name(ticket_id), base=cfg.app_base_branch)
+        kw = dict(
+            remote=cfg.app_remote, branch=cfg.branch_name(ticket_id),
+            base=cfg.app_base_branch, anki_python=cfg.anki_python,
+        )
         allowed = _fmt(cfg.app_allowed_tools, **kw)
         denied = _fmt(cfg.app_disallowed_tools, **kw)
     else:
@@ -298,7 +320,7 @@ def run_ticket(
 ) -> Dict[str, Any]:
     ticket = load_ticket(cfg.tickets_dir, ticket_id)
     status = ticket.get("status")
-    if status in ("fixed", "wontfix", "fixing") and not force:
+    if status in ("fixed", "needs-review", "wontfix", "fixing") and not force:
         raise AnkifixError(f"ticket {ticket_id} is {status}; pass --force to run anyway")
     tdir = ticket_dir(cfg.tickets_dir, ticket_id)
     log_path = tdir / LOG_NAME
@@ -337,19 +359,26 @@ def run_ticket(
         parsed = parse_transcript(log_path)
         block = parsed["block"] or {}
         rev = parsed["result_event"] or {}
-        green = bool(block.get("tests_green")) and block.get("status") == "fixed"
+        # `reported_fixed`: claude's own result block says it fixed the ticket.
+        # `tests_green`: claude's own result block says the harness is fully green.
+        # A fix can exist (branch/commits, or a changed+preflight-passed deck)
+        # without the harness being fully green (e.g. unrelated pre-existing
+        # failures the fixer could not clear) - that lands as needs-review,
+        # not failed, so a human looks at it instead of it silently vanishing.
+        reported_fixed = block.get("status") == "fixed"
+        tests_green = bool(block.get("tests_green"))
         tests = parsed["tests"] or list(block.get("tests") or [])
 
         if kind == "app":
             commits = branch_commits(cfg, cwd)
             pushed = branch_pushed(cfg, cwd, ticket_id)
-            ok = bool(commits) and green and not timed_out
+            has_fix = bool(commits) and reported_fixed and not timed_out
             summary_extra.append(f"worktree {cwd}; {'pushed' if pushed else 'NOT pushed'} to {cfg.app_remote}")
         else:
             commits = []
             changed = [k for k, v in _snapshot(cwd).items() if before.get(k) != v]
             passed = _preflight_pass(cwd, t0)
-            ok = bool(changed) and passed and green and not timed_out
+            has_fix = bool(changed) and passed and reported_fixed and not timed_out
             summary_extra.append(f"changed: {', '.join(changed) or 'nothing'}")
             summary_extra.append(f"preflight {'RESULT: PASS' if passed else 'did not pass (or not rebuilt)'}")
             summary_extra.append(f"pre-run copies in {tdir / 'deck_before'}")
@@ -366,6 +395,8 @@ def run_ticket(
             summary_extra.insert(0, f"claude exited {rc}")
         if not parsed["block"]:
             summary_extra.insert(0, "no ankifix-result block in transcript")
+        if has_fix and not tests_green:
+            summary_extra.insert(0, "fix branch exists but tests_green is false; needs human review")
         if rev.get("total_cost_usd") is not None:
             summary_extra.append(f"cost ${rev['total_cost_usd']:.2f}, {rev.get('num_turns')} turns")
         if parsed["session_id"]:
@@ -376,7 +407,12 @@ def run_ticket(
             commits=commits, tests=tests, finished=now_iso(),
             summary=" | ".join([s for s in [claude_summary] + summary_extra if s]),
         )
-        ticket["status"] = "fixed" if ok else "failed"
+        if has_fix and tests_green:
+            ticket["status"] = "fixed"
+        elif has_fix:
+            ticket["status"] = "needs-review"
+        else:
+            ticket["status"] = "failed"
     except BaseException as e:  # noqa: BLE001 - record any failure, incl. ^C
         ticket["status"] = "failed"
         ticket["fix"].update(
@@ -405,6 +441,8 @@ def next_new(cfg: Config) -> Optional[str]:
 
 def watch(cfg: Config, interval: float, once: bool = False, echo=print) -> int:
     """Process status=new tickets one at a time, oldest first."""
+    from . import apply as apply_mod  # local: apply imports this module
+
     handled = 0
     while True:
         try:
@@ -413,8 +451,18 @@ def watch(cfg: Config, interval: float, once: bool = False, echo=print) -> int:
                     tid = next_new(cfg)
                     if not tid:
                         break
-                    run_ticket(tid, cfg, echo=echo)
+                    result = run_ticket(tid, cfg, echo=echo)
                     handled += 1
+                    notify(cfg, f"ankifix: {tid} {result.get('status')}")
+                    if (
+                        cfg.auto_apply
+                        and result.get("kind") == "app"
+                        and result.get("status") in ("fixed", "needs-review")
+                    ):
+                        try:
+                            apply_mod.apply_ticket(tid, cfg, echo=echo)
+                        except AnkifixError as e:
+                            echo(f"ankifix: auto-apply for {tid} failed: {e}")
         except LockBusy as e:
             echo(f"ankifix: {e}; waiting")
         if once:

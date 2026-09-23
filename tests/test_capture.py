@@ -8,6 +8,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from ankibug import capture
+from ankibug import cli as bug_cli
+from ankibug import schema
 
 websockets_server = pytest.importorskip("websockets.sync.server")
 from websockets.sync.server import serve  # noqa: E402
@@ -171,3 +173,59 @@ def test_get_addon_git_info_nonexistent_repo(tmp_path):
 def test_get_app_info_shape(tmp_path):
     info = capture.get_app_info(addon_repo=str(tmp_path), version_file=str(tmp_path / "missing"))
     assert set(info.keys()) == {"anki_version", "addon_repo", "branch", "commit", "dirty"}
+
+
+# --------------------------------------------------- capture-time classification
+# ankibug/cli.py's _classify_kind() reuses ankifix's own keyword classifier
+# (ankifix.classify.classify) so hotkey/chat tickets aren't stuck at
+# kind=unknown in `ankibug list` until ankifix runs. These call it directly
+# (no disk I/O) rather than driving cmd_file end to end, since cmd_file's
+# default write path is the real ~/AnkiTickets, which tests must never touch.
+
+def test_classify_kind_deck_note():
+    t = schema.new_ticket("the answer on this card is wrong", kind="unknown",
+                           reviewer={"notetype": None}, capture=None)
+    assert bug_cli._classify_kind(t) == "deck"
+
+
+def test_classify_kind_app_note():
+    t = schema.new_ticket("editor crashes when I paste", kind="unknown",
+                           reviewer={"notetype": None}, capture=None)
+    assert bug_cli._classify_kind(t) == "app"
+
+
+def test_classify_kind_course_notetype():
+    t = schema.new_ticket("something weird", kind="unknown",
+                           reviewer={"notetype": "CourseB-Basic"}, capture=None)
+    assert bug_cli._classify_kind(t) == "deck"
+
+
+def test_new_ticket_kind_promoted_from_unknown_by_cmd_file_logic():
+    # Mirrors the "if ticket['kind'] == 'unknown': ..." block in cmd_file:
+    # unknown gets promoted to app/deck; an explicit kind is left alone.
+    t = schema.new_ticket("the answer on this card is wrong", kind="unknown",
+                           reviewer={"notetype": None}, capture=None)
+    guessed = bug_cli._classify_kind(t)
+    if guessed:
+        t["kind"] = guessed
+        schema.validate(t)
+    assert t["kind"] == "deck"
+
+    t2 = schema.new_ticket("the answer on this card is wrong", kind="app",
+                            reviewer={"notetype": None}, capture=None)
+    assert t2["kind"] == "app"  # an explicit --kind is never overridden
+
+
+def test_classify_kind_returns_none_if_ankifix_not_importable(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "ankifix.classify" or name.startswith("ankifix"):
+            raise ImportError("simulated: ankifix not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    t = schema.new_ticket("editor crashes when I paste", kind="unknown")
+    assert bug_cli._classify_kind(t) is None

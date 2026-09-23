@@ -47,6 +47,9 @@ class Config:
     # --- deck bugs ------------------------------------------------------
     deck_build_dir: Path = FB_BUILD
     deck_python: str = str(HOME / ".venvs/fb-anki/bin/python")
+
+    # --- anki venv (running app tests that need `aqt`) -------------------
+    anki_python: str = str(HOME / "Library/Application Support/AnkiProgramFiles/.venv/bin/python")
     # notetype name prefixes that belong to course decks (kind=deck)
     course_notetype_prefixes: List[str] = field(
         default_factory=lambda: ["CourseB-", "Micro"]
@@ -100,6 +103,19 @@ class Config:
             "Bash(git push -u {remote} {branch}*)",
             "Bash(node tests/*)", "Bash(python3 tests/*)",
             "Bash(python3 -m pytest*)",
+            # broader than the tests/*-scoped rules above: needed because a
+            # compound command's non-test segments (a `git show ... | node
+            # ...` pipe stage, a stray `pytest -k ...`) must each match a
+            # rule on their own - see docs/ANKIFIX.md "Permission matching
+            # for compound commands".
+            "Bash(node *)", "Bash(python3 *)", "Bash(pytest*)",
+            # the Anki venv python (has `aqt`; system/worktree python does
+            # not), for `tests/test_*.py` files that import it. Claude has
+            # been seen writing this both as the literal absolute path and
+            # as a quoted "$HOME/..." expansion, so both are allow-listed.
+            "Bash({anki_python} tests/*)",
+            'Bash("{anki_python}" tests/*)',
+            'Bash("$HOME/Library/Application Support/AnkiProgramFiles/.venv/bin/python" tests/*)',
             "Bash(ls*)", "Bash(cat*)", "Bash(head*)", "Bash(tail*)",
             "Bash(grep*)", "Bash(rg*)", "Bash(wc*)", "Bash(mkdir -p tests*)",
         ]
@@ -135,6 +151,18 @@ class Config:
     prompt_app: Path = REPO_DIR / "docs/prompt_app.md"
     prompt_deck: Path = REPO_DIR / "docs/prompt_deck.md"
     co_author: str = "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+
+    # --- watch mode -------------------------------------------------------
+    # post a macOS notification after each run_ticket (and after each
+    # apply_ticket) in --watch mode, if terminal-notifier or osascript is
+    # available. Set false to disable.
+    notify: bool = True
+    # after a `fixed`/`needs-review` app ticket in --watch mode, automatically
+    # run the apply step (fix branch -> live add-on checkout, uncommitted).
+    auto_apply: bool = True
+    # NODE_PATH exported while running ticket.fix.tests during `ankifix apply`
+    # (the live checkout's own playwright/npx cache, not the fixer worktree's).
+    apply_node_path: str = str(HOME / ".npm/_npx/6bcb61ec6d5aea22/node_modules")
 
     def worktree_path(self, ticket_id: str) -> Path:
         return self.app_repo / self.worktrees_subdir / f"fix-{ticket_id}"

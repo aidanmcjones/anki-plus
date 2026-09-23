@@ -23,6 +23,33 @@ from . import store as store_mod
 SUBCOMMANDS = ("list", "show", "set")
 
 
+def _classify_kind(ticket: dict) -> Optional[str]:
+    """Best-effort keyword classification at capture time (app vs deck), so
+    hotkey/chat tickets don't sit at `kind: unknown` in `ankibug list` until
+    ankifix runs. Reuses ankifix's own keyword classifier (ankifix.classify,
+    the same one ankifix itself uses at fix time) rather than duplicating the
+    keyword lists here. ankifix.classify has no import of ankibug at module
+    scope, so this does not create a circular import - verified by reading
+    ankifix/classify.py, which only imports ankifix.config.
+
+    Returns 'app' or 'deck', or None if ankifix isn't importable (e.g. a bare
+    ankibug install) or classification itself raises - callers keep the
+    ticket's existing kind (normally 'unknown') in that case. Old tickets
+    already on disk are never touched by this; `unknown` is still a valid,
+    accepted `kind` for them.
+    """
+    try:
+        from ankifix.classify import classify as ankifix_classify  # type: ignore
+        from ankifix.config import load_config as ankifix_load_config  # type: ignore
+    except ImportError:
+        return None
+    try:
+        kind, _reason = ankifix_classify(ticket, ankifix_load_config())
+        return kind
+    except Exception:  # noqa: BLE001 - classification must never block filing a ticket
+        return None
+
+
 def _read_file_bytes(path: str) -> Optional[bytes]:
     try:
         with open(path, "rb") as f:
@@ -112,6 +139,11 @@ def cmd_file(args: argparse.Namespace) -> int:
         reviewer=reviewer,
         capture=capture_dict,
     )
+    if ticket["kind"] == "unknown":
+        guessed = _classify_kind(ticket)
+        if guessed:
+            ticket["kind"] = guessed
+            schema_mod.validate(ticket)
 
     tdir = store_mod.write_ticket(
         ticket,
