@@ -229,3 +229,96 @@ def test_classify_kind_returns_none_if_ankifix_not_importable(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     t = schema.new_ticket("editor crashes when I paste", kind="unknown")
     assert bug_cli._classify_kind(t) is None
+
+
+# ---------------------------------------------------------------------------
+# A dead or hung renderer (ticket 20260923-153047: the Anki+ window went grey
+# after the main webview's renderer died of an OOM). The websocket still
+# connects, but the page never answers. Capture must not hang: every read
+# gets READ_TIMEOUT, and the ticket is filed with what was captured plus a
+# "webview unresponsive" note.
+# ---------------------------------------------------------------------------
+
+def _silent_handler(ws):
+    try:
+        for _raw in ws:
+            pass  # never answer anything
+    except Exception:
+        pass
+
+
+def _answers_enable_then_hangs(ws):
+    try:
+        for raw in ws:
+            msg = json.loads(raw)
+            if msg.get("method", "").endswith(".enable"):
+                ws.send(json.dumps({"id": msg["id"], "result": {}}))
+            # Runtime.evaluate / Page.captureScreenshot: no answer
+    except Exception:
+        pass
+
+
+def _json_server_for(ws_port):
+    body = json.dumps([{
+        "title": "main webview",
+        "url": "http://127.0.0.1:40000/_anki/legacyPageData?id=1",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:{}/page/1".format(ws_port),
+    }]).encode("utf-8")
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _run_against(handler):
+    ws_server = serve(handler, "127.0.0.1", 0)
+    threading.Thread(target=ws_server.serve_forever, daemon=True).start()
+    http = _json_server_for(ws_server.socket.getsockname()[1])
+    try:
+        log = []
+        t0 = time.monotonic()
+        result = capture.capture(host="127.0.0.1", port=http.server_address[1],
+                                 console_seconds=0.2, log=log)
+        return result, time.monotonic() - t0, log
+    finally:
+        http.shutdown()
+        ws_server.shutdown()
+
+
+def test_silent_page_times_out_and_still_returns_a_capture():
+    (cap, shot, qa, state), took, log = _run_against(_silent_handler)
+    # One 3 s read, then it stops asking a page that is gone.
+    assert took < capture.READ_TIMEOUT * 2, took
+    assert cap is not None
+    assert "webview unresponsive" in cap["note"]
+    assert cap["pages"] and cap["pages"][0]["title"] == "main webview"
+    assert shot is None and qa is None and state is None
+    assert cap["qa_html_path"] is None and cap["screenshot_path"] is None
+    assert any("timed out" in line for line in log), log
+    ticket = schema.new_ticket(note="grey window", source="chat", kind="app", capture=cap)
+    schema.validate(ticket)
+
+
+def test_page_that_hangs_on_eval_keeps_what_it_got():
+    (cap, shot, qa, state), took, log = _run_against(_answers_enable_then_hangs)
+    assert took < capture.READ_TIMEOUT * 2 + 1, took
+    assert "webview unresponsive" in cap["note"]
+    assert cap["pages"]
+    assert qa is None and shot is None
+
+
+def test_live_page_has_no_unresponsive_note(fake_json_server):
+    cap, _shot, _qa, _state = capture.capture(
+        host="127.0.0.1", port=fake_json_server, console_seconds=0.2)
+    assert "note" not in cap

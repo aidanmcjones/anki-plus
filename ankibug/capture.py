@@ -32,6 +32,14 @@ DEFAULT_CDP_PORT = 8080
 ANKI_VERSION_FILE = "~/dev/anki/.version"
 ADDON_REPO = "~/dev/anki-design"
 CONSOLE_COLLECT_SECONDS = 1.0
+# Every CDP read gets this long. A live page answers in milliseconds; a
+# crashed or hung renderer (the grey-window case, ticket 20260923-153047)
+# never answers, and the ticket must still be filed with what was captured.
+READ_TIMEOUT = 3.0
+UNRESPONSIVE_NOTE = (
+    "webview unresponsive: the page did not answer CDP reads within 3 s "
+    "(crashed or hung renderer); the ticket has only what was captured"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -104,31 +112,38 @@ class CDPError(RuntimeError):
     pass
 
 
+class CDPTimeout(CDPError):
+    """A read the page never answered (crashed or hung renderer)."""
+
+
 class CDPSession:
     """Minimal synchronous CDP client over one page's websocket."""
 
-    def __init__(self, ws_url: str, open_timeout: float = 5.0):
+    def __init__(self, ws_url: str, open_timeout: float = READ_TIMEOUT):
         from websockets.sync.client import connect  # local import: optional dep
         self.ws = connect(ws_url, open_timeout=open_timeout, max_size=None)
         self._id_counter = itertools.count(1)
         self.events: List[Dict[str, Any]] = []
 
     def send(self, method: str, params: Optional[Dict[str, Any]] = None,
-              timeout: float = 10.0) -> Dict[str, Any]:
+              timeout: float = READ_TIMEOUT) -> Dict[str, Any]:
         msg_id = next(self._id_counter)
         self.ws.send(json.dumps({"id": msg_id, "method": method, "params": params or {}}))
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise CDPError("no response to {} within {}s".format(method, timeout))
-            raw = self.ws.recv(timeout=remaining)
+                raise CDPTimeout("no response to {} within {}s".format(method, timeout))
+            try:
+                raw = self.ws.recv(timeout=remaining)
+            except TimeoutError:
+                raise CDPTimeout("no response to {} within {}s".format(method, timeout))
             data = json.loads(raw)
             if data.get("id") == msg_id:
                 return data
             self.events.append(data)
 
-    def evaluate(self, expression: str, timeout: float = 10.0) -> Any:
+    def evaluate(self, expression: str, timeout: float = READ_TIMEOUT) -> Any:
         result = self.send(
             "Runtime.evaluate",
             {"expression": expression, "awaitPromise": True, "returnByValue": True},
@@ -254,50 +269,65 @@ def capture(
         }, None, None, None
 
     session = None
+    timed_out: List[str] = []
+
+    def _read(what: str, fn, default=None):
+        """One CDP read; a timeout or error costs only this field."""
+        try:
+            return fn()
+        except CDPTimeout as exc:
+            timed_out.append(what)
+            _log("capture: {} timed out: {}".format(what, exc))
+        except Exception as exc:  # noqa: BLE001 - one failed read must not lose the rest
+            _log("capture: {} failed: {}: {}".format(what, type(exc).__name__, exc))
+        return default
+
+    def _eval(what: str, expression: str) -> Any:
+        if timed_out:
+            # The page already failed to answer once: don't spend another
+            # 3 s per field on a renderer that is gone.
+            return None
+        value = _read(what, lambda: session.evaluate(expression))
+        if isinstance(value, dict) and "__exception__" in value:
+            _log("capture: {} eval failed: {}".format(what, value["__exception__"]))
+            return None
+        return value
+
+    qa_html = visible_text = reviewer_state = None
+    console_errors: List[str] = []
+    screenshot_bytes: Optional[bytes] = None
     try:
-        session = CDPSession(ws_url)
-        session.send("Runtime.enable")
-        session.send("Log.enable")
         try:
-            session.send("Page.enable")
-        except CDPError:
-            pass
+            session = CDPSession(ws_url)
+        except TimeoutError as exc:
+            timed_out.append("connect")
+            _log("capture: connect timed out: {}".format(exc))
+        except Exception as exc:  # noqa: BLE001
+            _log("capture: connect failed: {}: {}".format(type(exc).__name__, exc))
 
-        session.collect_events(console_seconds)
+        if session is not None:
+            _read("Runtime.enable", lambda: session.send("Runtime.enable"))
+            if not timed_out:
+                _read("Log.enable", lambda: session.send("Log.enable"))
+                _read("Page.enable", lambda: session.send("Page.enable"))
+                session.collect_events(console_seconds)
 
-        qa_html = session.evaluate("document.getElementById('qa')?.outerHTML || null")
-        if isinstance(qa_html, dict) and "__exception__" in qa_html:
-            _log("capture: qa outerHTML eval failed: {}".format(qa_html["__exception__"]))
-            qa_html = None
+            qa_html = _eval("qa outerHTML", "document.getElementById('qa')?.outerHTML || null")
+            visible_text = _eval("visible text", "document.body ? document.body.innerText : null")
+            reviewer_state = _normalize_reviewer_state(
+                _eval("reviewer state", "window.__baReviewerState || null"))
+            ba_errors = _eval("__baErrors", "window.__baErrors || null")
 
-        visible_text = session.evaluate(
-            "document.body ? document.body.innerText : null"
-        )
-        if isinstance(visible_text, dict) and "__exception__" in visible_text:
-            _log("capture: visible text eval failed: {}".format(visible_text["__exception__"]))
-            visible_text = None
+            console_errors = _extract_console_errors(session.events)
+            if isinstance(ba_errors, list):
+                console_errors.extend(str(e) for e in ba_errors)
 
-        reviewer_state_raw = session.evaluate("window.__baReviewerState || null")
-        if isinstance(reviewer_state_raw, dict) and "__exception__" in reviewer_state_raw:
-            reviewer_state_raw = None
-        reviewer_state = _normalize_reviewer_state(reviewer_state_raw)
-
-        ba_errors = session.evaluate("window.__baErrors || null")
-        if isinstance(ba_errors, dict) and "__exception__" in ba_errors:
-            ba_errors = None
-
-        console_errors = _extract_console_errors(session.events)
-        if isinstance(ba_errors, list):
-            console_errors.extend(str(e) for e in ba_errors)
-
-        screenshot_bytes: Optional[bytes] = None
-        try:
-            shot = session.send("Page.captureScreenshot", {"format": "png"}, timeout=10.0)
-            b64 = shot.get("result", {}).get("data")
-            if b64:
-                screenshot_bytes = base64.b64decode(b64)
-        except CDPError as exc:
-            _log("capture: screenshot failed: {}".format(exc))
+            if not timed_out:
+                shot = _read("screenshot", lambda: session.send(
+                    "Page.captureScreenshot", {"format": "png"}))
+                b64 = (shot or {}).get("result", {}).get("data")
+                if b64:
+                    screenshot_bytes = base64.b64decode(b64)
 
         capture_dict = {
             "pages": page_summaries,
@@ -307,6 +337,8 @@ def capture(
             "screenshot_path": "screenshot.png" if screenshot_bytes else None,
             "captured_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         }
+        if timed_out:
+            capture_dict["note"] = UNRESPONSIVE_NOTE
         return capture_dict, screenshot_bytes, qa_html, reviewer_state
     except Exception as exc:  # noqa: BLE001 - capture must never raise into the caller
         _log("capture: failed: {}: {}".format(type(exc).__name__, exc))
