@@ -180,6 +180,15 @@ _ACTIONS: List[Dict[str, Any]] = [
         "icon": "theme",
         "keywords": ["auto", "appearance"],
     },
+    # No `contexts` — available on every screen (deck list, reviewer,
+    # editor overlays), same as the Cmd+Shift+B hotkey (see bugreport.py).
+    {
+        "key": "report-bug",
+        "title": "Report a bug",
+        "sub": "Save a ticket with a screenshot",
+        "icon": "flag",
+        "keywords": ["bug", "issue", "feedback", "ticket", "problem"],
+    },
 ]
 
 
@@ -762,6 +771,15 @@ def _do_action(key: str) -> None:
                 mw.col.update_card(card)
             except Exception:
                 pass
+        except Exception:
+            pass
+        return
+
+    if key == "report-bug":
+        try:
+            from . import bugreport as _bugreport
+
+            _bugreport.open_dialog()
         except Exception:
             pass
         return

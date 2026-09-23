@@ -2,6 +2,39 @@
 (function () {
   "use strict";
   if (window.__baEditorTools) return;
+
+  // JS error ring buffer for bugreport.py's ticket capture (Cmd+Shift+B /
+  // "Report a bug"). Capped at 50; installed before any of the tool code
+  // below runs. See web/reviewer.js's copy for the reviewer webview —
+  // whichever page bugreport.py reads from, __baErrors is there.
+  if (!window.__baErrors) {
+    window.__baErrors = [];
+    var BA_ERR_CAP = 50;
+    (function () {
+      function baPushError(entry) {
+        try {
+          window.__baErrors.push(entry);
+          if (window.__baErrors.length > BA_ERR_CAP) {
+            window.__baErrors.splice(0, window.__baErrors.length - BA_ERR_CAP);
+          }
+        } catch (_) {}
+      }
+      window.addEventListener("error", function (e) {
+        baPushError({
+          ts: Date.now(),
+          message: (e && e.message) || "Script error",
+          source: (e && e.filename) || "",
+          line: (e && e.lineno) || 0,
+        });
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        var reason = e && e.reason;
+        var message = (reason && (reason.message || String(reason))) || "Unhandled rejection";
+        baPushError({ ts: Date.now(), message: message, source: "", line: 0 });
+      });
+    })();
+  }
+
   var selected = null, selectedRef = null, selectionBox, menu, toolbar, bookmark = null, drag = null;
   var dialog = null, crop = null;
   var imageObserver = new MutationObserver(function () { if (selected) positionSelection(); });

@@ -228,6 +228,11 @@ in this file are the raw form the settings page writes.
 
 ## Windows
 - **cmdk** — the ⌘K / Ctrl+K command palette.
+- **bug_report_shortcut** — Qt key sequence for "Report a bug" (default
+  `"Ctrl+Shift+B"`, which Qt maps to ⌘⇧B on macOS). Always also reachable
+  from the command palette ("Report a bug") on every screen. Saves a
+  ticket — a one-line note, an optional "what did you expect", and a
+  screenshot by default — under `~/AnkiTickets/<id>/`.
 - **embed_add**, **embed_browse**, **embed_stats**, **embed_settings** — open
   those inside the main window (needs `sidebar_nav`); `false` uses Anki's
   separate windows.

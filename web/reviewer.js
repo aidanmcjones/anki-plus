@@ -3,6 +3,37 @@
 // field spans (wrapped server-side with data-ba-field) become
 // contenteditable in place, with a small floating toolbar at the bottom.
 (function () {
+  // JS error ring buffer for bugreport.py's ticket capture (Cmd+Shift+B /
+  // "Report a bug"). Capped at 50 so a runaway error loop can't bloat a
+  // ticket; installed first, before anything below gets a chance to throw.
+  // editor-tools.js installs the same buffer for the pages it's loaded on;
+  // whichever webview bugreport.py reads from, __baErrors is there.
+  if (!window.__baErrors) {
+    window.__baErrors = [];
+    var BA_ERR_CAP = 50;
+    function baPushError(entry) {
+      try {
+        window.__baErrors.push(entry);
+        if (window.__baErrors.length > BA_ERR_CAP) {
+          window.__baErrors.splice(0, window.__baErrors.length - BA_ERR_CAP);
+        }
+      } catch (_) {}
+    }
+    window.addEventListener("error", function (e) {
+      baPushError({
+        ts: Date.now(),
+        message: (e && e.message) || "Script error",
+        source: (e && e.filename) || "",
+        line: (e && e.lineno) || 0,
+      });
+    });
+    window.addEventListener("unhandledrejection", function (e) {
+      var reason = e && e.reason;
+      var message = (reason && (reason.message || String(reason))) || "Unhandled rejection";
+      baPushError({ ts: Date.now(), message: message, source: "", line: 0 });
+    });
+  }
+
   // Settings toggles handed over by Python (window.__baOpts.reviewer). A
   // missing key means "on" so older payloads keep working.
   function rvOpts() {

@@ -39,6 +39,7 @@
   "deck_deadlines": true,
   "deadline_passed_mode": "pause",
   "cmdk": true,
+  "bug_report_shortcut": "Ctrl+Shift+B",
   "embed_add": true,
   "embed_browse": true,
   "embed_stats": true,
