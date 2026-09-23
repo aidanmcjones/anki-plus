@@ -52,7 +52,10 @@ def run(t):
     t.check("Browse opens inline", br is not None, embed._state)
     if br is None:
         return
-    t.pump(500)
+    # The embed keeps an anti-flash curtain over itself for ~0.9 s after
+    # opening; a press before it drops lands on the curtain, not the table.
+    t.wait_until(lambda: embed._state.get("curtain") is None, timeout=10)
+    t.pump(200)
     watchers = getattr(br, "_ba_card_drag", None)
     t.check("card drag is installed on the real Browser",
             isinstance(watchers, dict) and {"source", "table", "sidebar"} <= set(watchers),

@@ -29,6 +29,13 @@ All notable changes to Anki Design are documented here. Format loosely follows
   search), a press-and-pull on an unselected row drags that card, and a
   drop on a review card's row says that only new cards have a queue
   position instead of showing a silent "no entry" cursor.
+- **Sweep-selecting cards in Browse works again.** Pressing on a card and
+  pulling down (or up) the list is how the table selects a run of rows,
+  and the card drag had taken that gesture for itself: it started a drag
+  of the one pressed card, so nothing was selected. A sweep along the
+  list from an unselected row now goes to the table, which selects the
+  rows it crosses; the group is then dragged by pressing on any of its
+  rows. A sideways pull on an unselected row still drags that one card.
 
 ### Changed
 - **A deadline that has passed now pauses its deck by default.** Setting

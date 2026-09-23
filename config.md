@@ -290,7 +290,9 @@ in this file are the raw form the settings page writes.
 - **browse_card_drag** — drag cards out of the Browse table. Press on a
   selected row and pull: every selected card comes along (in Notes mode,
   every card of every selected note). Press on an unselected row and pull
-  to drag just that card. Drop on a deck in the sidebar to
+  sideways to drag just that card; pull up or down the list instead and
+  the table selects the rows you sweep across, as it always has, so a
+  group can be gathered by hand and then dragged. Drop on a deck in the sidebar to
   move them there, one undoable step, the same op as **Change Deck**;
   the list re-runs its search so the moved cards leave it.
   Drop on another row of the table to reposition new cards just before
