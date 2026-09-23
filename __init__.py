@@ -870,6 +870,7 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
     # the progress bar element.
     if isinstance(context, Reviewer):
         web_content.css.append(f"{WEB}/reviewer.css")
+        web_content.js.append(f"{WEB}/card-scale.js")
         web_content.css.append(f"{WEB}/editor-tools.css")
         web_content.js.append(f"{WEB}/editor-tools.js")
         web_content.head += _system_fonts_meta()
@@ -882,6 +883,7 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
     if _is(context, _PreviewCtx):
         web_content.css.append(f"{WEB}/theme.css")
         web_content.css.append(f"{WEB}/reviewer.css")
+        web_content.js.append(f"{WEB}/card-scale.js")
         web_content.css.append(f"{WEB}/browse-preview.css")
         web_content.js.append(f"{WEB}/browse-preview.js")
         web_content.head += (
