@@ -1,0 +1,766 @@
+"""Regression tests for browse_card_drag.py: drag selected cards out of the
+Browse table and drop them on a deck in the sidebar (move) or on a new
+card's row in the table (reposition).
+
+Reported as: "When selecting one card or multiple, I should be able to
+select one or a group and drag and drop it to another deck or a different
+place in the deck." Stock Anki's card table is not a drag source at all,
+so on the unfixed code there is nothing to drag and nowhere to drop.
+
+Runs standalone (no Anki or PyQt install needed):
+`python3 tests/test_browse_card_drag.py`. `aqt` is stubbed with a small
+fake Qt: views with rows, mouse and drag events, a QDrag that records
+what it carried, and the two collection ops as recorders.
+"""
+
+import os
+import sys
+import types
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+
+# --------------------------------------------------------------------------- #
+# Fake Qt
+# --------------------------------------------------------------------------- #
+
+class QPoint:
+    def __init__(self, x=0, y=0):
+        if isinstance(x, QPoint):
+            x, y = x.x(), x.y()
+        self._x, self._y = x, y
+
+    def x(self):
+        return self._x
+
+    def y(self):
+        return self._y
+
+    def toPoint(self):
+        return self
+
+
+class QRect:
+    def __init__(self, x=0, y=0, w=0, h=0):
+        self._x, self._y, self._w, self._h = x, y, w, h
+
+    def top(self):
+        return self._y
+
+    def left(self):
+        return self._x
+
+    def width(self):
+        return self._w
+
+    def height(self):
+        return self._h
+
+    def tuple(self):
+        return (self._x, self._y, self._w, self._h)
+
+
+class _EventType:
+    MouseButtonPress = 2
+    MouseButtonRelease = 3
+    MouseMove = 5
+    DragEnter = 60
+    DragMove = 61
+    DragLeave = 62
+    Drop = 63
+
+
+class QEvent:
+    Type = _EventType
+
+    def __init__(self, t):
+        self._t = t
+        self.accepted = True
+
+    def type(self):
+        return self._t
+
+    def accept(self):
+        self.accepted = True
+
+    def ignore(self):
+        self.accepted = False
+
+
+class _MouseButton:
+    NoButton = 0
+    LeftButton = 1
+    RightButton = 2
+
+
+class _Modifier:
+    ShiftModifier = 0x02000000
+    ControlModifier = 0x04000000
+    MetaModifier = 0x10000000
+
+
+class _DropAction:
+    MoveAction = 2
+
+
+class _WidgetAttribute:
+    WA_TransparentForMouseEvents = 51
+
+
+class Qt:
+    MouseButton = _MouseButton
+    KeyboardModifier = _Modifier
+    DropAction = _DropAction
+    WidgetAttribute = _WidgetAttribute
+
+
+class QObject:
+    def __init__(self, parent=None):
+        self._parent = parent
+
+
+class QByteArray:
+    def __init__(self, b=b""):
+        self._b = bytes(b)
+
+    def data(self):
+        return self._b
+
+
+class QMimeData:
+    def __init__(self):
+        self._data = {}
+
+    def setData(self, fmt, ba):
+        self._data[fmt] = ba
+
+    def hasFormat(self, fmt):
+        return fmt in self._data
+
+    def data(self, fmt):
+        return self._data.get(fmt, QByteArray())
+
+
+class QDrag:
+    instances = []
+
+    def __init__(self, source):
+        self.source = source
+        self.mime = None
+        self.pixmap = None
+        self.executed = None
+        QDrag.instances.append(self)
+
+    def setMimeData(self, m):
+        self.mime = m
+
+    def setPixmap(self, p):
+        self.pixmap = p
+
+    def setHotSpot(self, p):
+        pass
+
+    def exec(self, action):
+        self.executed = action
+        return action
+
+
+class QApplication:
+    @staticmethod
+    def startDragDistance():
+        return 10
+
+
+class QTimer:
+    def __init__(self, parent=None):
+        self.timeout = self
+        self._cb = None
+        self.active = False
+
+    def setSingleShot(self, v):
+        pass
+
+    def setInterval(self, ms):
+        pass
+
+    def connect(self, fn):
+        self._cb = fn
+
+    def start(self):
+        self.active = True
+
+    def stop(self):
+        self.active = False
+
+    def fire(self):
+        if self.active:
+            self.active = False
+            self._cb()
+
+
+class QFrame:
+    def __init__(self, parent=None):
+        self.parent = parent
+        self.geometry = None
+        self.visible = False
+
+    def setObjectName(self, n):
+        pass
+
+    def setAttribute(self, a, v):
+        pass
+
+    def setStyleSheet(self, s):
+        pass
+
+    def setGeometry(self, r):
+        self.geometry = r
+
+    def show(self):
+        self.visible = True
+
+    def hide(self):
+        self.visible = False
+
+    def raise_(self):
+        pass
+
+
+class _Widget:
+    def __init__(self, w=300):
+        self._filters = []
+        self._w = w
+        self.accepts_drops = False
+
+    def installEventFilter(self, f):
+        self._filters.append(f)
+
+    def setAcceptDrops(self, v):
+        self.accepts_drops = bool(v)
+
+    def width(self):
+        return self._w
+
+    def mapFrom(self, other, pos):
+        return pos
+
+    def event(self, ev):
+        """Qt's dispatch: filters run in install order and a True stops
+        the event before the widget sees it."""
+        for f in list(self._filters):
+            if f.eventFilter(self, ev):
+                return True
+        return False
+
+
+class MouseEvent(QEvent):
+    def __init__(self, t, x, y, button=Qt.MouseButton.LeftButton,
+                 buttons=None, modifiers=0):
+        super().__init__(t)
+        self._pos = QPoint(x, y)
+        self._button = button
+        self._buttons = button if buttons is None else buttons
+        self._mods = modifiers
+
+    def position(self):
+        return self._pos
+
+    def button(self):
+        return self._button
+
+    def buttons(self):
+        return self._buttons
+
+    def modifiers(self):
+        return self._mods
+
+
+class DragEvent(QEvent):
+    def __init__(self, t, x, y, mime):
+        super().__init__(t)
+        self.accepted = False
+        self._pos = QPoint(x, y)
+        self._mime = mime
+        self.drop_action = None
+
+    def position(self):
+        return self._pos
+
+    def mimeData(self):
+        return self._mime
+
+    def acceptProposedAction(self):
+        self.accepted = True
+
+    def setDropAction(self, a):
+        self.drop_action = a
+
+
+# --------------------------------------------------------------------------- #
+# Fake views: 20px rows, index row = y // 20
+# --------------------------------------------------------------------------- #
+
+ROW_H = 20
+
+
+class Index:
+    def __init__(self, row):
+        self.row = row
+
+    def isValid(self):
+        return self.row >= 0
+
+    def __eq__(self, other):
+        return isinstance(other, Index) and other.row == self.row
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash(self.row)
+
+
+class _Selection:
+    def __init__(self, view):
+        self.view = view
+
+    def isSelected(self, index):
+        return index.row in self.view.selected
+
+
+class FakeView(_Widget):
+    def __init__(self, rows):
+        super().__init__()
+        self.rows = rows
+        self.selected = set()
+        self._vp = _Widget()
+        self.expanded = set()
+
+    def viewport(self):
+        return self._vp
+
+    def indexAt(self, pos):
+        r = pos.y() // ROW_H
+        return Index(r if 0 <= r < len(self.rows) else -1)
+
+    def visualRect(self, index):
+        return QRect(30, index.row * ROW_H, 120, ROW_H)
+
+    def selectionModel(self):
+        return _Selection(self)
+
+    def isExpanded(self, index):
+        return index.row in self.expanded
+
+    def expand(self, index):
+        self.expanded.add(index.row)
+
+
+class _SidebarItemType:
+    DECK = "deck"
+    DECK_CURRENT = "deck_current"
+    DECK_ROOT = "deck_root"
+    TAG = "tag"
+
+
+class FakeSidebar(FakeView):
+    """rows: (item_type, id)"""
+
+    def model(self):
+        view = self
+
+        class _M:
+            def item_for_index(self_inner, index):
+                t, i = view.rows[index.row]
+                return types.SimpleNamespace(item_type=t, id=i, name=str(i))
+        return _M()
+
+
+class Card:
+    def __init__(self, cid, ctype, due):
+        self.id, self.type, self.due = cid, ctype, due
+
+
+class FakeTable:
+    def __init__(self, cards):
+        self._view = FakeView(cards)
+        table = self
+
+        class _Model:
+            def get_card(self_inner, index):
+                return table._view.rows[index.row]
+        self._model = _Model()
+
+    def get_selected_card_ids(self):
+        return [self._view.rows[r].id for r in sorted(self._view.selected)]
+
+
+class FakeBrowser:
+    def __init__(self, cards, sidebar_rows):
+        self.table = FakeTable(cards)
+        self.sidebar = FakeSidebar(sidebar_rows)
+
+
+# --------------------------------------------------------------------------- #
+# Stubs: aqt, anki, and the two ops as recorders
+# --------------------------------------------------------------------------- #
+
+def _stub(name, **attrs):
+    mod = sys.modules.get(name) or types.ModuleType(name)
+    for k, v in attrs.items():
+        setattr(mod, k, v)
+    sys.modules[name] = mod
+    return mod
+
+
+class _AddonManager:
+    cfg = {}
+
+    def getConfig(self, *a, **k):
+        return dict(self.cfg)
+
+
+FILTERED = {7}
+CURRENT_DECK = 3
+
+
+class _Decks:
+    def is_filtered(self, did):
+        return did in FILTERED
+
+    def get_current_id(self):
+        return CURRENT_DECK
+
+    def name(self, did):
+        return f"Deck {did}"
+
+
+_mw = types.SimpleNamespace(
+    addonManager=_AddonManager(),
+    col=types.SimpleNamespace(decks=_Decks()),
+)
+
+OPS = []
+
+
+class _Op:
+    def __init__(self, kind, kwargs):
+        self.kind, self.kwargs = kind, kwargs
+        self.ran = False
+
+    def success(self, fn):
+        return self
+
+    def run_in_background(self):
+        self.ran = True
+        OPS.append(self)
+
+
+def set_card_deck(**kw):
+    return _Op("set_card_deck", kw)
+
+
+def reposition_new_cards(**kw):
+    return _Op("reposition_new_cards", kw)
+
+
+_stub("aqt", mw=_mw)
+_stub(
+    "aqt.qt",
+    QApplication=QApplication, QByteArray=QByteArray, QDrag=QDrag,
+    QEvent=QEvent, QFrame=QFrame, QMimeData=QMimeData, QObject=QObject,
+    QPoint=QPoint, QRect=QRect, Qt=Qt, QTimer=QTimer,
+)
+_stub("aqt.browser")
+_stub("aqt.browser.sidebar")
+_stub("aqt.browser.sidebar.item", SidebarItemType=_SidebarItemType)
+_stub("aqt.operations")
+_stub("aqt.operations.card", set_card_deck=set_card_deck)
+_stub("aqt.operations.scheduling", reposition_new_cards=reposition_new_cards)
+_stub("aqt.utils", tooltip=lambda *a, **k: None)
+_stub("anki")
+_stub("anki.cards", CardId=int)
+_stub("anki.decks", DeckId=int)
+_stub("anki.consts", CARD_TYPE_NEW=0)
+
+import browse_card_drag  # noqa: E402
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+
+NEW, REVIEW = 0, 2
+
+
+def _boot():
+    QDrag.instances.clear()
+    OPS.clear()
+    cards = [
+        Card(10, NEW, 5),        # row 0
+        Card(11, NEW, 6),        # row 1
+        Card(12, NEW, 7),        # row 2
+        Card(13, NEW, 8),        # row 3
+        Card(14, REVIEW, 900),   # row 4
+        Card(15, NEW, 20),       # row 5
+    ]
+    side = [
+        (_SidebarItemType.DECK_ROOT, 0),        # row 0
+        (_SidebarItemType.DECK_CURRENT, 0),     # row 1
+        (_SidebarItemType.DECK, 42),            # row 2
+        (_SidebarItemType.DECK, 7),             # row 3 (filtered)
+        (_SidebarItemType.TAG, 99),             # row 4
+    ]
+    br = FakeBrowser(cards, side)
+    watchers = browse_card_drag.install(br)
+    assert watchers, "install() returned nothing"
+    return br, watchers
+
+
+def _press(view, x, y, **kw):
+    return view.viewport().event(MouseEvent(QEvent.Type.MouseButtonPress, x, y, **kw))
+
+
+def _move(view, x, y, **kw):
+    return view.viewport().event(MouseEvent(QEvent.Type.MouseMove, x, y, **kw))
+
+
+def _release(view, x, y):
+    return view.viewport().event(MouseEvent(
+        QEvent.Type.MouseButtonRelease, x, y, buttons=Qt.MouseButton.NoButton))
+
+
+def _drag_to(view, t, x, y, mime):
+    ev = DragEvent(t, x, y, mime)
+    consumed = view.viewport().event(ev)
+    return ev, consumed
+
+
+def _pull(br, rows, from_row):
+    """Select `rows`, press on `from_row`, pull past the drag distance.
+    Returns the QDrag that started."""
+    view = br.table._view
+    view.selected = set(rows)
+    y = from_row * ROW_H + 5
+    assert _press(view, 10, y) is False, "press must reach the view"
+    assert _move(view, 12, y + 2) is True, "sub-threshold wobble is swallowed"
+    assert not QDrag.instances, "no drag before the threshold"
+    assert _move(view, 10, y + 40) is True, "the drag consumes the move"
+    assert len(QDrag.instances) == 1, "one drag should have started"
+    return QDrag.instances[-1]
+
+
+# --------------------------------------------------------------------------- #
+# Wiring: the add-on installs the module on every Browser
+# --------------------------------------------------------------------------- #
+
+def test_addon_wires_install_on_browser_will_show():
+    with open(os.path.join(ROOT, "__init__.py"), encoding="utf-8") as f:
+        src = f.read()
+    assert "browse_card_drag" in src, "__init__.py never imports browse_card_drag"
+    assert "browser_will_show.append(_card_drag.install)" in src, (
+        "browse_card_drag.install is not registered on browser_will_show"
+    )
+    import json
+    with open(os.path.join(ROOT, "config.json"), encoding="utf-8") as f:
+        cfg = json.load(f)
+    assert cfg.get("browse_card_drag") is True, "config.json lacks browse_card_drag"
+
+
+# --------------------------------------------------------------------------- #
+# The table is a drag source for the selection
+# --------------------------------------------------------------------------- #
+
+def test_pulling_a_selected_row_starts_a_drag_with_every_selected_card():
+    br, _ = _boot()
+    drag = _pull(br, {1, 2, 3}, from_row=2)
+    assert browse_card_drag.decode_cards(drag.mime) == [11, 12, 13]
+    assert drag.executed == Qt.DropAction.MoveAction
+    assert drag.source is br.table._view
+
+
+def test_single_card_drag():
+    br, _ = _boot()
+    drag = _pull(br, {5}, from_row=5)
+    assert browse_card_drag.decode_cards(drag.mime) == [15]
+
+
+def test_click_on_selected_row_is_still_a_click():
+    br, _ = _boot()
+    view = br.table._view
+    view.selected = {1, 2, 3}
+    assert _press(view, 10, 45) is False
+    assert _move(view, 11, 46) is True
+    assert _release(view, 11, 46) is False, "the release must reach the view"
+    assert not QDrag.instances, "a click must not start a drag"
+    # And the watcher is disarmed: a later move with no press does nothing.
+    assert _move(view, 10, 200, buttons=Qt.MouseButton.NoButton) is False
+
+
+def test_pulling_from_an_unselected_row_is_left_to_the_view():
+    br, _ = _boot()
+    view = br.table._view
+    view.selected = {1}
+    assert _press(view, 10, 85) is False   # row 4, not selected
+    assert _move(view, 10, 130) is False   # rubber-band as before
+    assert not QDrag.instances
+
+
+def test_modifier_press_never_arms():
+    br, _ = _boot()
+    view = br.table._view
+    view.selected = {1, 2}
+    assert _press(view, 10, 25, modifiers=Qt.KeyboardModifier.ControlModifier) is False
+    assert _move(view, 10, 80, modifiers=Qt.KeyboardModifier.ControlModifier) is False
+    assert not QDrag.instances
+    assert _press(view, 10, 25, button=Qt.MouseButton.RightButton) is False
+    assert _move(view, 10, 80, buttons=Qt.MouseButton.RightButton) is False
+    assert not QDrag.instances
+
+
+# --------------------------------------------------------------------------- #
+# Drop on a deck in the sidebar: move the cards there
+# --------------------------------------------------------------------------- #
+
+def test_drop_on_sidebar_deck_moves_the_cards():
+    br, w = _boot()
+    drag = _pull(br, {1, 2, 3}, from_row=2)
+    side = br.sidebar
+    # Enter over the tree.
+    ev, consumed = _drag_to(side, QEvent.Type.DragEnter, 10, 45, drag.mime)
+    assert consumed and ev.accepted
+    # Over deck 42: accepted, row highlighted.
+    ev, consumed = _drag_to(side, QEvent.Type.DragMove, 10, 45, drag.mime)
+    assert consumed and ev.accepted
+    marker = w["sidebar"].marker
+    assert marker is not None and marker.visible
+    assert marker.geometry.tuple() == (0, 40, 300, 20), marker.geometry.tuple()
+    # Drop.
+    ev, consumed = _drag_to(side, QEvent.Type.Drop, 10, 45, drag.mime)
+    assert consumed and ev.accepted
+    assert len(OPS) == 1 and OPS[0].kind == "set_card_deck", OPS
+    op = OPS[0]
+    assert op.ran
+    assert op.kwargs["parent"] is br
+    assert list(op.kwargs["card_ids"]) == [11, 12, 13]
+    assert op.kwargs["deck_id"] == 42
+    assert not marker.visible, "highlight must go once the drop is done"
+
+
+def test_drop_on_current_deck_row_uses_the_current_deck():
+    br, _ = _boot()
+    drag = _pull(br, {0}, from_row=0)
+    ev, _ = _drag_to(br.sidebar, QEvent.Type.Drop, 10, 25, drag.mime)
+    assert ev.accepted
+    assert OPS and OPS[0].kwargs["deck_id"] == CURRENT_DECK
+
+
+def test_drop_on_filtered_deck_tag_or_heading_is_refused():
+    br, w = _boot()
+    drag = _pull(br, {1}, from_row=1)
+    for y in (5, 65, 85, 500):  # root heading, filtered deck, tag, empty
+        ev, consumed = _drag_to(br.sidebar, QEvent.Type.DragMove, 10, y, drag.mime)
+        assert consumed and not ev.accepted, y
+        ev, consumed = _drag_to(br.sidebar, QEvent.Type.Drop, 10, y, drag.mime)
+        assert consumed and not ev.accepted, y
+    assert not OPS
+
+
+def test_foreign_drags_pass_through_to_the_tree():
+    br, _ = _boot()
+    other = QMimeData()
+    other.setData("application/x-qabstractitemmodeldatalist", QByteArray(b"x"))
+    for t in (QEvent.Type.DragEnter, QEvent.Type.DragMove, QEvent.Type.Drop):
+        ev, consumed = _drag_to(br.sidebar, t, 10, 45, other)
+        assert consumed is False, "the tree's own deck drags are not ours"
+    assert not OPS
+
+
+def test_hovering_a_collapsed_deck_expands_it():
+    br, w = _boot()
+    drag = _pull(br, {1}, from_row=1)
+    _drag_to(br.sidebar, QEvent.Type.DragEnter, 10, 45, drag.mime)
+    timer = w["sidebar"].expand_timer
+    assert timer is not None and timer.active
+    timer.fire()
+    assert 2 in br.sidebar.expanded
+
+
+# --------------------------------------------------------------------------- #
+# Drop on a row of the table: reposition the new cards before it
+# --------------------------------------------------------------------------- #
+
+def test_drop_on_a_new_card_row_repositions_before_it():
+    br, w = _boot()
+    drag = _pull(br, {2, 3}, from_row=3)
+    view = br.table._view
+    ev, consumed = _drag_to(view, QEvent.Type.DragMove, 10, 5, drag.mime)  # row 0
+    assert consumed and ev.accepted
+    assert w["table"].marker.visible
+    ev, consumed = _drag_to(view, QEvent.Type.Drop, 10, 5, drag.mime)
+    assert consumed and ev.accepted
+    assert len(OPS) == 1 and OPS[0].kind == "reposition_new_cards", OPS
+    kw = OPS[0].kwargs
+    assert kw["parent"] is br
+    assert list(kw["card_ids"]) == [12, 13]
+    assert kw["starting_from"] == 5, "lands at the target card's position"
+    assert kw["step_size"] == 1 and kw["randomize"] is False
+    assert kw["shift_existing"] is True, "the target and what follows slide back"
+
+
+def test_drop_on_a_review_card_row_is_refused():
+    br, _ = _boot()
+    drag = _pull(br, {1}, from_row=1)
+    view = br.table._view
+    ev, consumed = _drag_to(view, QEvent.Type.DragMove, 10, 85, drag.mime)  # row 4
+    assert consumed and not ev.accepted
+    ev, consumed = _drag_to(view, QEvent.Type.Drop, 10, 85, drag.mime)
+    assert consumed and not ev.accepted
+    assert not OPS
+
+
+def test_drop_onto_itself_is_a_no_op():
+    br, _ = _boot()
+    drag = _pull(br, {1}, from_row=1)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 25, drag.mime)
+    assert not ev.accepted
+    assert not OPS
+
+
+# --------------------------------------------------------------------------- #
+# Guards
+# --------------------------------------------------------------------------- #
+
+def test_install_is_idempotent_and_config_gated():
+    br, w = _boot()
+    assert browse_card_drag.install(br) is w
+    _AddonManager.cfg = {"browse_card_drag": False}
+    try:
+        assert browse_card_drag.install(FakeBrowser([], [])) is None
+    finally:
+        _AddonManager.cfg = {}
+
+
+def test_drop_targets_accept_drops():
+    br, _ = _boot()
+    assert br.table._view.accepts_drops and br.table._view.viewport().accepts_drops
+    assert br.sidebar.accepts_drops and br.sidebar.viewport().accepts_drops
+
+
+if __name__ == "__main__":
+    names = [n for n in list(globals()) if n.startswith("test_")]
+    failed = 0
+    for name in names:
+        try:
+            globals()[name]()
+            print(f"ok   {name}")
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            import traceback
+            print(f"FAIL {name}: {e!r}")
+            traceback.print_exc()
+    if failed:
+        print(f"{failed} of {len(names)} failed")
+        sys.exit(1)
+    print(f"PASS test_browse_card_drag ({len(names)} tests)")
