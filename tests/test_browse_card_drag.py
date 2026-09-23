@@ -382,9 +382,19 @@ class Card:
         self.id, self.type, self.due = cid, ctype, due
 
 
+class _SortState:
+    """Anki's ItemState: the sort column and direction the last search used."""
+
+    def __init__(self, column="noteFld", backwards=False):
+        self.sort_column = column
+        self.sort_backwards = backwards
+
+
 class FakeTable:
     def __init__(self, cards):
         self._view = FakeView(cards)
+        self._state = _SortState()
+        self.indicator_sets = 0
         table = self
 
         class _Model:
@@ -395,11 +405,20 @@ class FakeTable:
     def get_selected_card_ids(self):
         return [self._view.rows[r].id for r in sorted(self._view.selected)]
 
+    def _set_sort_indicator(self):
+        self.indicator_sets += 1
+
 
 class FakeBrowser:
     def __init__(self, cards, sidebar_rows):
         self.table = FakeTable(cards)
         self.sidebar = FakeSidebar(sidebar_rows)
+        self.searches = 0
+
+    def search(self):
+        """Browser.search(): re-runs the last search, which is the only
+        thing that re-sorts the rows (op_executed only redraws cells)."""
+        self.searches += 1
 
 
 # --------------------------------------------------------------------------- #
@@ -436,25 +455,46 @@ class _Decks:
         return f"Deck {did}"
 
 
+CARDS = {}
+
+
+class _Col:
+    def __init__(self):
+        self.decks = _Decks()
+
+    def get_card(self, cid):
+        return CARDS[int(cid)]
+
+
 _mw = types.SimpleNamespace(
     addonManager=_AddonManager(),
-    col=types.SimpleNamespace(decks=_Decks()),
+    col=_Col(),
 )
 
 OPS = []
+TOOLTIPS = []
 
 
 class _Op:
     def __init__(self, kind, kwargs):
         self.kind, self.kwargs = kind, kwargs
         self.ran = False
+        self._success = None
 
     def success(self, fn):
+        # CollectionOp.success replaces the callback, it does not chain.
+        self._success = fn
         return self
 
     def run_in_background(self):
         self.ran = True
         OPS.append(self)
+
+    def finish(self, count):
+        """The collection op completed: run the success callback the way
+        CollectionOp does, with an OpChangesWithCount."""
+        assert self._success is not None, "no success callback attached"
+        self._success(types.SimpleNamespace(count=count))
 
 
 def set_card_deck(**kw):
@@ -478,7 +518,7 @@ _stub("aqt.browser.sidebar.item", SidebarItemType=_SidebarItemType)
 _stub("aqt.operations")
 _stub("aqt.operations.card", set_card_deck=set_card_deck)
 _stub("aqt.operations.scheduling", reposition_new_cards=reposition_new_cards)
-_stub("aqt.utils", tooltip=lambda *a, **k: None)
+_stub("aqt.utils", tooltip=lambda msg, *a, **k: TOOLTIPS.append(str(msg)))
 _stub("anki")
 _stub("anki.cards", CardId=int)
 _stub("anki.decks", DeckId=int)
@@ -497,6 +537,7 @@ NEW, REVIEW = 0, 2
 def _boot():
     QDrag.instances.clear()
     OPS.clear()
+    TOOLTIPS.clear()
     cards = [
         Card(10, NEW, 5),        # row 0
         Card(11, NEW, 6),        # row 1
@@ -505,6 +546,8 @@ def _boot():
         Card(14, REVIEW, 900),   # row 4
         Card(15, NEW, 20),       # row 5
     ]
+    CARDS.clear()
+    CARDS.update({c.id: c for c in cards})
     side = [
         (_SidebarItemType.DECK_ROOT, 0),        # row 0
         (_SidebarItemType.DECK_CURRENT, 0),     # row 1
@@ -726,6 +769,89 @@ def test_drop_onto_itself_is_a_no_op():
     ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 25, drag.mime)
     assert not ev.accepted
     assert not OPS
+
+
+# --------------------------------------------------------------------------- #
+# Regression: "It says it moved but it actually stays in the same place."
+#
+# Table.op_executed only marks the cell cache stale and redraws: the row
+# order is a snapshot of the last search. So after the reposition op the
+# Due column changes but the rows do not move, and a table sorted by
+# anything other than Due could not show the new order anyway.
+# --------------------------------------------------------------------------- #
+
+def test_table_re_sorts_by_due_once_the_reposition_lands():
+    br, _ = _boot()
+    br.table._state = _SortState("noteFld", False)   # the stock default
+    drag = _pull(br, {3}, from_row=3)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 5, drag.mime)  # row 0
+    assert ev.accepted and len(OPS) == 1
+    assert br.searches == 0, "nothing to re-sort until the op has run"
+    OPS[0].finish(count=1)
+    assert br.searches == 1, "the search must re-run so the rows re-sort"
+    assert br.table._state.sort_column == "cardDue", (
+        "the order only shows with the table sorted by position"
+    )
+    assert br.table._state.sort_backwards is False
+    assert br.table.indicator_sets == 1, "the header must show the new sort"
+    assert any("1 card" in t and "reposition" in t for t in TOOLTIPS), TOOLTIPS
+
+
+def test_a_due_sorted_table_keeps_its_sort_and_still_refreshes():
+    br, _ = _boot()
+    br.table._state = _SortState("cardDue", False)
+    drag = _pull(br, {2, 3}, from_row=3)
+    _drag_to(br.table._view, QEvent.Type.Drop, 10, 5, drag.mime)
+    assert OPS[0].kwargs["starting_from"] == 5
+    OPS[0].finish(count=2)
+    assert br.searches == 1
+    assert br.table._state.sort_column == "cardDue"
+    assert br.table.indicator_sets == 0, "already sorted by Due: leave the header be"
+    assert any("2 cards" in t and "reposition" in t for t in TOOLTIPS), TOOLTIPS
+
+
+def test_due_descending_puts_the_cards_after_the_target():
+    # Sorted by Due, newest position at the top: "above this row" on
+    # screen means later in the queue, so the cards land just after it.
+    br, _ = _boot()
+    br.table._state = _SortState("cardDue", True)
+    drag = _pull(br, {0}, from_row=0)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 65, drag.mime)  # row 3, due 8
+    assert ev.accepted and len(OPS) == 1
+    assert OPS[0].kwargs["starting_from"] == 9
+    OPS[0].finish(count=1)
+    assert br.table._state.sort_backwards is True, "the user's direction stays"
+    assert br.searches == 1
+
+
+def test_no_success_message_when_nothing_changed():
+    br, _ = _boot()
+    drag = _pull(br, {3}, from_row=3)
+    _drag_to(br.table._view, QEvent.Type.Drop, 10, 5, drag.mime)
+    OPS[0].finish(count=0)
+    assert not any("reposition" in t for t in TOOLTIPS), TOOLTIPS
+    assert br.searches == 1, "the table is still refreshed"
+
+
+def test_dragging_only_review_cards_onto_a_new_row_says_so_and_runs_no_op():
+    br, _ = _boot()
+    drag = _pull(br, {4}, from_row=4)   # card 14, a review card
+    view = br.table._view
+    ev, consumed = _drag_to(view, QEvent.Type.Drop, 10, 5, drag.mime)  # row 0, new
+    assert consumed and not ev.accepted
+    assert not OPS, "a review card has no position: no op, no shifted queue"
+    assert any("new" in t.lower() for t in TOOLTIPS), TOOLTIPS
+    assert br.searches == 0
+
+
+def test_a_mixed_drag_repositions_only_its_new_cards():
+    br, _ = _boot()
+    drag = _pull(br, {3, 4, 5}, from_row=5)   # 13 new, 14 review, 15 new
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 5, drag.mime)
+    assert ev.accepted and len(OPS) == 1
+    assert list(OPS[0].kwargs["card_ids"]) == [13, 15]
+    OPS[0].finish(count=2)
+    assert any("2 cards" in t and "1 " in t for t in TOOLTIPS), TOOLTIPS
 
 
 # --------------------------------------------------------------------------- #

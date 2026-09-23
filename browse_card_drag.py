@@ -17,7 +17,9 @@ module adds the direct-manipulation route on top:
                                     cards land just before that row's card
                                     in the new-card queue (only new cards
                                     have a position, so the row has to be a
-                                    new card too)
+                                    new card too), then the table is
+                                    re-searched sorted by Due so the rows
+                                    visibly move
 
 How it is wired. QAbstractItemView has its own drag machinery, but it is
 driven by the model (`flags`, `mimeData`), and the table's model is Anki's
@@ -379,13 +381,117 @@ def new_card_at(browser: Any, pos: QPoint) -> Optional[tuple]:
         return None
 
 
+# The Browse column that shows a new card's position. Same key in Cards
+# and Notes mode (rslib's Column::Due).
+DUE_COLUMN = "cardDue"
+
+
+def _tooltip(browser: Any, text: str) -> None:
+    try:
+        from aqt.utils import tooltip
+
+        tooltip(text, parent=browser)
+    except Exception:
+        pass
+
+
+def new_cards_only(card_ids: List[int]) -> List[int]:
+    """The dragged cards that have a position: type new. The op would skip
+    the others anyway, but it would still shift the queue to make room for
+    them and report a change, so they are dropped here, before it runs."""
+    try:
+        from anki.consts import CARD_TYPE_NEW
+    except Exception:
+        CARD_TYPE_NEW = 0
+    out: List[int] = []
+    for c in card_ids:
+        try:
+            card = mw.col.get_card(int(c))
+            if int(card.type) == int(CARD_TYPE_NEW):
+                out.append(int(c))
+        except Exception:
+            continue
+    return out
+
+
+def sort_state(browser: Any) -> tuple:
+    """(sort column key, descending?) of the table, or (None, False)."""
+    try:
+        state = browser.table._state
+        return str(state.sort_column or ""), bool(state.sort_backwards)
+    except Exception:
+        return None, False
+
+
+def _sort_by_due(browser: Any) -> None:
+    """Order the table by position, ascending. Through the state's setters,
+    which persist it in the collection like a click on the header does."""
+    state = browser.table._state
+    state.sort_column = DUE_COLUMN
+    state.sort_backwards = False
+    try:
+        browser.table._set_sort_indicator()
+    except Exception:
+        pass
+
+
+def refresh_order(browser: Any) -> None:
+    """Make the table show the queue order the drop just changed.
+
+    `Table.op_executed` only invalidates cached cell text and repaints; the
+    rows themselves are a snapshot of the last search, so a reposition
+    updates the Due column and moves nothing. Re-running the search is
+    what re-sorts. And the new order is only visible when the table is
+    sorted by Due, so a table sorted by anything else is switched to Due
+    first: the drop was a request to see cards in that order.
+    """
+    column, _ = sort_state(browser)
+    if column != DUE_COLUMN:
+        try:
+            _sort_by_due(browser)
+        except Exception:
+            pass
+    try:
+        browser.search()
+    except Exception:
+        pass
+
+
+def _on_repositioned(browser: Any, out: Any, skipped: int) -> None:
+    count = getattr(out, "count", None)
+    try:
+        count = int(count)
+    except Exception:
+        count = 0
+    if count > 0:
+        text = ("1 card" if count == 1 else f"{count} cards") + " repositioned"
+        if skipped:
+            text += (
+                ", 1 card that isn't new left in place"
+                if skipped == 1
+                else f", {skipped} cards that aren't new left in place"
+            )
+        _tooltip(browser, text)
+    refresh_order(browser)
+
+
 def reposition_before(browser: Any, card_ids: List[int], target: tuple) -> bool:
     """Put the dragged new cards just before `target` in the new queue.
 
     `reposition_new_cards` with `shift_existing` bumps every new card at or
     after the start position along by the number moved, so the target and
     what follows it slide back and the dragged cards take their place.
-    Cards that aren't new are left where they are by the op itself.
+
+    Only new cards have a position, so cards that aren't new are filtered
+    out first; a drag of nothing but those is refused with a message
+    instead of shifting the queue for no visible change.
+
+    With the table sorted by Due descending, later positions sit higher
+    up, so "onto this row" from above means just after it in the queue:
+    the start position is the target's plus one.
+
+    On success the table is re-searched (sorted by Due if it wasn't) so
+    the rows actually move; see `refresh_order`.
     """
     if not card_ids or target is None:
         return False
@@ -393,17 +499,26 @@ def reposition_before(browser: Any, card_ids: List[int], target: tuple) -> bool:
     ids = [int(c) for c in card_ids if int(c) != int(target_id)]
     if not ids:
         return False
+    new_ids = new_cards_only(ids)
+    if not new_ids:
+        _tooltip(browser, "Only new cards can be repositioned")
+        return False
+    skipped = len(ids) - len(new_ids)
+    column, backwards = sort_state(browser)
+    start = int(due) + 1 if (column == DUE_COLUMN and backwards) else int(due)
     try:
         from anki.cards import CardId
         from aqt.operations.scheduling import reposition_new_cards
 
         reposition_new_cards(
             parent=browser,
-            card_ids=[CardId(c) for c in ids],
-            starting_from=int(due),
+            card_ids=[CardId(c) for c in new_ids],
+            starting_from=start,
             step_size=1,
             randomize=False,
             shift_existing=True,
+        ).success(
+            lambda out, skipped=skipped: _on_repositioned(browser, out, skipped)
         ).run_in_background()
         return True
     except Exception:
