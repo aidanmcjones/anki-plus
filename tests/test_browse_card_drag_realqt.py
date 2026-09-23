@@ -172,8 +172,10 @@ def select_rows(rows):
                   | QItemSelectionModel.SelectionFlag.Rows)
 
 
-def at_row(r):
-    return view.viewport().mapTo(br, view.visualRect(br.table._model.index(r, 0)).center())
+def at_row(r, frac=0.5):
+    rc = view.visualRect(br.table._model.index(r, 0))
+    p = QPoint(rc.center().x(), rc.top() + int(rc.height() * frac))
+    return view.viewport().mapTo(br, p)
 
 
 def sidebar_deck(name):
@@ -258,7 +260,8 @@ def main():
     assert any("review cards" in t.lower() for t in TOOLTIPS), TOOLTIPS
     print("ok  drop on a review card's row says why, changes nothing")
 
-    # 4. New onto new: reposition before the target.
+    # 4. New onto new, upper half of the row (the line on its top edge):
+    #    reposition before the target.
     for c in col.find_cards("deck:Microbiology::Week*2"):
         col.set_deck([c], WEEK1)
     col.sched.schedule_cards_as_new(col.find_cards("is:review"))
@@ -268,10 +271,22 @@ def main():
     order = sorted(ids, key=lambda c: dues[c])
     last, first = order[-1], order[0]
     select_rows([ids.index(last)])
-    real_drag(at_row(ids.index(last)), at_row(ids.index(first)))
+    real_drag(at_row(ids.index(last)), at_row(ids.index(first), 0.25))
     assert int(col.get_card(last).due) < int(col.get_card(first).due), (
         "the dragged new card should now come before the target")
-    print("ok  new card dropped on a new card's row is repositioned before it")
+    print("ok  new card dropped above a new card's row is repositioned before it")
+
+    # 5. Lower half of the row (the line on its bottom edge): after it.
+    br.search()
+    ids = row_ids()
+    dues = {c: int(col.get_card(c).due) for c in ids}
+    order = sorted(ids, key=lambda c: dues[c])
+    first, second = order[0], order[1]
+    select_rows([ids.index(first)])
+    real_drag(at_row(ids.index(first)), at_row(ids.index(second), 0.8))
+    assert int(col.get_card(first).due) > int(col.get_card(second).due), (
+        "the dragged new card should now come after the target")
+    print("ok  new card dropped below a new card's row is repositioned after it")
     print("PASS test_browse_card_drag_realqt")
 
 

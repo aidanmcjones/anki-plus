@@ -168,6 +168,17 @@ Rules for a good live test:
   sees: a group dropped on a sidebar deck moves and leaves the list, an
   unselected row can be pulled, a review-row drop explains itself, and a
   new-on-new drop repositions. On 06d7d9f three of its checks fail.
+- `test_browse_card_reposition.py`: with the real Browse table sorted by
+  position, drags cards between rows with the real mouse and, between the
+  drag move and the drop, reads the marker widget the add-on shows over
+  the table. Checks what the user sees: a 2px insertion line on the
+  hovered row's top edge (upper half) or bottom edge (lower half) and no
+  box around the row; after the drop, the re-searched rows show the whole
+  selection at the line in queue order, before or after that row, a
+  hovered row that is itself selected included; the tooltip counts every
+  card; a drop on the card's own row changes nothing. On 93f1d3a nine of
+  its checks fail (34px box marker, a lower-half drop lands above the
+  row, the hovered card is left out of the group).
 - `test_browse_sweep_select.py`: press on an unselected row of the real
   Browse table and sweep down the list with the real mouse; the rows
   crossed must end up selected and no card drag may start, then the

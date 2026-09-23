@@ -36,6 +36,17 @@ All notable changes to Anki Design are documented here. Format loosely follows
   search), a press-and-pull on an unselected row drags that card, and a
   drop on a review card's row says that only new cards have a queue
   position instead of showing a silent "no entry" cursor.
+- **Dragging cards between rows in Browse shows a line, and moves the
+  whole selection there.** The drop target was a box drawn around the
+  hovered row, which read as "onto this card", and the drop always put
+  the cards before it. Now an accent line sits on the row's top edge
+  while the cursor is in its upper half and on its bottom edge in the
+  lower half, and on release every selected new card lands at that line
+  in its queue order: before or after the row, including a hovered row
+  that is itself part of the selection (it used to be left out, so the
+  others landed in front of it and the group came out reordered). The
+  confirmation counts every card moved. A drop on the group's own rows
+  changes nothing and says nothing.
 - **Sweep-selecting cards in Browse works again.** Pressing on a card and
   pulling down (or up) the list is how the table selects a run of rows,
   and the card drag had taken that gesture for itself: it started a drag

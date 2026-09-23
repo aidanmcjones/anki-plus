@@ -18,13 +18,17 @@ module adds the direct-manipulation route on top:
                                     can be gathered by hand and then dragged
   - drop on a deck in the sidebar : `set_card_deck`, the same op the
                                     Change Deck dialog runs, one undo step
-  - drop on a row of the table    : `reposition_new_cards`, the dragged new
-                                    cards land just before that row's card
-                                    in the new-card queue (only new cards
-                                    have a position, so the row has to be a
-                                    new card too), then the table is
-                                    re-searched sorted by Due so the rows
-                                    visibly move
+  - drop between rows of the table: an insertion line shows on the top or
+                                    bottom edge of the row under the cursor
+                                    (whichever half it is in), and on
+                                    release `reposition_new_cards` puts
+                                    every dragged new card there, in its
+                                    queue order, just before or just after
+                                    that row's card in the new-card queue
+                                    (only new cards have a position, so the
+                                    row has to be a new card too); then the
+                                    table is re-searched sorted by Due so
+                                    the rows visibly move
 
 How it is wired. QAbstractItemView has its own drag machinery, but it is
 driven by the model (`flags`, `mimeData`), and the table's model is Anki's
@@ -461,22 +465,28 @@ def _tooltip(browser: Any, text: str) -> None:
 
 
 def new_cards_only(card_ids: List[int]) -> List[int]:
-    """The dragged cards that have a position: type new. The op would skip
-    the others anyway, but it would still shift the queue to make room for
-    them and report a change, so they are dropped here, before it runs."""
+    """The dragged cards that have a position: type new, in queue order.
+
+    The op would skip the others anyway, but it would still shift the
+    queue to make room for them and report a change, so they are dropped
+    here, before it runs. The rest are ordered by their current position:
+    the op hands out positions in the order it is given the ids, and the
+    selection model lists rows in the order they were selected, so without
+    this a group could land in the order the user clicked its rows."""
     try:
         from anki.consts import CARD_TYPE_NEW
     except Exception:
         CARD_TYPE_NEW = 0
-    out: List[int] = []
+    out: List[tuple] = []
     for c in card_ids:
         try:
             card = mw.col.get_card(int(c))
             if int(card.type) == int(CARD_TYPE_NEW):
-                out.append(int(c))
+                out.append((int(card.due), int(c)))
         except Exception:
             continue
-    return out
+    out.sort()
+    return [c for _due, c in out]
 
 
 def sort_state(browser: Any) -> tuple:
@@ -540,20 +550,28 @@ def _on_repositioned(browser: Any, out: Any, skipped: int) -> None:
     refresh_order(browser)
 
 
-def reposition_before(browser: Any, card_ids: List[int], target: tuple) -> bool:
-    """Put the dragged new cards just before `target` in the new queue.
+def reposition_at(
+    browser: Any, card_ids: List[int], target: tuple, below: bool = False
+) -> bool:
+    """Put the dragged new cards at the insertion line: just before
+    `target` in the new queue, or just after it when `below`.
 
     `reposition_new_cards` with `shift_existing` bumps every new card at or
-    after the start position along by the number moved, so the target and
-    what follows it slide back and the dragged cards take their place.
+    after the start position along by the number moved, so whatever sat
+    there slides back and the dragged cards take its place, in their own
+    queue order. That holds when the target is itself one of the dragged
+    cards: it is shifted with the rest and then placed with its group, so
+    the group gathers at the line in order and nothing is left behind.
+    (The target used to be dropped from the group, so the others landed
+    in front of it and the group came out in a different order.)
 
     Only new cards have a position, so cards that aren't new are filtered
     out first; a drag of nothing but those is refused with a message
     instead of shifting the queue for no visible change.
 
     With the table sorted by Due descending, later positions sit higher
-    up, so "onto this row" from above means just after it in the queue:
-    the start position is the target's plus one.
+    up, so a line above a row means just after it in the queue and a line
+    below it means just before: the two cases swap.
 
     On success the table is re-searched (sorted by Due if it wasn't) so
     the rows actually move; see `refresh_order`.
@@ -561,16 +579,15 @@ def reposition_before(browser: Any, card_ids: List[int], target: tuple) -> bool:
     if not card_ids or target is None:
         return False
     target_id, due = target
-    ids = [int(c) for c in card_ids if int(c) != int(target_id)]
-    if not ids:
-        return False
+    ids = [int(c) for c in card_ids]
     new_ids = new_cards_only(ids)
     if not new_ids:
         _tooltip(browser, "Only new cards can be repositioned")
         return False
     skipped = len(ids) - len(new_ids)
     column, backwards = sort_state(browser)
-    start = int(due) + 1 if (column == DUE_COLUMN and backwards) else int(due)
+    after = bool(below) != bool(column == DUE_COLUMN and backwards)
+    start = int(due) + 1 if after else int(due)
     try:
         from anki.cards import CardId
         from aqt.operations.scheduling import reposition_new_cards
@@ -591,9 +608,12 @@ def reposition_before(browser: Any, card_ids: List[int], target: tuple) -> bool:
 
 
 class _DropTarget(QObject):
-    """Accepts our card drags on a view, with a highlight on the row under
+    """Accepts our card drags on a view, with a marker over the row under
     the cursor. `resolve(pos)` says what is there (or None), `perform`
-    does the drop. Subclasses fill those in."""
+    does the drop, `marker_rect` says where the marker goes (by default a
+    box around the row). Subclasses fill those in."""
+
+    MARKER_NAME = "ba-card-drop-marker"
 
     def __init__(self, browser: Any, view: Any) -> None:
         super().__init__(view)
@@ -631,6 +651,17 @@ class _DropTarget(QObject):
         except Exception:
             return None
 
+    def marker_rect(self, pos: QPoint, target: Any) -> Optional[QRect]:
+        """Where the marker goes for a hover at `pos` over `target`."""
+        return self._row_rect(pos)
+
+    def marker_style(self, accent: str) -> str:
+        """The marker's stylesheet: a box around the row."""
+        return (
+            "QFrame#" + self.MARKER_NAME + " { border: 2px solid "
+            + accent + "; border-radius: 6px; background: transparent; }"
+        )
+
     def _show_marker(self, rect: Optional[QRect]) -> None:
         if rect is None:
             self._hide_marker()
@@ -645,12 +676,9 @@ class _DropTarget(QObject):
                 except Exception:
                     pass
                 m = QFrame(self._viewport())
-                m.setObjectName("ba-card-drop-marker")
+                m.setObjectName(self.MARKER_NAME)
                 m.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-                m.setStyleSheet(
-                    "QFrame#ba-card-drop-marker { border: 2px solid "
-                    + accent + "; border-radius: 6px; background: transparent; }"
-                )
+                m.setStyleSheet(self.marker_style(accent))
                 self.marker = m
             self.marker.setGeometry(rect)
             self.marker.show()
@@ -713,7 +741,7 @@ class _DropTarget(QObject):
             self._hide_marker()
             ev.ignore()
             return
-        self._show_marker(self._row_rect(pos))
+        self._show_marker(self.marker_rect(pos, target))
         self.on_hover(pos, target)
         try:
             ev.setDropAction(Qt.DropAction.MoveAction)
@@ -800,22 +828,88 @@ class _SidebarDrop(_DropTarget):
 
 
 class _TableDrop(_DropTarget):
-    """Drop on a new card's row: reposition the dragged new cards before
-    it."""
+    """Drop between rows: an insertion line on the top or bottom edge of
+    the row under the cursor, whichever half of it the cursor is in, and
+    on release the dragged new cards are repositioned to that line."""
+
+    MARKER_NAME = "ba-card-drop-line"
+    LINE_H = 2
 
     def resolve(self, pos: QPoint) -> Optional[tuple]:
+        """(card_id, due, is_new, below, row) for the row under `pos`:
+        `below` when the cursor is in the row's lower half."""
         # Every card row is a drop target, so a drop on a review card is
         # answered with why nothing moved instead of a silent "no entry"
         # cursor (the Week 1 decks the user drags in are all review cards).
-        return card_at(self.browser, pos)
+        found = card_at(self.browser, pos)
+        if found is None:
+            return None
+        below, row = False, -1
+        try:
+            index = self.view.indexAt(pos)
+            row = int(index.row())
+            vr = self.view.visualRect(index)
+            below = (pos.y() - vr.top()) * 2 >= vr.height()
+        except Exception:
+            pass
+        return found + (below, row)
+
+    def marker_rect(self, pos: QPoint, target: Any) -> Optional[QRect]:
+        """A line across the viewport on the row's top edge, or its bottom
+        edge when the cursor is in the lower half."""
+        row = self._row_rect(pos)
+        if row is None:
+            return None
+        below = bool(target[3]) if target and len(target) > 3 else False
+        edge = row.top() + row.height() if below else row.top()
+        y = max(0, edge - self.LINE_H // 2)
+        return QRect(0, y, row.width(), self.LINE_H)
+
+    def marker_style(self, accent: str) -> str:
+        return (
+            "QFrame#" + self.MARKER_NAME + " { border: none; background: "
+            + accent + "; border-radius: 1px; }"
+        )
+
+    def _covered_by(self, row: int, card_ids: List[int]) -> bool:
+        """True when the dragged cards are exactly the run of rows around
+        `row` that is being dragged: a drop on the group's own rows, where
+        the order would come out as it is. Skipped as a no-op rather than
+        renumbering the queue and reporting a move that shows nothing.
+        Rows are read only along that run, so this is cheap."""
+        try:
+            table = self.browser.table
+            model = table._model
+            ids = set(int(c) for c in card_ids)
+            n = int(table.len())
+
+            def dragged(r: int) -> bool:
+                card = model.get_card(model.index(r, 0))
+                return card is not None and int(card.id) in ids
+
+            if row < 0 or row >= n or not dragged(row):
+                return False
+            lo = row
+            while lo > 0 and dragged(lo - 1):
+                lo -= 1
+            hi = row
+            while hi + 1 < n and dragged(hi + 1):
+                hi += 1
+            items = [model.get_item(model.index(r, 0)) for r in range(lo, hi + 1)]
+            covered = set(int(c) for c in model._state.get_card_ids(items))
+            return ids <= covered
+        except Exception:
+            return False
 
     def perform(self, card_ids: List[int], target: Any) -> bool:
-        target_id, due, is_new = target
+        target_id, due, is_new, below, row = target
         if not is_new:
             if [c for c in card_ids if int(c) != int(target_id)]:
                 _tooltip(self.browser, NOT_NEW_TARGET)
             return False
-        return reposition_before(self.browser, card_ids, (target_id, due))
+        if self._covered_by(row, card_ids):
+            return False
+        return reposition_at(self.browser, card_ids, (target_id, due), below)
 
 
 # --------------------------------------------------------------------------- #
