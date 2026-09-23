@@ -212,6 +212,7 @@ def test_render_app_prompt(env):
 
 def test_render_app_prompt_includes_known_failing_tests(env):
     cfg = env["cfg"]
+    cfg.known_failing_tests = ["tests/editor_tools.cjs", "tests/test_editor_crop.py"]
     t = make_ticket(cfg)
     p = prompts.render_app(t, cfg)
     assert "${known_failing_tests}" not in p
@@ -776,6 +777,7 @@ def test_apply_excludes_known_failing_tests_and_flips_to_fixed(apply_repo):
     own test passes, and the ticket's status is corrected to fixed without a
     human relabeling it."""
     cfg, repo = apply_repo["cfg"], apply_repo["repo"]
+    cfg.known_failing_tests = ["tests/editor_tools.cjs"]
     t = _apply_ticket_dict("20260923-100000-apply-known-failing", "fix/t1", "main", tests=[
         "node tests/editor_tools.cjs",  # known failing: must be skipped, not run
         "true",  # the fix's own test: passes
@@ -799,6 +801,7 @@ def test_apply_real_failure_keeps_needs_review(apply_repo):
     """A genuine failure in the fix's own (non-excluded) test must still land
     needs-review, even with a known-failing test also on the list."""
     cfg, repo = apply_repo["cfg"], apply_repo["repo"]
+    cfg.known_failing_tests = ["tests/editor_tools.cjs"]
     t = _apply_ticket_dict("20260923-100100-apply-real-failure", "fix/t1", "main", tests=[
         "node tests/editor_tools.cjs",  # known failing: skipped
         "false",  # a genuine failure of the fix's own test
