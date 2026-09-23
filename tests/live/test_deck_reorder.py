@@ -212,3 +212,35 @@ def run(t):
             ("" if hits["drop"] else
              f"MainWebView.dropEvent swallowed it (state {mw.state}); ")
             + f"hand-offs {hits}")
+
+    # 4. A file dragged in from Finder is still Anki's: MainWebView accepts
+    # it for import and it is NOT handed to the web engine (which would
+    # navigate the view to the file).
+    import os
+    import tempfile
+
+    fd, path = tempfile.mkstemp(suffix=".apkg")
+    os.close(fd)
+    hits = {"enter": 0}
+    saved_enter = base.dragEnterEvent
+
+    def spy_enter(self, ev):
+        hits["enter"] += 1
+        return saved_enter(self, ev)
+
+    base.dragEnterEvent = spy_enter
+    try:
+        from aqt.qt import QUrl
+
+        md = QMimeData()
+        md.setUrls([QUrl.fromLocalFile(path)])
+        ev = QDragEnterEvent(p1, Qt.DropAction.CopyAction, md,
+                             Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        ev.ignore()
+        mw.web.dragEnterEvent(ev)
+    finally:
+        base.dragEnterEvent = saved_enter
+        os.unlink(path)
+    t.check("Qt: a file dragged in from Finder still goes to Anki's import",
+            ev.isAccepted() and hits["enter"] == 0,
+            f"accepted {ev.isAccepted()}, handed to web engine {hits['enter']}x")

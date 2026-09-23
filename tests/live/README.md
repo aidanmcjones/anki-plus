@@ -118,7 +118,15 @@ Rules for a good live test:
 - `test_deck_reorder.py`: dragging a deck onto a sibling's top edge
   reorders it in the re-rendered list (page events), and, since the list
   uses HTML5 drag-and-drop, that the home webview hands drag enter / drop to
-  the web engine. On `video-backdrop` (0eda285) the two Qt checks FAIL:
-  Anki's `MainWebView.dragEnterEvent` / `dropEvent` treat every drag on the
-  deck browser as a file import and swallow a deck drag, so a real drag
-  never delivers `dragover`/`drop` to the page.
+  the web engine while a file dragged from Finder still goes to Anki's
+  import. Before `webview_drops.py` wrapped `MainWebView.dragEnterEvent` /
+  `dragMoveEvent` / `dropEvent` (fix/drag-regressions), the Qt checks
+  FAILED: Anki treats every drag on the deck browser as a file import and
+  swallows a deck drag, so a real drag never delivered `dragover`/`drop`.
+- `test_browse_card_drag.py`: opens Browse inline, drags cards with the
+  real mouse from the real table (the add-on starts a real QDrag); the
+  OS drag loop is stood in for by delivering DragEnter/Move/Drop to the
+  widget under the pointer, as QWidgetWindow does. Checks what the user
+  sees: a group dropped on a sidebar deck moves and leaves the list, an
+  unselected row can be pulled, a review-row drop explains itself, and a
+  new-on-new drop repositions. On 06d7d9f three of its checks fail.
