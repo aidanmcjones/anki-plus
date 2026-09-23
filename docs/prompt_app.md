@@ -85,3 +85,5 @@ containing one JSON object, exactly this shape:
 ```ankifix-result
 {"status": "fixed or failed", "tests_green": true, "tests": ["node tests/reviewer_click.cjs", "..."], "reproduced": true, "pushed": true, "summary": "2-4 sentences: root cause, fix, test added"}
 ```
+
+Style rule: never use em dashes anywhere you write (code comments, commit messages, docs, summaries). Use a comma, a colon, or a new sentence instead.

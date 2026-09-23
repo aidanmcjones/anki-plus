@@ -76,3 +76,5 @@ containing one JSON object, exactly this shape:
 ```ankifix-result
 {"status": "fixed or failed", "tests_green": true, "tests": ["build_deck.py preflight: RESULT: PASS"], "card_ids": ["C4-Q10"], "apply_command": "cd ~/dev/anki && out/pyenv/bin/python \".../apply_highyield.py\" --repatch=C4-Q10", "summary": "2-4 sentences: what was wrong, what you changed, in which file"}
 ```
+
+Style rule: never use em dashes anywhere you write (code comments, commit messages, docs, summaries). Use a comma, a colon, or a new sentence instead.
