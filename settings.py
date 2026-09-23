@@ -1227,9 +1227,14 @@ class AnkiDesignSettingsPage(QWidget):
         v.addWidget(_section_block(self._palette, "Heatmap"))
         v.addSpacing(2)
 
-        # Track the heatmap toggle so we can gray out the minimum-weeks
-        # field when the heatmap is off — leaving it active suggests the
-        # value still matters, which it doesn't.
+        # The minimum-weeks field stays live whether or not the heatmap is
+        # on. It used to be disabled while the toggle was off, but the
+        # page's QSS pins the spinbox and label colours, so a disabled row
+        # looked identical to a live one — users saw a normal spinbox that
+        # silently ignored clicks, keys and scroll ("can't adjust minimum
+        # weeks shown"). Editing it with the heatmap off is harmless: the
+        # value is simply stored for when the heatmap is turned on, and
+        # the indent + hint already tie it to the toggle above.
         heatmap_cb = QCheckBox("Show review-activity heatmap")
         heatmap_cb.setChecked(bool(self._g("show_heatmap", True)))
         weeks = QSpinBox()
@@ -1250,12 +1255,9 @@ class AnkiDesignSettingsPage(QWidget):
             "For new collections; older ones extend back to your first review.",
         )
 
-        def _toggle_heatmap(checked: bool) -> None:
-            self._set("show_heatmap", bool(checked))
-            weeks_row.setEnabled(bool(checked))
-
-        heatmap_cb.toggled.connect(_toggle_heatmap)
-        weeks_row.setEnabled(heatmap_cb.isChecked())
+        heatmap_cb.toggled.connect(
+            lambda checked: self._set("show_heatmap", bool(checked))
+        )
 
         heatmap_wrap = QWidget()
         hrow = QVBoxLayout(heatmap_wrap)
