@@ -256,13 +256,15 @@ in this file are the raw form the settings page writes.
   stock Add window.
 - **congrats_redesign** — the redesigned finished-deck page.
 - **silent_sync** — sync progress in the sidebar instead of a dialog.
-- **fullscreen_bar_inset** — in macOS full screen, the hidden "Anki+" title
-  bar slides down over the content when the cursor touches the top of the
-  screen. With this on, a constant strip of the bar's height is reserved at
-  the top for as long as the window is full screen, so the bar slides over
-  that strip and nothing at the top of the page is covered. The content
-  never moves when the bar reveals or retracts. `false` leaves the content
-  where it is, as stock Anki does.
+- **fullscreen_bar_inset**: in macOS full screen, the hidden "Anki+" title
+  bar reveals the way Safari's does: when the cursor touches the top of the
+  screen the bar slides down and the app slides down with it, in the same
+  animation, and both slide back when the cursor leaves. AppKit drives it:
+  while the window is full screen it carries an empty toolbar that hides
+  with the menu bar, which is what makes macOS move the content with the
+  bar. Nothing is reserved or painted, and the windowed title bar is
+  unchanged. `false` leaves stock behaviour, where the bar slides over the
+  top of the page.
 
 ## Browse
 - **browse_restyle** — paint the Browser's Qt chrome (card table, column
