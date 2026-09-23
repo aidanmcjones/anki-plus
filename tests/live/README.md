@@ -184,6 +184,17 @@ Rules for a good live test:
   card; a drop on the card's own row changes nothing. On 93f1d3a nine of
   its checks fail (34px box marker, a lower-half drop lands above the
   row, the hovered card is left out of the group).
+- `test_browse_reposition_ties.py`: with the real Browse table sorted by
+  position, gives cards tied positions through the collection (two at
+  #25 after the dragged pair, then all six at #25, as the user's deck
+  was) and drags with the real mouse onto the line between two tied
+  rows, above the second, and below the fifth of six. Checks what the
+  user sees: the re-searched rows show the cards between the two rows
+  they were dropped between, every card in the list has a position of
+  its own, the tooltip counts the dragged cards only, and cards ahead of
+  the run outside the table keep their positions. On 5d22099 six of its
+  checks fail: the pair lands after both tied rows, and a single card
+  dropped above the second tied row leaves the list exactly as it was.
 - `test_browse_sweep_select.py`: press on an unselected row of the real
   Browse table and sweep down the list with the real mouse; the rows
   crossed must end up selected and no card drag may start, then the
