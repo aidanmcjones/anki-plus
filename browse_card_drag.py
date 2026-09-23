@@ -26,7 +26,12 @@ module adds the direct-manipulation route on top:
                                     queue order, just before or just after
                                     that row's card in the new-card queue
                                     (only new cards have a position, so the
-                                    row has to be a new card too); then the
+                                    row has to be a new card too); when
+                                    other cards share that row's position
+                                    the whole tied run is numbered out in
+                                    the order shown, dragged cards in
+                                    place, so the drop lands between the
+                                    rows it was pointed between; then the
                                     table is re-searched sorted by Due so
                                     the rows visibly move
 
@@ -532,13 +537,79 @@ def refresh_order(browser: Any) -> None:
         pass
 
 
-def _on_repositioned(browser: Any, out: Any, skipped: int) -> None:
+def tied_group(browser: Any, target: tuple, row: int) -> List[int]:
+    """Every card that shares the target's position, in queue order, the
+    target among them. [] when the target has its position to itself.
+
+    A reposition can only put cards at a number, and cards that share a
+    number are ordered by whatever the search returns them in (their id,
+    in practice). So a drop between two rows at the same position can't
+    be done by numbering the dragged cards alone: the tied run has to be
+    numbered out too, in the order the table shows it, with the dragged
+    cards in their place. With the table sorted by Due the tied rows are
+    the contiguous run around the target row (read top to bottom, or
+    bottom to top when descending); read only along that run, so this is
+    cheap. Sorted by anything else the run isn't on screen, so it is the
+    collection's cards at that position in the order the Due sort lists
+    them. Tied cards that are in the collection but not in the table are
+    not in the run: `shift_existing` moves them just past it.
+    """
+    try:
+        from anki.consts import CARD_TYPE_NEW
+    except Exception:
+        CARD_TYPE_NEW = 0
+    target_id, due = int(target[0]), int(target[1])
+    column, backwards = sort_state(browser)
+    out: List[int] = []
+    try:
+        if column == DUE_COLUMN and row >= 0:
+            table = browser.table
+            model = table._model
+            n = int(table.len())
+
+            def tied(r: int) -> bool:
+                card = model.get_card(model.index(r, 0))
+                return (
+                    card is not None
+                    and int(card.type) == int(CARD_TYPE_NEW)
+                    and int(card.due) == due
+                )
+
+            if row >= n or not tied(row):
+                return []
+            lo = row
+            while lo > 0 and tied(lo - 1):
+                lo -= 1
+            hi = row
+            while hi + 1 < n and tied(hi + 1):
+                hi += 1
+            rows: Any = range(lo, hi + 1)
+            if backwards:
+                rows = reversed(rows)
+            for r in rows:
+                item = model.get_item(model.index(r, 0))
+                for c in model._state.get_card_ids([item]):
+                    if int(c) not in out:
+                        out.append(int(c))
+        else:
+            out = sorted(int(c) for c in mw.col.find_cards(f"prop:pos={due}"))
+    except Exception:
+        return []
+    if len(out) < 2 or target_id not in out:
+        return []
+    return out
+
+
+def _on_repositioned(browser: Any, out: Any, skipped: int, moved: int = 0) -> None:
     count = getattr(out, "count", None)
     try:
         count = int(count)
     except Exception:
         count = 0
     if count > 0:
+        # The op counts every card it numbered, and with a tied run that
+        # is the run as well; the user dragged `moved` of them.
+        count = moved or count
         text = ("1 card" if count == 1 else f"{count} cards") + " repositioned"
         if skipped:
             text += (
@@ -551,7 +622,11 @@ def _on_repositioned(browser: Any, out: Any, skipped: int) -> None:
 
 
 def reposition_at(
-    browser: Any, card_ids: List[int], target: tuple, below: bool = False
+    browser: Any,
+    card_ids: List[int],
+    target: tuple,
+    below: bool = False,
+    group: Optional[List[int]] = None,
 ) -> bool:
     """Put the dragged new cards at the insertion line: just before
     `target` in the new queue, or just after it when `below`.
@@ -564,6 +639,16 @@ def reposition_at(
     the group gathers at the line in order and nothing is left behind.
     (The target used to be dropped from the group, so the others landed
     in front of it and the group came out in a different order.)
+
+    When the target shares its position with other cards (`group`, see
+    `tied_group`), numbering the dragged cards alone can't put them
+    between two of those: at the position they'd take the front of the
+    tied run, at the next one they'd follow all of it, and the rows the
+    user pointed between stay side by side (20260923-121900, a deck where
+    nearly every card sat at #25). So the whole run is numbered out from
+    the shared position, in the order shown, with the dragged cards put
+    in just before or after the target: one op, one undo step, and every
+    card in the run ends up with a position of its own.
 
     Only new cards have a position, so cards that aren't new are filtered
     out first; a drag of nothing but those is refused with a message
@@ -587,20 +672,36 @@ def reposition_at(
     skipped = len(ids) - len(new_ids)
     column, backwards = sort_state(browser)
     after = bool(below) != bool(column == DUE_COLUMN and backwards)
-    start = int(due) + 1 if after else int(due)
+    if group and int(target_id) in group:
+        # The tied run, dragged cards taken out and put back at the line.
+        dragged = set(new_ids)
+        order: List[int] = []
+        for c in group:
+            c = int(c)
+            if c == int(target_id):
+                keep = [] if c in dragged else [c]
+                order.extend(keep + new_ids if after else new_ids + keep)
+            elif c not in dragged:
+                order.append(c)
+        start = int(due)
+    else:
+        order = list(new_ids)
+        start = int(due) + 1 if after else int(due)
     try:
         from anki.cards import CardId
         from aqt.operations.scheduling import reposition_new_cards
 
         reposition_new_cards(
             parent=browser,
-            card_ids=[CardId(c) for c in new_ids],
+            card_ids=[CardId(c) for c in order],
             starting_from=start,
             step_size=1,
             randomize=False,
             shift_existing=True,
         ).success(
-            lambda out, skipped=skipped: _on_repositioned(browser, out, skipped)
+            lambda out, skipped=skipped, moved=len(new_ids): _on_repositioned(
+                browser, out, skipped, moved
+            )
         ).run_in_background()
         return True
     except Exception:
@@ -909,7 +1010,8 @@ class _TableDrop(_DropTarget):
             return False
         if self._covered_by(row, card_ids):
             return False
-        return reposition_at(self.browser, card_ids, (target_id, due), below)
+        group = tied_group(self.browser, (target_id, due), row)
+        return reposition_at(self.browser, card_ids, (target_id, due), below, group)
 
 
 # --------------------------------------------------------------------------- #

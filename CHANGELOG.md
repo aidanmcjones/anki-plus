@@ -47,6 +47,16 @@ All notable changes to Anki Design are documented here. Format loosely follows
   others landed in front of it and the group came out reordered). The
   confirmation counts every card moved. A drop on the group's own rows
   changes nothing and says nothing.
+- **Dropping cards between two rows that share a position now lands
+  between them.** In a deck where most cards sit at one position (a
+  whole import at New #25, say), the drop numbered the dragged cards at
+  the hovered row's position or the next one, and neither is between two
+  cards that share it: they took the front of the tied run, which is the
+  rows they already had, or fell in behind all of it. Now the run of
+  cards at that position is numbered out in the order shown, with the
+  dragged cards put in at the line, so every card ends up with a
+  position of its own and the rows show the order you asked for. Still
+  one undo step, and the message still counts the cards you dragged.
 - **Sweep-selecting cards in Browse works again.** Pressing on a card and
   pulling down (or up) the list is how the table selects a run of rows,
   and the card drag had taken that gesture for itself: it started a drag

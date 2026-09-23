@@ -485,6 +485,13 @@ class _Col:
     def get_card(self, cid):
         return CARDS[int(cid)]
 
+    def find_cards(self, query):
+        """Only `prop:pos=N` is asked for: the new cards at that position,
+        including any that are not in the table."""
+        assert query.startswith("prop:pos="), query
+        pos = int(query.split("=", 1)[1])
+        return [c.id for c in CARDS.values() if c.type == 0 and c.due == pos]
+
 
 _mw = types.SimpleNamespace(
     addonManager=_AddonManager(),
@@ -1015,6 +1022,120 @@ def test_a_mixed_drag_repositions_only_its_new_cards():
     assert list(OPS[0].kwargs["card_ids"]) == [13, 15]
     OPS[0].finish(count=2)
     assert any("2 cards" in t and "1 " in t for t in TOOLTIPS), TOOLTIPS
+
+
+# --------------------------------------------------------------------------- #
+# Regression 20260923-121900: "I tried to move 20a and 20b for after 19 and
+# before 21 and they didn't actually move."
+#
+# Every card in that deck sat at New #25. Numbering the dragged cards at
+# the target's position puts them in front of the whole tied run, at the
+# next position behind all of it; neither is between two of its rows, and
+# the first leaves the list exactly as it was. The tied run has to be
+# numbered out too, in the order shown, with the dragged cards in place.
+# --------------------------------------------------------------------------- #
+
+def _tie(rows_to_due):
+    for row, due in rows_to_due.items():
+        CARDS[10 + row].due = due
+
+
+def test_drop_between_two_tied_rows_numbers_the_run_with_the_cards_in_place():
+    br, _ = _boot()
+    br.table._state = _SortState("cardDue", False)
+    _tie({2: 7, 3: 7})   # cards 12 and 13 share position 7
+    drag = _pull(br, {5}, from_row=5)   # card 15
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 55, drag.mime)   # row 2, lower half
+    assert ev.accepted and len(OPS) == 1
+    kw = OPS[0].kwargs
+    assert list(kw["card_ids"]) == [12, 15, 13], "the run, the card just after row 2"
+    assert kw["starting_from"] == 7, "numbered out from the shared position"
+    assert kw["shift_existing"] is True
+    OPS[0].finish(count=3)
+    assert any("1 card repositioned" in t for t in TOOLTIPS), (
+        "the message counts the dragged card, not the run", TOOLTIPS)
+    assert not any("3 cards" in t for t in TOOLTIPS), TOOLTIPS
+
+
+def test_drop_above_the_second_tied_row_lands_between_them():
+    br, _ = _boot()
+    br.table._state = _SortState("cardDue", False)
+    _tie({2: 7, 3: 7})
+    drag = _pull(br, {5}, from_row=5)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 62, drag.mime)   # row 3, upper half
+    assert ev.accepted and len(OPS) == 1
+    assert list(OPS[0].kwargs["card_ids"]) == [12, 15, 13]
+    assert OPS[0].kwargs["starting_from"] == 7
+
+
+def test_the_tied_run_is_only_the_rows_at_that_position():
+    # Rows 1..3 at position 7; row 0 (5) and row 5 (20) are not in the run.
+    br, _ = _boot()
+    br.table._state = _SortState("cardDue", False)
+    _tie({1: 7, 2: 7, 3: 7})
+    drag = _pull(br, {0, 5}, from_row=5)   # cards 10 and 15, in queue order
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 42, drag.mime)   # row 2, upper half
+    assert ev.accepted and len(OPS) == 1
+    assert list(OPS[0].kwargs["card_ids"]) == [11, 10, 15, 12, 13]
+    assert OPS[0].kwargs["starting_from"] == 7
+
+
+def test_a_dragged_card_inside_the_tied_run_moves_within_it():
+    # All of rows 1..3 at 7: row 3 dropped above row 1 comes out first.
+    br, _ = _boot()
+    br.table._state = _SortState("cardDue", False)
+    _tie({1: 7, 2: 7, 3: 7})
+    drag = _pull(br, {3}, from_row=3)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 22, drag.mime)   # row 1, upper half
+    assert ev.accepted and len(OPS) == 1
+    assert list(OPS[0].kwargs["card_ids"]) == [13, 11, 12]
+    # And a hovered row that is itself dragged is listed once, with its group.
+    QDrag.instances.clear()
+    drag = _pull(br, {1, 3}, from_row=3)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 22, drag.mime)   # row 1, upper half
+    assert ev.accepted and len(OPS) == 2
+    assert list(OPS[1].kwargs["card_ids"]) == [11, 13, 12]
+
+
+def test_a_tied_run_in_a_descending_table_is_read_bottom_up():
+    # Due descending: the run's queue order is the rows bottom to top, and
+    # a line below a row on screen means just before it in the queue.
+    br, _ = _boot()
+    br.table._state = _SortState("cardDue", True)
+    _tie({2: 7, 3: 7})
+    drag = _pull(br, {5}, from_row=5)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 55, drag.mime)   # row 2, lower half
+    assert ev.accepted and len(OPS) == 1
+    assert list(OPS[0].kwargs["card_ids"]) == [13, 15, 12]
+    assert OPS[0].kwargs["starting_from"] == 7
+
+
+def test_a_table_not_sorted_by_due_takes_the_run_from_the_collection():
+    # The tied rows are not next to each other on screen, so the run is
+    # every card at that position in the collection, one of them not even
+    # in the table, in the order the Due sort will list them.
+    br, _ = _boot()
+    br.table._state = _SortState("noteFld", False)
+    _tie({1: 7, 3: 7})
+    CARDS[99] = Card(99, NEW, 7)
+    try:
+        drag = _pull(br, {5}, from_row=5)
+        ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 62, drag.mime)   # row 3, upper half
+        assert ev.accepted and len(OPS) == 1
+        assert list(OPS[0].kwargs["card_ids"]) == [11, 12, 15, 13, 99]
+        assert OPS[0].kwargs["starting_from"] == 7
+    finally:
+        CARDS.pop(99, None)
+
+
+def test_a_target_with_its_own_position_is_numbered_as_before():
+    br, _ = _boot()
+    br.table._state = _SortState("cardDue", False)
+    drag = _pull(br, {5}, from_row=5)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 55, drag.mime)   # row 2, lower half
+    assert ev.accepted and len(OPS) == 1
+    assert list(OPS[0].kwargs["card_ids"]) == [15]
+    assert OPS[0].kwargs["starting_from"] == 8
 
 
 # --------------------------------------------------------------------------- #
