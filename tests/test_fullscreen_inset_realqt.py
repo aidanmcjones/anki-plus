@@ -7,9 +7,9 @@ QMainWindow under QT_QPA_PLATFORM=offscreen:
     alone: no event filter, no timer, no margin, same palette;
   * with a recording stand-in for the AppKit bridge, real full screen
     enter/exit through setWindowState(): Qt's own WindowStateChange never
-    attaches the toolbar (AppKit's did-enter does), the exit mirrors it,
-    and the window's contents margins, palette and child timers are
-    untouched throughout.
+    starts following the bar (AppKit's did-enter does), the exit mirrors
+    it, no toolbar is ever attached, and the window's contents margins,
+    palette and child timers are untouched throughout.
 """
 
 import os
@@ -46,17 +46,14 @@ class RecordingBridge:
     def unobserve(self, nswin):
         self.calls.append("unobserve")
 
-    def attach_toolbar(self, nswin):
-        self.calls.append("attach")
+    def observe_bars(self, nswin, handler):
+        self.calls.append("follow" if handler else "unfollow")
 
-    def detach_toolbar(self, nswin):
-        self.calls.append("detach")
+    def find_bar(self, nswin):
+        return 0
 
-    def autohide_toolbar(self):
-        self.calls.append("autohide")
-
-    def restore_options(self):
-        self.calls.append("restore")
+    def set_content_offset(self, nswin, offset):
+        self.calls.append(("offset", offset))
 
 
 def _snapshot(win):
@@ -103,13 +100,13 @@ def main():
     win2.setWindowState(Qt.WindowState.WindowFullScreen)
     spin(100)
     assert win2.isFullScreen()
-    assert "attach" not in br.calls, f"Qt state change attached: {br.calls}"
+    assert "follow" not in br.calls, f"Qt state change started following: {br.calls}"
     br.handler(fi.NOTE_DID_ENTER)  # what AppKit posts after the animation
-    assert br.calls.count("attach") == 1 and ctl.attached, br.calls
+    assert br.calls.count("follow") == 1 and ctl.following, br.calls
     for _ in range(10):
         win2.resize(win2.width(), win2.height() - 1)  # AppKit reveal frames
         spin(5)
-    assert br.calls.count("attach") == 1, br.calls
+    assert br.calls.count("follow") == 1, br.calls
     assert _snapshot(win2)[0] == (0, 0, 0, 0), "contents margin set"
     assert _snapshot(win2)[2] == 0, "a QTimer child exists"
 
@@ -117,17 +114,18 @@ def main():
     win2.setWindowState(Qt.WindowState.WindowNoState)
     spin(100)
     br.handler(fi.NOTE_DID_EXIT)
-    assert br.calls.count("detach") == 1 and not ctl.attached, br.calls
+    assert br.calls.count("unfollow") == 1 and not ctl.following, br.calls
     assert _snapshot(win2) == before, (_snapshot(win2), before)
-    print("ok  real QMainWindow: enter/exit toggles only the toolbar")
+    assert win2.unifiedTitleAndToolBarOnMac() is False
+    print("ok  real QMainWindow: enter/exit only starts/stops following the bar")
 
-    # 3. Exit via Qt only (no will-exit seen): the fallback still detaches.
+    # 3. Exit via Qt only (no will-exit seen): the fallback still stops.
     br.handler(fi.NOTE_DID_ENTER)
     win2.setWindowState(Qt.WindowState.WindowFullScreen)
     spin(100)
     win2.setWindowState(Qt.WindowState.WindowNoState)
     spin(100)
-    assert br.calls.count("detach") == 2 and not ctl.attached, br.calls
+    assert br.calls.count("unfollow") == 2 and not ctl.following, br.calls
     print("ok  Qt exit fallback")
 
     print("PASS test_fullscreen_inset_realqt")

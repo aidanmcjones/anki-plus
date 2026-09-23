@@ -9,17 +9,14 @@ The QMainWindow is created but NEVER shown, activated or put in full
 screen. The app's activation policy is set to Prohibited first, so no Dock
 icon and no focus change. It proves, against the real AppKit:
   * the ctypes objc_msgSend signatures resolve (NSView -> NSWindow,
-    styleMask, toolbar, toolbarStyle, NSNotificationCenter, NSApp options);
+    styleMask, NSNotificationCenter, frames, notifications);
   * AppKit's own NSWindowDidEnterFullScreenNotification, posted through the
-    real notification center, reaches the controller and attaches the empty
-    toolbar (our delegate, no items, unified compact style);
-  * Qt's window delegate answers window:willUseFullScreenPresentationOptions:
-    with AutoHideToolbar for this window only;
+    real notification center, starts following the bar without attaching a
+    toolbar, touching the presentation options or Qt's window delegate;
   * a move of a window of AppKit's full screen bar class, posted as a real
     NSWindowDidMoveNotification, moves the content view by the bar's
     reveal, step by step, and will-exit puts it back and stops following;
-  * NSWindowWillExitFullScreenNotification removes it and restores the
-    style; the window is never made visible.
+  * the window is never made visible.
 """
 
 import ctypes
@@ -73,32 +70,16 @@ def main():
     assert nswin, "NSView -> NSWindow failed"
     print("ok  NSWindow", hex(nswin), o.class_name(nswin))
     mask = br.style_mask(nswin)
-    print(f"ok  styleMask {mask:#x} fullSizeContentView={bool(mask & fi.STYLE_FULLSIZE_CONTENT)}"
-          f" fullscreen={bool(mask & fi.STYLE_FULLSCREEN)}")
+    print(f"ok  styleMask {mask:#x} fullscreen={bool(mask & fi.STYLE_FULLSCREEN)}")
     assert not br.is_fullscreen(nswin)
-    assert br.toolbar(nswin) == 0
-    style0 = o.send(nswin, "toolbarStyle", restype=lg)
-    opts0 = br.presentation_options()
+    assert not o.send(nswin, "toolbar")
+    opts0 = int(o.send(nsapp, "presentationOptions", restype=ul))
     delegate = o.send(nswin, "delegate")
-    print("    delegate", o.class_name(delegate), "implements willUseFullScreenPresentationOptions:",
-          o.responds(delegate, "window:willUseFullScreenPresentationOptions:"))
+    hook0 = o.responds(delegate, "window:willUseFullScreenPresentationOptions:")
 
     fi._controller = None
     ctl = fi.install(win, bridge=br)
     assert ctl is not None, "install failed"
-
-    # Qt's delegate now answers the presentation options question, through
-    # the real runtime: AutoHideToolbar for our window, others unchanged.
-    sel = "window:willUseFullScreenPresentationOptions:"
-    assert o.responds(delegate, sel), "options hook not added"
-    proposed = fi.PRESENT_FULLSCREEN | fi.PRESENT_AUTOHIDE_MENUBAR | (1 << 0)
-    got = o.send(delegate, sel, nswin, proposed, restype=ul, argtypes=(vp, ul))
-    assert got == proposed | fi.PRESENT_AUTOHIDE_TOOLBAR, hex(got)
-    other = o.send(delegate, sel, 0x10, proposed, restype=ul, argtypes=(vp, ul))
-    assert other == proposed, hex(other)
-    odd = o.send(delegate, sel, nswin, fi.PRESENT_FULLSCREEN, restype=ul, argtypes=(vp, ul))
-    assert odd == fi.PRESENT_FULLSCREEN, hex(odd)
-    print(f"ok  delegate options hook: {proposed:#x} -> {got:#x} (other windows unchanged)")
 
     center = o.send(o.cls("NSNotificationCenter"), "defaultCenter")
 
@@ -107,21 +88,13 @@ def main():
                restype=None, argtypes=(vp, vp))
 
     post(fi.NOTE_DID_ENTER)
-    tb = br.toolbar(nswin)
-    assert tb and ctl.attached, "did-enter did not attach the toolbar"
-    ident = o.send(o.send(tb, "identifier"), "UTF8String", restype=ctypes.c_char_p).decode()
-    items = o.send(o.send(tb, "items"), "count", restype=ul)
-    style = o.send(nswin, "toolbarStyle", restype=lg)
-    tdel = o.send(tb, "delegate")
-    assert ident == fi.TOOLBAR_ID, ident
-    assert items == 0, items
-    assert style == fi.TOOLBAR_STYLE_UNIFIED_COMPACT, style
-    assert tdel == br._helper, "toolbar delegate is not ours"
-    assert br.presentation_options() == opts0, "options changed outside full screen"
-    print(f"ok  did-enter: toolbar {ident!r}, {items} items, style {style}, delegate {o.class_name(tdel)}")
-
+    assert ctl.following, "did-enter did not start following the bar"
+    assert not o.send(nswin, "toolbar"), "a toolbar was attached"
+    assert int(o.send(nsapp, "presentationOptions", restype=ul)) == opts0, "options changed"
+    assert o.responds(delegate, "window:willUseFullScreenPresentationOptions:") == hook0, \
+        "Qt's window delegate was modified"
+    print("ok  did-enter: following the bar; no toolbar, options and delegate untouched")
     post(fi.NOTE_DID_ENTER)  # idempotent
-    assert br.toolbar(nswin) == tb
 
     # The content follows AppKit's bar window: a real (never shown) window
     # whose class name matches, moved through the real notification center.
@@ -152,23 +125,16 @@ def main():
     br.bar_owner, br.bar_bottom = real_owner, real_bottom
 
     post(fi.NOTE_WILL_EXIT)
-    assert br.toolbar(nswin) == 0 and not ctl.attached, "will-exit did not detach"
+    assert not ctl.following, "will-exit did not stop following"
     assert ctl.offset == 0 and o.send(cv, "frame", restype=R).origin.y == rest, \
         "will-exit did not put the content view back"
     assert not br._bars_observed, "bar observer left installed"
     o.send(bar, "setFrameOrigin:", R().origin.__class__(10.0, 300.0),
            restype=None, argtypes=(R().origin.__class__,))
     assert o.send(cv, "frame", restype=R).origin.y == rest
-    print("ok  will-exit: content view back in place, bar no longer followed")
-    assert o.send(nswin, "toolbarStyle", restype=lg) == style0
     post(fi.NOTE_DID_EXIT)
-    print(f"ok  will-exit: toolbar removed, style restored to {style0}")
-
-    # A second cycle reuses the same toolbar object.
-    post(fi.NOTE_DID_ENTER)
-    assert br.toolbar(nswin) == tb
-    post(fi.NOTE_WILL_EXIT)
-    assert br.toolbar(nswin) == 0
+    assert not o.send(nswin, "toolbar")
+    print("ok  will-exit: content view back in place, bar no longer followed")
 
     visible = o.send(nswin, "isVisible", restype=bl)
     assert not visible, "window became visible"

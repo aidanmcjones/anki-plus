@@ -15,34 +15,32 @@ Two earlier fixes pushed the content by hand and both were wrong:
     app pushed down (ticket 20260923-105203).
 
 A third fix (539a2af) attached an auto-hiding NSToolbar and expected
-AppKit to move the content with it. On the real display the bar revealed
-and the content did not move: in macOS 26 AppKit's full screen reveal
-(_NSFullScreenToolbarRevealAnimation driving
+AppKit to move the content with it. It does not: in macOS 26 AppKit's full
+screen reveal (_NSFullScreenToolbarRevealAnimation driving
 _NSFullScreenMenuBarCompanionController) only reshapes the separate
-NSToolbarFullScreenWindow, one setFrame:display: per animation step; it
-never moves or re-lays out the app's own window. An app whose content
-follows the bar has to follow that window itself.
+NSToolbarFullScreenWindow that hosts the title bar, one setFrame:display:
+per animation step; it never moves or re-lays out the app's own window.
+The toolbar also made the bar 38 pt instead of the 28 pt title bar, and
+where AutoHideToolbar did not take it stayed parked open (ticket
+20260923-115841). It is gone: no toolbar, no presentation options, no
+delegate hook. The title bar is the plain system one, auto-hidden by AppKit
+exactly as before any of these fixes.
 
-So this module does the same, driven only by AppKit:
+What this module does, driven only by AppKit:
 
-  * window:willUseFullScreenPresentationOptions: (added to Qt's window
-    delegate class, which does not implement it) adds AutoHideToolbar for
-    this window, so the toolbar hides and reveals with the menu bar.
-  * NSWindowDidEnterFullScreenNotification: attach an empty NSToolbar
-    (unified compact style, so the revealed bar is about the usual title bar
-    height) and, if AutoHideToolbar is not already in effect, add it to the
-    app's presentation options, so the bar stays hidden until the cursor
-    asks for it.
-  * NSWindowDidMove/DidResizeNotification of AppKit's bar window (every
-    step of its own reveal animation posts one): the content view is
-    placed so its top edge sits on the bar's bottom edge, in the same run
-    loop turn as the bar's frame change, so both land in the same frame.
-    The view keeps its size (nothing re-lays out or re-renders; the bottom
-    slides off screen for as long as the bar is out).
-  * NSWindowWillExitFullScreenNotification: put the content view back,
-    remove the toolbar and restore the window's toolbar style and the
-    presentation options, so the exit animation and the windowed title bar
-    are exactly as before.
+  * NSWindowDidEnterFullScreenNotification: start following AppKit's bar
+    window (the NSToolbarFullScreenWindow AppKit makes a child of the full
+    screen window; for a plain window it holds just the title bar).
+  * NSWindowDidMove/DidResizeNotification of that window (every step of
+    AppKit's own reveal and hide animation posts one): the content view is
+    placed so its top edge sits on the bar's visible bottom (the title bar
+    container, measured each time), in the same run loop turn as the bar's
+    frame change, so both land in the same frame. The view keeps its size
+    (nothing re-lays out or re-renders; the bottom slides off screen for as
+    long as the bar is out).
+  * NSWindowWillExitFullScreenNotification: put the content view back and
+    stop following, so the exit animation and the windowed title bar are
+    exactly as before.
 
 Nothing else. No timer, no cursor read, no Qt contents margin, no painted
 strip. The content only moves when AppKit moves the bar, by exactly as much.
@@ -59,19 +57,8 @@ from __future__ import annotations
 import sys
 from typing import Any, Callable, Dict, Optional
 
-# NSApplicationPresentationOptions
-PRESENT_AUTOHIDE_MENUBAR = 1 << 2
-PRESENT_FULLSCREEN = 1 << 10
-PRESENT_AUTOHIDE_TOOLBAR = 1 << 11
-
 # NSWindowStyleMask
 STYLE_FULLSCREEN = 1 << 14
-STYLE_FULLSIZE_CONTENT = 1 << 15
-
-# NSWindowToolbarStyle
-TOOLBAR_STYLE_UNIFIED_COMPACT = 4
-
-TOOLBAR_ID = "net.ankiplus.fullscreen-reveal"
 
 NOTE_DID_ENTER = "NSWindowDidEnterFullScreenNotification"
 NOTE_WILL_EXIT = "NSWindowWillExitFullScreenNotification"
@@ -117,18 +104,6 @@ def reveal_amount(content_top: float, bar_bottom: Optional[float]) -> float:
     if r <= 0.5:
         return 0.0
     return min(r, MAX_REVEAL)
-
-
-def with_autohide_toolbar(options: int) -> int:
-    """The presentation options with AutoHideToolbar added, but only when
-    AppKit accepts it: it is valid only together with FullScreen and
-    AutoHideMenuBar, and an invalid set raises an Objective-C exception
-    (which would abort the process), so anything else is returned as is."""
-    options = int(options)
-    need = PRESENT_FULLSCREEN | PRESENT_AUTOHIDE_MENUBAR
-    if options & need != need:
-        return options
-    return options | PRESENT_AUTOHIDE_TOOLBAR
 
 
 # --------------------------------------------------------------------------- #
@@ -204,7 +179,7 @@ class _ObjC:
 
 class CocoaBridge:
     """The AppKit side: one runtime class that observes the window's full
-    screen notifications and serves as the empty toolbar's delegate."""
+    screen notifications and the moves of AppKit's bar window."""
 
     CLASS_NAME = "AnkiPlusFullscreenReveal"
 
@@ -216,10 +191,6 @@ class CocoaBridge:
             self.o.send(self._helper_cls, "alloc"), "init")
         if not self._helper:
             raise RuntimeError("helper init failed")
-        self._toolbars: Dict[int, int] = {}
-        self._saved_style: Dict[int, int] = {}
-        self._saved_options: Optional[int] = None
-        self._set_options: Optional[int] = None
         self._bar_handlers: Dict[int, Callable[[int], None]] = {}
         self._bars_observed = False
         self._content_rest: Dict[int, float] = {}
@@ -243,42 +214,17 @@ class CocoaBridge:
         # process: the class keeps raw pointers to them.
         imps = _SHARED["imps"] = (
             ct.CFUNCTYPE(None, vp, vp, vp)(CocoaBridge._on_note),
-            ct.CFUNCTYPE(vp, vp, vp, vp)(CocoaBridge._empty_ids),
-            ct.CFUNCTYPE(vp, vp, vp, vp, vp, ct.c_bool)(CocoaBridge._no_item),
             ct.CFUNCTYPE(None, vp, vp, vp)(CocoaBridge._on_bar_note),
         )
-        note_imp, ids_imp, item_imp, bar_imp = (ct.cast(f, vp) for f in imps)
+        note_imp, bar_imp = (ct.cast(f, vp) for f in imps)
         add = o.lib.class_addMethod
         ok = add(cls, o.sel("fullscreenNote:"), note_imp, b"v@:@")
         ok &= add(cls, o.sel("barNote:"), bar_imp, b"v@:@")
-        ok &= add(cls, o.sel("toolbarDefaultItemIdentifiers:"), ids_imp, b"@@:@")
-        ok &= add(cls, o.sel("toolbarAllowedItemIdentifiers:"), ids_imp, b"@@:@")
-        ok &= add(cls, o.sel("toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:"),
-                  item_imp, b"@@:@@c")
         if not ok:
             raise RuntimeError("class_addMethod failed")
         o.lib.objc_registerClassPair(cls)
         _SHARED["bridge"] = self
         return cls
-
-    def _add_options_hook(self, nswin: int) -> None:
-        """Give Qt's NSWindow delegate class the presentation options hook,
-        once, only if Qt does not implement it (Qt 6.11 does not)."""
-        if _SHARED.get("options_hook"):
-            return
-        o = self.o
-        delegate = o.send(nswin, "delegate")
-        if not delegate or o.responds(
-                delegate, "window:willUseFullScreenPresentationOptions:"):
-            return
-        ct = o.ct
-        vp, ul = ct.c_void_p, ct.c_ulong
-        imp = ct.CFUNCTYPE(ul, vp, vp, vp, ul)(CocoaBridge._full_screen_options)
-        if o.lib.class_addMethod(
-                o.lib.object_getClass(delegate),
-                o.sel("window:willUseFullScreenPresentationOptions:"),
-                ct.cast(imp, vp), b"Q@:@Q"):
-            _SHARED["options_hook"] = imp  # the class keeps the raw pointer
 
     # IMPs. Called by AppKit on the main thread; never raise.
     @staticmethod
@@ -314,32 +260,6 @@ class CocoaBridge:
         except Exception:
             pass
 
-    @staticmethod
-    def _empty_ids(_self: int, _cmd: int, _toolbar: int) -> int:
-        br = _SHARED.get("bridge")
-        try:
-            return br.o.send(br.o.cls("NSArray"), "array") if br else 0
-        except Exception:
-            return 0
-
-    @staticmethod
-    def _full_screen_options(_self: int, _cmd: int, nswin: int, proposed: int) -> int:
-        """window:willUseFullScreenPresentationOptions: added to Qt's window
-        delegate. Our window gets AutoHideToolbar (so the toolbar hides and
-        reveals with the menu bar, as in Safari); every other window, and any
-        failure, gets AppKit's proposal unchanged."""
-        try:
-            br = _SHARED.get("bridge")
-            if br is not None and int(nswin or 0) in br._handlers:
-                return with_autohide_toolbar(proposed)
-        except Exception:
-            pass
-        return int(proposed)
-
-    @staticmethod
-    def _no_item(_s: int, _c: int, _tb: int, _ident: int, _ins: bool) -> int:
-        return 0
-
     # -- window --------------------------------------------------------------
     def nswindow(self, win: Any) -> int:
         """The NSWindow behind a top-level QWidget (winId() is its NSView)."""
@@ -361,10 +281,6 @@ class CocoaBridge:
         o = self.o
         vp = o.ct.c_void_p
         self._handlers[int(nswin)] = handler
-        try:
-            self._add_options_hook(nswin)
-        except Exception:
-            pass
         center = o.send(o.cls("NSNotificationCenter"), "defaultCenter")
         for name in (NOTE_DID_ENTER, NOTE_WILL_EXIT, NOTE_DID_EXIT):
             o.send(center, "addObserver:selector:name:object:",
@@ -378,44 +294,6 @@ class CocoaBridge:
         center = o.send(o.cls("NSNotificationCenter"), "defaultCenter")
         o.send(center, "removeObserver:name:object:", self._helper, None, nswin,
                restype=None, argtypes=(vp, vp, vp))
-
-    def toolbar(self, nswin: int) -> int:
-        return self.o.send(nswin, "toolbar") or 0
-
-    def attach_toolbar(self, nswin: int) -> None:
-        o = self.o
-        ct = o.ct
-        key = int(nswin)
-        tb = self._toolbars.get(key)
-        if not tb:
-            tb = o.send(o.send(o.cls("NSToolbar"), "alloc"),
-                        "initWithIdentifier:", o.nsstring(TOOLBAR_ID),
-                        argtypes=(ct.c_void_p,))
-            if not tb:
-                return
-            o.send(tb, "setDelegate:", self._helper,
-                   restype=None, argtypes=(ct.c_void_p,))
-            o.send(tb, "setAllowsUserCustomization:", False,
-                   restype=None, argtypes=(ct.c_bool,))
-            self._toolbars[key] = tb  # our +1 reference, kept for reuse
-        if o.responds(nswin, "toolbarStyle") and key not in self._saved_style:
-            self._saved_style[key] = int(
-                o.send(nswin, "toolbarStyle", restype=ct.c_long))
-            o.send(nswin, "setToolbarStyle:", TOOLBAR_STYLE_UNIFIED_COMPACT,
-                   restype=None, argtypes=(ct.c_long,))
-        o.send(nswin, "setToolbar:", tb, restype=None, argtypes=(ct.c_void_p,))
-
-    def detach_toolbar(self, nswin: int) -> None:
-        o = self.o
-        ct = o.ct
-        key = int(nswin)
-        mine = self._toolbars.get(key)
-        if mine and self.toolbar(nswin) == mine:
-            o.send(nswin, "setToolbar:", None, restype=None,
-                   argtypes=(ct.c_void_p,))
-        if key in self._saved_style:
-            o.send(nswin, "setToolbarStyle:", self._saved_style.pop(key),
-                   restype=None, argtypes=(ct.c_long,))
 
     # -- the full screen bar window and the content that follows it ---------
     def observe_bars(self, nswin: int, handler: Optional[Callable[[int], None]]) -> None:
@@ -454,6 +332,10 @@ class CocoaBridge:
         if o.responds(barwin, "_originalWindow"):
             return int(o.send(barwin, "_originalWindow") or 0)
         return parent
+
+    def _app(self) -> int:
+        o = self.o
+        return o.send(o.cls("NSApplication"), "sharedApplication") or 0
 
     def find_bar(self, nswin: int) -> int:
         o = self.o
@@ -531,36 +413,6 @@ class CocoaBridge:
         if offset <= 0:
             self._content_rest.pop(key, None)
 
-    # -- presentation options ------------------------------------------------
-    def _app(self) -> int:
-        o = self.o
-        return o.send(o.cls("NSApplication"), "sharedApplication") or 0
-
-    def presentation_options(self) -> int:
-        return int(self.o.send(self._app(), "presentationOptions",
-                               restype=self.o.ct.c_ulong))
-
-    def set_presentation_options(self, opts: int) -> None:
-        self.o.send(self._app(), "setPresentationOptions:", int(opts),
-                    restype=None, argtypes=(self.o.ct.c_ulong,))
-
-    def autohide_toolbar(self) -> None:
-        cur = self.presentation_options()
-        new = with_autohide_toolbar(cur)
-        if new != cur:
-            self._saved_options = cur
-            self._set_options = new
-            self.set_presentation_options(new)
-
-    def restore_options(self) -> None:
-        if self._saved_options is None:
-            return
-        cur = self.presentation_options()
-        if cur == self._set_options:
-            self.set_presentation_options(self._saved_options)
-        self._saved_options = self._set_options = None
-
-
 _SHARED: Dict[str, Any] = {}
 
 
@@ -601,16 +453,16 @@ def _make_controller_class() -> Any:
     from aqt.qt import QEvent, QObject
 
     class _FullscreenReveal(QObject):
-        """Attaches the toolbar in full screen, removes it on the way out.
-        Reacts only to AppKit's full screen notifications (and, as a
-        fallback for the exit, to Qt's WindowStateChange after them)."""
+        """Follows AppKit's bar window while full screen. Reacts only to
+        AppKit's notifications (and, as a fallback for the exit, to Qt's
+        WindowStateChange after them)."""
 
         def __init__(self, win: Any, bridge: Any) -> None:
             super().__init__(win)
             self._win = win
             self._bridge = bridge
             self._nswin = 0
-            self.attached = False
+            self.following = False
             self.offset = 0.0
             win.installEventFilter(self)
             self._bind()
@@ -656,14 +508,9 @@ def _make_controller_class() -> Any:
                 self._exit()
 
         def _enter(self) -> None:
-            if self.attached or not self._nswin:
+            if self.following or not self._nswin:
                 return
-            try:
-                self._bridge.attach_toolbar(self._nswin)
-                self.attached = True
-                self._bridge.autohide_toolbar()
-            except Exception:
-                pass
+            self.following = True
             try:
                 self._bridge.observe_bars(self._nswin, self._on_bar)
                 bar = self._bridge.find_bar(self._nswin)
@@ -675,7 +522,7 @@ def _make_controller_class() -> Any:
         def _on_bar(self, barwin: int) -> None:
             """AppKit moved its bar window (a step of its own reveal or hide
             animation): put the content's top edge on the bar's bottom."""
-            if not self.attached or not self._nswin:
+            if not self.following or not self._nswin:
                 return
             br = self._bridge
             try:
@@ -688,23 +535,15 @@ def _make_controller_class() -> Any:
                 pass
 
         def _exit(self) -> None:
-            if not self.attached or not self._nswin:
+            if not self.following or not self._nswin:
                 return
-            self.attached = False
+            self.following = False
             try:
                 self._bridge.observe_bars(self._nswin, None)
                 self._bridge.set_content_offset(self._nswin, 0.0)
             except Exception:
                 pass
             self.offset = 0.0
-            try:
-                self._bridge.detach_toolbar(self._nswin)
-            except Exception:
-                pass
-            try:
-                self._bridge.restore_options()
-            except Exception:
-                pass
 
         # -- Qt events --------------------------------------------------------
         def eventFilter(self, obj: Any, event: Any) -> bool:
@@ -715,7 +554,7 @@ def _make_controller_class() -> Any:
                 elif t == QEvent.Type.WindowStateChange:
                     # Normally a no-op: AppKit's will-exit came first. Only
                     # the exit is mirrored here; entering waits for AppKit's
-                    # did-enter so the toolbar never shows in a windowed frame.
+                    # did-enter (the bar window exists only in full screen).
                     if not self._win.isFullScreen():
                         self._exit()
             except Exception:

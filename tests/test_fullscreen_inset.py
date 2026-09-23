@@ -10,21 +10,21 @@ History:
 
   * 539a2af attached an auto-hiding NSToolbar and expected AppKit to push
     the content; on the real display AppKit only moved its own bar window.
+  * 20260923-115841: that toolbar made the bar 38 pt instead of 28 and, where
+    AutoHideToolbar did not take, parked it open for all of full screen.
 
-The fix: an empty NSToolbar is attached on
-NSWindowDidEnterFullScreenNotification (with AutoHideToolbar), removed on
-NSWindowWillExitFullScreenNotification, and while full screen the content
-view follows AppKit's bar window: every move/resize AppKit makes to it
-(each step of its reveal animation) places the content's top on the bar's
-bottom. These tests drive the controller with a fake Qt and a fake AppKit
-bridge and assert:
-  * the toolbar is attached only on AppKit's did-enter, once, and removed on
-    will-exit, once;
+The fix: no toolbar, no presentation options. From AppKit's
+NSWindowDidEnterFullScreenNotification to its will-exit, the content view
+follows AppKit's own bar window (the plain title bar): every move/resize
+AppKit makes to it (each step of its reveal/hide animation) places the
+content's top on the bar's bottom. These tests drive the controller with a
+fake Qt and a fake AppKit bridge and assert:
+  * following starts only on AppKit's did-enter and stops on will-exit;
   * the content offset is set only from the bar window's moves, equals the
     bar's reveal at every step, and is back at 0 after will-exit;
+  * the module has no toolbar or presentation option code left;
   * nothing polls (no QTimer, no QCursor) and nothing changes layout or
     paint (no setContentsMargins, no setPalette), whatever the cursor does;
-  * AutoHideToolbar is only ever added to a set AppKit accepts;
   * no bridge (offscreen, other platforms) means install() does nothing.
 
 Runs standalone: `python3 tests/test_fullscreen_inset.py`.
@@ -141,16 +141,14 @@ class FakeMainWindow:
 
 
 class FakeBridge:
-    """Stands in for CocoaBridge: an NSWindow with a toolbar slot, the app's
-    presentation options, and a way to post AppKit's notifications."""
+    """Stands in for CocoaBridge: an NSWindow, AppKit's bar window, and a way
+    to post AppKit's notifications."""
 
     def __init__(self, nswin=0xBEEF, fullscreen=False):
         self._nswin = nswin
         self.fullscreen = fullscreen
         self.handlers = {}
-        self.toolbar = 0
         self.calls = []
-        self.options = 0
         self.bar_handler = None
         self.bar_bottom_y = None   # None: the bar window is not shown
         self.top = 1084.0
@@ -192,20 +190,6 @@ class FakeBridge:
     def unobserve(self, nswin):
         self.calls.append(("unobserve", nswin))
         self.handlers.pop(nswin, None)
-
-    def attach_toolbar(self, nswin):
-        self.calls.append(("attach", nswin))
-        self.toolbar = 0x70
-
-    def detach_toolbar(self, nswin):
-        self.calls.append(("detach", nswin))
-        self.toolbar = 0
-
-    def autohide_toolbar(self):
-        self.calls.append(("autohide",))
-
-    def restore_options(self):
-        self.calls.append(("restore",))
 
     def post(self, name):
         h = self.handlers.get(self._nswin)
@@ -278,51 +262,46 @@ def _cursor_churn(win):
 def test_install_observes_the_nswindow_and_does_nothing_else():
     win, br, ctl = _boot()
     assert br.calls == [("observe", 0xBEEF)], br.calls
-    assert br.toolbar == 0
+    assert not ctl.following and br.bar_handler is None
     _assert_untouched(win)
 
 
-def test_did_enter_attaches_toolbar_once_will_exit_removes_it_once():
+def test_did_enter_starts_following_will_exit_stops():
     win, br, ctl = _boot()
     win._fullscreen = True
     br.fullscreen = True
     br.post(fi.NOTE_DID_ENTER)
-    # Qt's own state change follows AppKit's notification; it must not
-    # attach a second time.
+    # Qt's own state change follows AppKit's notification; no second start.
     win.event(QEvent(QEvent.Type.WindowStateChange))
-    assert br.count("attach") == 1 and br.toolbar, br.calls
-    assert br.count("autohide") == 1, br.calls
+    assert ctl.following and br.count("observe_bars") == 1, br.calls
     _cursor_churn(win)
-    assert br.count("attach") == 1 and br.count("detach") == 0, br.calls
-
     br.post(fi.NOTE_WILL_EXIT)
-    assert br.count("detach") == 1 and br.toolbar == 0, br.calls
-    assert br.count("restore") == 1, br.calls
+    assert not ctl.following and br.bar_handler is None, br.calls
     br.post(fi.NOTE_DID_EXIT)
     win._fullscreen = False
     br.fullscreen = False
     win.event(QEvent(QEvent.Type.WindowStateChange))
-    assert br.count("detach") == 1, "exit handled more than once"
+    assert br.count("observe_bars") == 2, "exit handled more than once"
     _assert_untouched(win)
 
 
-def test_qt_state_change_alone_never_attaches():
-    """Entering is AppKit's did-enter only: Qt's WindowStateChange may arrive
-    while the window is still in its windowed frame, and a toolbar there
-    would flash a taller title bar."""
+def test_qt_state_change_alone_never_starts():
+    """Entering is AppKit's did-enter only (the bar window exists only in
+    full screen)."""
     win, br, ctl = _boot()
     win._fullscreen = True
     win.event(QEvent(QEvent.Type.WindowStateChange))
-    assert br.count("attach") == 0, br.calls
+    assert not ctl.following and br.count("observe_bars") == 0, br.calls
     _assert_untouched(win)
 
 
 def test_qt_state_change_is_the_exit_fallback():
     win, br, ctl = _boot()
     br.post(fi.NOTE_DID_ENTER)
+    br.move_bar(1050.0)
     win._fullscreen = False
     win.event(QEvent(QEvent.Type.WindowStateChange))
-    assert br.count("detach") == 1 and br.toolbar == 0, br.calls
+    assert not ctl.following and br.offsets[-1] == 0.0, br.offsets
 
 
 def test_repeated_cycles_stay_balanced():
@@ -330,16 +309,18 @@ def test_repeated_cycles_stay_balanced():
     for _ in range(5):
         br.post(fi.NOTE_DID_ENTER)
         _cursor_churn(win)
+        br.move_bar(1056.0)
+        br.move_bar(1084.0)
         br.post(fi.NOTE_WILL_EXIT)
         br.post(fi.NOTE_DID_EXIT)
-    assert br.count("attach") == 5 and br.count("detach") == 5, br.calls
-    assert br.toolbar == 0
+    assert br.count("observe_bars") == 10, br.calls
+    assert br.bar_handler is None and ctl.offset == 0.0
     _assert_untouched(win)
 
 
-def test_install_while_already_full_screen_attaches():
+def test_install_while_already_full_screen_follows():
     win, br, ctl = _boot(fullscreen=True)
-    assert br.count("attach") == 1, br.calls
+    assert ctl.following and br.bar_handler is not None, br.calls
 
 
 def test_winid_change_rebinds_to_the_new_nswindow():
@@ -353,7 +334,7 @@ def test_destroyed_unobserves():
     win, br, ctl = _boot()
     br.post(fi.NOTE_DID_ENTER)
     win.destroyed.emit()
-    assert br.count("detach") == 1 and ("unobserve", 0xBEEF) in br.calls
+    assert not ctl.following and ("unobserve", 0xBEEF) in br.calls
 
 
 def test_no_bridge_means_no_controller():
@@ -373,19 +354,6 @@ def test_config_switch_disables():
         assert fi.install(FakeMainWindow(), bridge=FakeBridge()) is None
     finally:
         _AddonManager.cfg = {}
-
-
-def test_autohide_toolbar_only_with_a_valid_option_set():
-    f = fi.with_autohide_toolbar
-    fs, mb, tb = fi.PRESENT_FULLSCREEN, fi.PRESENT_AUTOHIDE_MENUBAR, fi.PRESENT_AUTOHIDE_TOOLBAR
-    assert f(fs | mb) == fs | mb | tb
-    assert f(fs | mb | (1 << 1)) == fs | mb | tb | (1 << 1)
-    assert f(fs | mb | tb) == fs | mb | tb
-    # Not in full screen, or menu bar not auto-hidden: AppKit would throw.
-    assert f(0) == 0
-    assert f(fs) == fs
-    assert f(mb) == mb
-    assert tb == 1 << 11 and fs == 1 << 10 and mb == 1 << 2
 
 
 def test_content_follows_the_bar_window_step_by_step():
@@ -435,6 +403,10 @@ def test_source_has_no_polling_margin_or_paint():
     src = open(os.path.join(ROOT, "fullscreen_inset.py")).read()
     for bad in ("QTimer", "startTimer", "QCursor", "setContentsMargins",
                 "QPalette", "setPalette", "singleShot"):
+        assert bad not in src, f"{bad} is back in fullscreen_inset.py"
+    # 20260923-115841: no toolbar, no presentation options, no delegate hook.
+    for bad in ("setToolbar:", "NSToolbar\"", "setPresentationOptions:",
+                "willUseFullScreenPresentationOptions", "setToolbarStyle:"):
         assert bad not in src, f"{bad} is back in fullscreen_inset.py"
 
 
