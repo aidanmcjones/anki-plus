@@ -172,8 +172,8 @@ def run(t):
         t.pump(1500)
         wf = win_frame()
         c0 = content_rect()
-        top0 = c0.origin.y + c0.size.height
-        win_top = wf.origin.y + wf.size.height
+        top0 = c0.origin.y + c0.size.h
+        win_top = wf.origin.y + wf.size.h
         t.check("no strip: with the bar hidden the content starts at the window top",
                 abs(win_top - top0) <= 1.0, f"window top {win_top} content top {top0}")
         t.check("no Qt contents margin", mw.contentsMargins().top() == 0,
@@ -193,8 +193,8 @@ def run(t):
         end = time.monotonic() + SAMPLE_S
         while time.monotonic() < end:
             c = content_rect()
-            ctop = c.origin.y + c.size.height
-            samples.append((round(mark_y(ctop), 1), round(c.size.height, 1), bar_bottom()))
+            ctop = c.origin.y + c.size.h
+            samples.append((round(mark_y(ctop), 1), round(c.size.h, 1), bar_bottom()))
             t.pump(SAMPLE_MS)
         t.note(f"samples (wordmark y, content h, bar bottom): {samples}")
 
