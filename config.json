@@ -50,6 +50,7 @@
   "browse_sidebar_minimal": true,
   "browse_sidebar_multiselect": true,
   "browse_card_drag": true,
+  "clean_deck_names": true,
   "browse_render_preview": true,
   "restyle_browse_editor": true,
   "congrats_redesign": true,

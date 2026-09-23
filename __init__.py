@@ -3698,6 +3698,17 @@ def _current_deck_name() -> str:
             return ""
 
 
+def _deck_title(name: str) -> str:
+    """A deck's title: the last segment of its `::` path, unless
+    `clean_deck_names` is off (deck_names.py owns the rule)."""
+    try:
+        from .deck_names import title
+
+        return title(name)
+    except Exception:
+        return name or ""
+
+
 def _reviewer_ease_html() -> str:
     """Four interval chips that appear under the answer. Text only —
     no numbers, no labels, no bar. They're hidden by CSS until the
@@ -3773,7 +3784,8 @@ def _reviewer_header_html() -> str:
     """Header above the card: back chevron + deck name on the left, the
     count breakdown on the right, and Edit + More icon buttons next to
     them (Anki's More menu already covers flag/mark/undo)."""
-    name = html.escape(_current_deck_name() or "Studying")
+    # By title, not by `::` path (see deck_names.py).
+    name = html.escape(_deck_title(_current_deck_name()) or "Studying")
     new_n = learn_n = rev_n = 0
     try:
         c = mw.col.sched.counts()
@@ -4206,6 +4218,17 @@ try:
     from . import browse_card_drag as _card_drag
 
     gui_hooks.browser_will_show.append(_card_drag.install)
+except Exception:
+    pass
+
+# Browse: decks go by their title. The search box shows "Amino Acids" for
+# a sidebar click, not `"deck:Fundamentals of Biochemistry::Amino Acids"`
+# (the real query stays behind it), and the Deck column drops the `::`
+# path in favour of the leaf, with the path as the tooltip.
+try:
+    from . import deck_names as _deck_names
+
+    gui_hooks.browser_will_show.append(_deck_names.install)
 except Exception:
     pass
 
