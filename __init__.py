@@ -6190,3 +6190,13 @@ gui_hooks.profile_did_open.append(_dev_cmd_start)
 gui_hooks.main_window_did_init.append(_dev_start)
 gui_hooks.main_window_did_init.append(_dev_cmd_start)
 gui_hooks.profile_will_close.append(_dev_shutdown)
+
+
+# Live test harness (tests/live/run_in_app.py). Inert unless the harness set
+# ANKI_DESIGN_LIVE_TEST for a throwaway profile; see tests/live/README.md.
+try:
+    from . import live_test as _live_test
+
+    _live_test.install()
+except Exception:
+    pass
