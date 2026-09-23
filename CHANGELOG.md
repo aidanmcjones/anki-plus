@@ -16,6 +16,23 @@ All notable changes to Anki Design are documented here. Format loosely follows
   list follows the same order.
 
 ### Fixed
+- **The window comes back when its web page crashes.** After about 2.5
+  hours of reviewing, the page process behind the main window died of an
+  out-of-memory and the whole window stayed grey until Anki+ was quit
+  (Anki never reloads a crashed page, and after a crash Qt drops the JS
+  bridge the page needs to talk to Anki). Now a crash re-shows the screen
+  you were on, the reviewer on the same unanswered card, with the bridge
+  restored; a page that keeps crashing falls back to the deck list once
+  and then stops retrying.
+- **Report a bug never hangs.** Cmd+Shift+B used to wait forever on a
+  crashed or frozen page. It takes the window screenshot first, gives the
+  page 3 seconds, and files the ticket with what it got plus the note
+  "webview unresponsive".
+- **Card font scaling does its work once per card.** The reviewer's
+  font-size rewrite skips sizes it already scaled, marks each card
+  stylesheet it has done, ignores page changes that bring no stylesheet,
+  installs only once, and caps the rules one card may cost. (Measured over
+  300 cards: it was not growing the page before either; see the ticket.)
 - **Full screen title bar reveals like Safari's.** In macOS full screen the
   "Anki+" bar used to slide over the sidebar wordmark; the first fix made
   it flicker, the second reserved a dark strip across the top of the

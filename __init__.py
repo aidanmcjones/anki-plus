@@ -4694,6 +4694,24 @@ try:
 except Exception:
     pass
 
+# Reload the main webview when its renderer process dies (crash, OOM)
+# instead of leaving the window grey until the app is quit. See
+# renderer_recovery.py; ticket 20260923-153047.
+def _install_renderer_recovery(*_a) -> None:
+    try:
+        from . import renderer_recovery as _rr
+
+        _rr.install(mw)
+    except Exception:
+        pass
+
+
+try:
+    gui_hooks.main_window_did_init.append(_install_renderer_recovery)
+    gui_hooks.profile_did_open.append(_install_renderer_recovery)
+except Exception:
+    pass
+
 # Hide Anki's top toolbar webview as soon as the main window / profile is up.
 gui_hooks.main_window_did_init.append(_apply_chrome)
 gui_hooks.profile_did_open.append(_apply_chrome)

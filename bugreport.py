@@ -207,6 +207,25 @@ def _capture_screenshot(dest_path: str) -> bool:
         return False
 
 
+# How long the page capture may take before the ticket is filed without it.
+# A live page answers in milliseconds; a renderer that has crashed (the
+# window goes grey) or is stuck in a loop never calls back at all, and the
+# report must still land.
+EVAL_TIMEOUT_MS = 3000
+UNRESPONSIVE_NOTE = (
+    "webview unresponsive: the page did not answer the capture within 3 s "
+    "(crashed or hung renderer); the ticket has the Qt screenshot and the "
+    "app/reviewer info only"
+)
+
+
+def _schedule(ms: int, fn) -> None:
+    """QTimer.singleShot, swappable in tests."""
+    from aqt.qt import QTimer
+
+    QTimer.singleShot(ms, fn)
+
+
 _CAPTURE_JS = (
     "(function(){try{"
     "var qa=document.getElementById('qa');"
@@ -248,7 +267,12 @@ def _write_index_row(ticket: Dict[str, Any]) -> None:
 def create_ticket(note: str, expected: str, include_screenshot: bool, on_done=None) -> None:
     """Build and write a ticket. Async: the #qa/console-errors capture goes
     through evalWithCallback, so `on_done(ticket_dict)` — if given — only
-    fires once everything has actually landed on disk."""
+    fires once everything has actually landed on disk.
+
+    Never blocks on the page: the Qt screenshot is taken first, and the
+    page capture gets EVAL_TIMEOUT_MS to answer. When it does not (a dead
+    or hung renderer never calls back), the ticket is filed with what was
+    captured and `capture.note` says the webview was unresponsive."""
     when = datetime.datetime.now().astimezone()
     ticket_id = _make_id(note, when)
     ticket_dir = os.path.join(TICKETS_DIR, ticket_id)
@@ -266,8 +290,15 @@ def create_ticket(note: str, expected: str, include_screenshot: bool, on_done=No
     app = _app_info()
     reviewer = _reviewer_info()
 
-    def _finish(payload: Optional[Dict[str, Any]]) -> None:
-        payload = payload or {}
+    state = {"done": False}
+
+    def _finish(payload: Optional[Dict[str, Any]], unresponsive: bool = False) -> None:
+        # Exactly once: the timeout and a late callback may both arrive.
+        if state["done"]:
+            return
+        state["done"] = True
+        if not isinstance(payload, dict):
+            payload = {}
         qa_html = payload.get("qa_html")
         visible_text = payload.get("visible_text") or ""
         console_errors = payload.get("console_errors") or []
@@ -291,6 +322,8 @@ def create_ticket(note: str, expected: str, include_screenshot: bool, on_done=No
             "screenshot_path": screenshot_path,
             "captured_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         }
+        if unresponsive:
+            capture["note"] = UNRESPONSIVE_NOTE
 
         ticket = None
         if _schema is not None:
@@ -348,6 +381,10 @@ def create_ticket(note: str, expected: str, include_screenshot: bool, on_done=No
     if webview is None:
         _finish(None)
         return
+    try:
+        _schedule(EVAL_TIMEOUT_MS, lambda: _finish(None, unresponsive=True))
+    except Exception:
+        pass
     try:
         webview.evalWithCallback(_CAPTURE_JS, _finish)
     except Exception:
