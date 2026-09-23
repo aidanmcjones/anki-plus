@@ -624,6 +624,10 @@ html:not([data-rf-cardstyle="native"]) #qa {
   line-height: 1.5;
   letter-spacing: -0.005em;
 }
+/* card-scale.js multiplies the note type's own px/pt/rem font sizes by
+   --rf-deck-scale so they grow with the reviewer size above. Native mode
+   keeps the note type's sizes exactly. */
+html[data-rf-cardstyle="native"] { --rf-deck-scale: 1 !important; }
 
 /* ---------- Nothing may exceed the content area ----------
  * The container is now as wide as the window, and these rules are what
