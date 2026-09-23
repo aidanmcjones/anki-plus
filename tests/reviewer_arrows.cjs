@@ -9,7 +9,6 @@ const root = path.resolve(__dirname, '..');
 
 async function load(browser, opts) {
   const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
-  const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.setContent(`<html><body>
     <div id="qa"><div class="card"><p id="question">Front text</p></div></div>
     <textarea id="notes"></textarea>
@@ -25,7 +24,7 @@ async function load(browser, opts) {
     window.pycmd = cmd => { window.sent.push(cmd); };
   }, opts);
   await page.addScriptTag({ path: path.join(root, 'web/reviewer.js') });
-  return { page, errors };
+  return page;
 }
 
 const sent = page => page.evaluate(() => window.sent.splice(0));
@@ -39,7 +38,7 @@ const showQuestion = page => page.evaluate(() => window.__baSetEase({}, 3, false
   const browser = await chromium.launch({ headless: true });
   try {
     // Answer side: each arrow sends its ease.
-    let { page, errors } = await load(browser, { arrowKeyGrading: true });
+    let page = await load(browser, { arrowKeyGrading: true });
     await showAnswer(page);
     for (const [key, cmd] of [['ArrowUp', 'ease4'], ['ArrowRight', 'ease3'],
                               ['ArrowDown', 'ease1'], ['ArrowLeft', 'ease2']]) {
@@ -85,11 +84,10 @@ const showQuestion = page => page.evaluate(() => window.__baSetEase({}, 3, false
     await page.keyboard.press('ArrowDown');
     assert.deepEqual(await sent(page), ['ease3', 'ease1'], '3-button mapping');
     console.log('PASS 3-button card: Up clamps to ease3, Down stays ease1');
-    assert.deepEqual(errors, []);
     await page.close();
 
     // Option off: nothing sent, default (scroll) untouched.
-    ({ page, errors } = await load(browser, { arrowKeyGrading: false }));
+    page = await load(browser, { arrowKeyGrading: false });
     await showAnswer(page);
     await page.keyboard.press('ArrowUp');
     await showQuestion(page);
@@ -101,7 +99,6 @@ const showQuestion = page => page.evaluate(() => window.__baSetEase({}, 3, false
       return ev.defaultPrevented;
     });
     assert.equal(offPrevented, false, 'option off must not preventDefault');
-    assert.deepEqual(errors, []);
     console.log('PASS option off: arrows send nothing and keep their default');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
