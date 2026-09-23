@@ -192,8 +192,12 @@
         var tag = (t.tagName || "").toLowerCase();
         if (tag === "a" || tag === "button" || tag === "input"
             || tag === "textarea" || tag === "select" || tag === "audio"
-            || tag === "video" || t.isContentEditable) {
-          return;  // let the user actually interact with that thing
+            || tag === "video" || tag === "details" || tag === "summary"
+            || tag === "label" || t.isContentEditable) {
+          // Let the user actually interact with that thing. <details>
+          // covers the collapsible "Scenario" block on the question side:
+          // opening it to read the setup must not flip the card.
+          return;
         }
         t = t.parentNode;
       }
