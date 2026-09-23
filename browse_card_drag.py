@@ -11,6 +11,11 @@ module adds the direct-manipulation route on top:
 
   - drag any selected row(s)      : every selected card travels along, in
                                     Notes mode every card of every note
+  - pull an unselected row aside  : just that card travels; a sweep up or
+                                    down the list from an unselected row
+                                    is left to the table, which selects
+                                    the rows the cursor crosses, so a group
+                                    can be gathered by hand and then dragged
   - drop on a deck in the sidebar : `set_card_deck`, the same op the
                                     Change Deck dialog runs, one undo step
   - drop on a row of the table    : `reposition_new_cards`, the dragged new
@@ -30,7 +35,9 @@ carrying the selected card ids under a private MIME type. On an
 already-selected row Qt defers the selection change until release, so the
 whole selection travels and a plain click still collapses the selection to
 that row; on an unselected row Qt selects it on the press, so that one
-card travels.
+card travels when pulled sideways. Pulled along the list instead, the
+press is handed back to the view: that gesture is how a run of rows is
+selected by hand (20260923-104846), and a drag would swallow it.
 
 The drop side is another pair of filters, on the sidebar tree and on the
 table. They only react to our MIME type, so Anki's own sidebar drags (deck
@@ -203,6 +210,7 @@ class _TableDrag(QObject):
         self.browser = browser
         self.view = view
         self.press_pos: Optional[QPoint] = None
+        self.press_selected = False
         self.armed = False
         self.dragging = False
 
@@ -222,6 +230,7 @@ class _TableDrag(QObject):
     def _disarm(self) -> None:
         self.armed = False
         self.press_pos = None
+        self.press_selected = False
 
     def _on_press(self, ev: Any) -> bool:
         self._disarm()
@@ -236,12 +245,19 @@ class _TableDrag(QObject):
             return False
         # Armed on ANY row. A selected row: with ExtendedSelection Qt
         # defers the selection change to release, so the whole selection
-        # travels. An unselected row: Qt selects it on this press, and the
-        # pull drags that one card, the way Finder and a drag-enabled Qt
-        # view behave. (This used to be left to the view, which read the
-        # pull as a rubber-band selection, so "grab a card and drag it" in
-        # one motion never moved anything.) Shift/Cmd-click still extend.
+        # travels. An unselected row: Qt selects it on this press, and a
+        # sideways pull drags that one card, the way Finder and a
+        # drag-enabled Qt view behave. (This used to be left to the view,
+        # which read the pull as a rubber-band selection, so "grab a card
+        # and drag it" in one motion never moved anything.) Which row it
+        # was is remembered: a pull along the list from an unselected row
+        # is the table's own gesture for selecting a run of rows, and
+        # `_on_move` gives that one back. Shift/Cmd-click still extend.
         self.press_pos = QPoint(pos)
+        try:
+            self.press_selected = bool(sel.isSelected(index))
+        except Exception:
+            self.press_selected = False
         self.armed = True
         return False
 
@@ -255,12 +271,25 @@ class _TableDrag(QObject):
         except Exception:
             pass
         pos = _pos(ev)
-        dist = abs(pos.x() - self.press_pos.x()) + abs(pos.y() - self.press_pos.y())
-        if dist < _drag_distance():
+        dx = abs(pos.x() - self.press_pos.x())
+        dy = abs(pos.y() - self.press_pos.y())
+        if dx + dy < _drag_distance():
             # Below the threshold. Swallowed: the view would otherwise read
             # the wobble as the start of a rubber-band and collapse the
             # selection to the rows under it.
             return True
+        if not self.press_selected and dy >= dx:
+            # A sweep up or down the list from a row that was not selected:
+            # that is how a group of cards is gathered by hand, and a drag
+            # here would take the gesture and select nothing
+            # (20260923-104846). Hand it to the view, which extends the
+            # selection row by row from the press as the cursor travels,
+            # as Anki's table always has. The group can then be dragged by
+            # pressing on any of its rows. A sideways pull still drags the
+            # one card: the sidebar is beside the table, and no run of rows
+            # is selected by moving along one.
+            self._disarm()
+            return False
         self._disarm()
         self._start_drag()
         return True

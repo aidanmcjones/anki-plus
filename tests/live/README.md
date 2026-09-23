@@ -130,3 +130,15 @@ Rules for a good live test:
   sees: a group dropped on a sidebar deck moves and leaves the list, an
   unselected row can be pulled, a review-row drop explains itself, and a
   new-on-new drop repositions. On 06d7d9f three of its checks fail.
+- `test_browse_sweep_select.py`: press on an unselected row of the real
+  Browse table and sweep down the list with the real mouse; the rows
+  crossed must end up selected and no card drag may start, then the
+  swept group dragged onto a sidebar deck moves there, and a sideways
+  pull on an unselected row still drags that one card. Its drag stand-in
+  owns the pointer from the moment a drag starts (the rest of the gesture
+  becomes drag events and the release is eaten, as Qt's drag loop does),
+  which is what makes the bug visible: on dfaefaa the sweep started a
+  drag and selected nothing.
+- Both Browse tests wait for the embed's opening curtain (a QFrame that
+  covers the table for ~0.9 s) to drop before pressing; a press before
+  that lands on the curtain and reaches nothing.

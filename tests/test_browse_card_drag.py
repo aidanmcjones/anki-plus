@@ -641,18 +641,53 @@ def test_click_on_selected_row_is_still_a_click():
     assert _move(view, 10, 200, buttons=Qt.MouseButton.NoButton) is False
 
 
-def test_pulling_from_an_unselected_row_drags_it():
+def test_pulling_an_unselected_row_sideways_drags_it():
     # 20260923-101011: grab-and-pull on a row that was not selected used to
     # be left to the view (a rubber-band selection), so a one-motion drag
     # never moved anything. The press still reaches the view (which, in
     # real Qt, selects that row; see test_browse_card_drag_realqt.py) and
-    # the pull now starts a drag.
+    # a sideways pull starts a drag.
     br, _ = _boot()
     view = br.table._view
     view.selected = {1}
     assert _press(view, 10, 85) is False, "the press must reach the view"
-    assert _move(view, 10, 130) is True
+    assert _move(view, 12, 87) is True, "sub-threshold wobble is swallowed"
+    assert _move(view, 60, 90) is True
     assert len(QDrag.instances) == 1
+
+
+def test_sweeping_down_from_an_unselected_row_is_left_to_the_view():
+    # 20260923-104846: "I cannot group-select cards by dragging". Press on
+    # a row that is not selected and pull down the list: that is the
+    # table's own gesture for selecting a run of rows, and the add-on
+    # used to turn it into a drag of the one pressed card. Once past the
+    # threshold along the list the moves must reach the view unconsumed,
+    # and no drag may start.
+    br, _ = _boot()
+    view = br.table._view
+    view.selected = {1}
+    assert _press(view, 10, 85) is False, "the press must reach the view"
+    assert _move(view, 12, 87) is True, "sub-threshold wobble is swallowed"
+    assert _move(view, 11, 130) is False, "the sweep must reach the view"
+    assert _move(view, 10, 175) is False
+    assert _release(view, 10, 175) is False
+    assert not QDrag.instances, "a sweep must not start a drag"
+    # An upward sweep, and an exactly diagonal one, are sweeps too.
+    assert _press(view, 10, 85) is False
+    assert _move(view, 10, 40) is False
+    assert not QDrag.instances
+    assert _press(view, 10, 85) is False
+    assert _move(view, 20, 95) is False
+    assert not QDrag.instances
+
+
+def test_sweeping_from_a_selected_row_still_drags_the_selection():
+    # The group gathered by a sweep is moved by pressing on any of its rows
+    # and pulling, in any direction: up or down the table to reposition,
+    # sideways to the sidebar.
+    br, _ = _boot()
+    drag = _pull(br, {1, 2, 3}, from_row=1)   # _pull moves straight down
+    assert browse_card_drag.decode_cards(drag.mime) == [11, 12, 13]
 
 
 def test_modifier_press_never_arms():
