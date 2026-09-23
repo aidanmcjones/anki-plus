@@ -1153,6 +1153,12 @@ class AnkiDesignSettingsPage(QWidget):
             "Off opens Anki's separate Browse window.",
         ))
         v.addWidget(feature_row(
+            "browse_card_drag", "Drag cards in Browse", True,
+            "Pull selected cards onto a deck in the Browse sidebar to move "
+            "them there, or onto another row to reposition new cards "
+            "before it. Change Deck and Reposition stay available.",
+        ))
+        v.addWidget(feature_row(
             "embed_stats", "Stats inside the main window", True,
             "Off opens Anki's separate Stats window.",
         ))

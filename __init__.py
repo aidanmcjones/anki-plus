@@ -4199,6 +4199,16 @@ try:
 except Exception:
     pass
 
+# Browse table: drag the selected cards onto a deck in the sidebar to move
+# them there, or onto a new card's row to reposition them before it.
+# Installed per Browser, once its table and sidebar exist.
+try:
+    from . import browse_card_drag as _card_drag
+
+    gui_hooks.browser_will_show.append(_card_drag.install)
+except Exception:
+    pass
+
 # Reviewer "More" menu: Randomize Set + the Cue… tag submenu.
 try:
     from . import reviewer_menu as _reviewer_menu
