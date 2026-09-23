@@ -306,19 +306,22 @@ ROW_H = 20
 
 class Index:
     def __init__(self, row):
-        self.row = row
+        self._row = row
+
+    def row(self):
+        return self._row
 
     def isValid(self):
-        return self.row >= 0
+        return self._row >= 0
 
     def __eq__(self, other):
-        return isinstance(other, Index) and other.row == self.row
+        return isinstance(other, Index) and other._row == self._row
 
     def __ne__(self, other):
         return not self.__eq__(other)
 
     def __hash__(self):
-        return hash(self.row)
+        return hash(self._row)
 
 
 class _Selection:
@@ -326,7 +329,7 @@ class _Selection:
         self.view = view
 
     def isSelected(self, index):
-        return index.row in self.view.selected
+        return index.row() in self.view.selected
 
 
 class FakeView(_Widget):
@@ -345,16 +348,16 @@ class FakeView(_Widget):
         return Index(r if 0 <= r < len(self.rows) else -1)
 
     def visualRect(self, index):
-        return QRect(30, index.row * ROW_H, 120, ROW_H)
+        return QRect(30, index.row() * ROW_H, 120, ROW_H)
 
     def selectionModel(self):
         return _Selection(self)
 
     def isExpanded(self, index):
-        return index.row in self.expanded
+        return index.row() in self.expanded
 
     def expand(self, index):
-        self.expanded.add(index.row)
+        self.expanded.add(index.row())
 
 
 class _SidebarItemType:
@@ -372,7 +375,7 @@ class FakeSidebar(FakeView):
 
         class _M:
             def item_for_index(self_inner, index):
-                t, i = view.rows[index.row]
+                t, i = view.rows[index.row()]
                 return types.SimpleNamespace(item_type=t, id=i, name=str(i))
         return _M()
 
@@ -383,11 +386,15 @@ class Card:
 
 
 class _SortState:
-    """Anki's ItemState: the sort column and direction the last search used."""
+    """Anki's ItemState: the sort column and direction the last search used,
+    and (Cards mode) the card ids behind a list of row items."""
 
     def __init__(self, column="noteFld", backwards=False):
         self.sort_column = column
         self.sort_backwards = backwards
+
+    def get_card_ids(self, items):
+        return list(items)
 
 
 class FakeTable:
@@ -398,12 +405,25 @@ class FakeTable:
         table = self
 
         class _Model:
+            _state = self._state
+
+            def index(self_inner, row, col=0):
+                return Index(row)
+
+            def get_item(self_inner, index):
+                return table._view.rows[index.row()].id
+
             def get_card(self_inner, index):
-                return table._view.rows[index.row]
+                return table._view.rows[index.row()]
         self._model = _Model()
 
+    def len(self):
+        return len(self._view.rows)
+
     def get_selected_card_ids(self):
-        return [self._view.rows[r].id for r in sorted(self._view.selected)]
+        # Qt's selectedRows() lists rows in the order they were selected,
+        # not top to bottom; the drag must not depend on it.
+        return [self._view.rows[r].id for r in reversed(sorted(self._view.selected))]
 
     def _set_sort_indicator(self):
         self.indicator_sets += 1
@@ -618,7 +638,7 @@ def test_addon_wires_install_on_browser_will_show():
 def test_pulling_a_selected_row_starts_a_drag_with_every_selected_card():
     br, _ = _boot()
     drag = _pull(br, {1, 2, 3}, from_row=2)
-    assert browse_card_drag.decode_cards(drag.mime) == [11, 12, 13]
+    assert sorted(browse_card_drag.decode_cards(drag.mime)) == [11, 12, 13]
     assert drag.executed == Qt.DropAction.MoveAction
     assert drag.source is br.table._view
 
@@ -687,7 +707,7 @@ def test_sweeping_from_a_selected_row_still_drags_the_selection():
     # sideways to the sidebar.
     br, _ = _boot()
     drag = _pull(br, {1, 2, 3}, from_row=1)   # _pull moves straight down
-    assert browse_card_drag.decode_cards(drag.mime) == [11, 12, 13]
+    assert sorted(browse_card_drag.decode_cards(drag.mime)) == [11, 12, 13]
 
 
 def test_modifier_press_never_arms():
@@ -726,7 +746,7 @@ def test_drop_on_sidebar_deck_moves_the_cards():
     op = OPS[0]
     assert op.ran
     assert op.kwargs["parent"] is br
-    assert list(op.kwargs["card_ids"]) == [11, 12, 13]
+    assert sorted(op.kwargs["card_ids"]) == [11, 12, 13]
     assert op.kwargs["deck_id"] == 42
     assert not marker.visible, "highlight must go once the drop is done"
 
@@ -771,14 +791,15 @@ def test_hovering_a_collapsed_deck_expands_it():
 
 
 # --------------------------------------------------------------------------- #
-# Drop on a row of the table: reposition the new cards before it
+# Drop between rows of the table: an insertion line, and the new cards are
+# repositioned to it
 # --------------------------------------------------------------------------- #
 
 def test_drop_on_a_new_card_row_repositions_before_it():
     br, w = _boot()
     drag = _pull(br, {2, 3}, from_row=3)
     view = br.table._view
-    ev, consumed = _drag_to(view, QEvent.Type.DragMove, 10, 5, drag.mime)  # row 0
+    ev, consumed = _drag_to(view, QEvent.Type.DragMove, 10, 5, drag.mime)  # row 0, upper half
     assert consumed and ev.accepted
     assert w["table"].marker.visible
     ev, consumed = _drag_to(view, QEvent.Type.Drop, 10, 5, drag.mime)
@@ -790,6 +811,64 @@ def test_drop_on_a_new_card_row_repositions_before_it():
     assert kw["starting_from"] == 5, "lands at the target card's position"
     assert kw["step_size"] == 1 and kw["randomize"] is False
     assert kw["shift_existing"] is True, "the target and what follows slide back"
+
+
+def test_hover_shows_an_insertion_line_on_the_nearer_edge_not_a_box():
+    # 20260923-120519: the drop target used to be a box drawn around the
+    # hovered row, which reads as "onto this card". It is a line between
+    # rows: on the row's top edge while the cursor is in its upper half,
+    # on its bottom edge in the lower half, the viewport's full width.
+    br, w = _boot()
+    drag = _pull(br, {3}, from_row=3)
+    view = br.table._view
+    _drag_to(view, QEvent.Type.DragMove, 10, 25, drag.mime)   # row 1, upper half
+    marker = w["table"].marker
+    assert marker is not None and marker.visible
+    assert marker.geometry.tuple() == (0, 19, 300, 2), marker.geometry.tuple()
+    _drag_to(view, QEvent.Type.DragMove, 10, 35, drag.mime)   # row 1, lower half
+    assert marker.geometry.tuple() == (0, 39, 300, 2), marker.geometry.tuple()
+    _drag_to(view, QEvent.Type.DragMove, 10, 3, drag.mime)    # row 0, top edge
+    assert marker.geometry.tuple() == (0, 0, 300, 2), "clamped inside the viewport"
+    # The sidebar keeps its box: a card is dropped INTO a deck.
+    _drag_to(br.sidebar, QEvent.Type.DragMove, 10, 45, drag.mime)
+    assert w["sidebar"].marker.geometry.tuple() == (0, 40, 300, 20)
+
+
+def test_drop_in_the_lower_half_puts_the_cards_after_the_row():
+    br, _ = _boot()
+    drag = _pull(br, {3}, from_row=3)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 15, drag.mime)   # row 0, lower half
+    assert ev.accepted and len(OPS) == 1
+    assert OPS[0].kwargs["starting_from"] == 6, "just after the target card"
+
+
+def test_every_selected_card_moves_to_the_line_including_the_hovered_one():
+    # 20260923-120519: "every selected card must actually be moved". The
+    # hovered row's card used to be left out of the group when it was part
+    # of the selection, so the others landed in front of it and the group
+    # came out in a different order. Rows 0, 2 and 5 dropped above row 2:
+    # all three go, in queue order, from row 2's position.
+    br, _ = _boot()
+    drag = _pull(br, {0, 2, 5}, from_row=5)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 42, drag.mime)   # row 2, upper half
+    assert ev.accepted and len(OPS) == 1
+    kw = OPS[0].kwargs
+    assert list(kw["card_ids"]) == [10, 12, 15], "all three, in queue order"
+    assert kw["starting_from"] == 7
+    OPS[0].finish(count=3)
+    assert any("3 cards repositioned" in t for t in TOOLTIPS), TOOLTIPS
+
+
+def test_the_group_lands_in_queue_order_not_selection_order():
+    # The selection model lists rows in the order they were clicked; the
+    # op hands out positions in the order it is given. The group must keep
+    # its queue order whatever order it was gathered in.
+    br, _ = _boot()
+    drag = _pull(br, {1, 3, 5}, from_row=1)
+    assert browse_card_drag.decode_cards(drag.mime) == [15, 13, 11], "selection order"
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 2, drag.mime)
+    assert ev.accepted
+    assert list(OPS[0].kwargs["card_ids"]) == [11, 13, 15]
 
 
 def test_drop_on_a_review_card_row_is_refused_with_a_reason():
@@ -827,6 +906,26 @@ def test_drop_onto_itself_is_a_no_op():
     ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 25, drag.mime)
     assert not ev.accepted
     assert not OPS
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 35, drag.mime)   # lower half
+    assert not ev.accepted
+    assert not OPS
+
+
+def test_drop_of_a_contiguous_group_onto_its_own_rows_is_a_no_op():
+    # Rows 1..3 dropped between rows 2 and 3: the order would come out as
+    # it is, so the queue is not renumbered and no move is reported.
+    br, _ = _boot()
+    drag = _pull(br, {1, 2, 3}, from_row=2)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 55, drag.mime)   # row 2, lower half
+    assert not ev.accepted
+    assert not OPS
+    # But a group with a gap in it does gather at the line.
+    QDrag.instances.clear()
+    drag = _pull(br, {1, 3}, from_row=3)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 62, drag.mime)   # row 3, upper half
+    assert ev.accepted and len(OPS) == 1
+    assert list(OPS[0].kwargs["card_ids"]) == [11, 13]
+    assert OPS[0].kwargs["starting_from"] == 8
 
 
 # --------------------------------------------------------------------------- #
@@ -869,17 +968,23 @@ def test_a_due_sorted_table_keeps_its_sort_and_still_refreshes():
 
 
 def test_due_descending_puts_the_cards_after_the_target():
-    # Sorted by Due, newest position at the top: "above this row" on
-    # screen means later in the queue, so the cards land just after it.
+    # Sorted by Due, newest position at the top: a line above a row on
+    # screen means later in the queue, so the cards land just after it,
+    # and a line below it means just before.
     br, _ = _boot()
     br.table._state = _SortState("cardDue", True)
     drag = _pull(br, {0}, from_row=0)
-    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 65, drag.mime)  # row 3, due 8
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 62, drag.mime)  # row 3 (due 8), upper half
     assert ev.accepted and len(OPS) == 1
     assert OPS[0].kwargs["starting_from"] == 9
     OPS[0].finish(count=1)
     assert br.table._state.sort_backwards is True, "the user's direction stays"
     assert br.searches == 1
+    QDrag.instances.clear()
+    drag = _pull(br, {0}, from_row=0)
+    ev, _ = _drag_to(br.table._view, QEvent.Type.Drop, 10, 75, drag.mime)  # row 3, lower half
+    assert ev.accepted and len(OPS) == 2
+    assert OPS[1].kwargs["starting_from"] == 8
 
 
 def test_no_success_message_when_nothing_changed():

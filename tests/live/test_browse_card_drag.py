@@ -85,10 +85,12 @@ def run(t):
                         | QItemSelectionModel.SelectionFlag.Rows)
         t.pump(50)
 
-    def at_row(r):
+    def at_row(r, frac=0.5):
         idx = br.table._model.index(r, 0)
         view.scrollTo(idx)
-        return view.viewport().mapTo(top, view.visualRect(idx).center())
+        rc = view.visualRect(idx)
+        p = QPoint(rc.center().x(), rc.top() + int(rc.height() * frac))
+        return view.viewport().mapTo(top, p)
 
     def at_deck(name):
         m = sb.model()
@@ -212,17 +214,18 @@ def run(t):
         t.check("a drop on a review card changes nothing", before == after, (before, after))
         t.check("and says why", any("review cards" in x.lower() for x in tips), tips)
 
-        # 4. New card onto a new card's row: repositioned before it.
+        # 4. New card onto the upper half of a new card's row (the insertion
+        #    line on its top edge): repositioned before it.
         search("deck:Parent::C", 3)
         ids = row_ids()
         due = {c: int(col.get_card(c).due) for c in ids}
         first, last = min(ids, key=due.get), max(ids, key=due.get)
         select([ids.index(last)])
-        s = mouse_drag(at_row(ids.index(last)), at_row(ids.index(first)))
+        s = mouse_drag(at_row(ids.index(last)), at_row(ids.index(first), 0.25))
         t.note(f"reposition drag session: {s}")
         ok = t.wait_until(
             lambda: int(col.get_card(last).due) < int(col.get_card(first).due), timeout=10)
-        t.check("a new card dropped on a new card's row now comes before it", ok,
+        t.check("a new card dropped above a new card's row now comes before it", ok,
                 {c: int(col.get_card(c).due) for c in ids})
     finally:
         bcd.QDrag = real_qdrag
