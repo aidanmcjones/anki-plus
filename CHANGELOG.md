@@ -4,6 +4,17 @@ All notable changes to Anki Design are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver-ish.
 
 ## [Unreleased]
+### Added
+- **Drag a deck to resort the list.** Anki only ever sorts decks by name,
+  so "put this one at the top" meant renaming it. Now a deck dropped on
+  the top or bottom edge of a sibling lands just above or below it: the
+  top edge of the first sibling puts it first, the bottom edge of the
+  last puts it last, and an accent line shows where it will go. The
+  middle of a row still nests, as it did. The order is the add-on's own
+  (`deck_order` in the config, per parent); decks you never moved keep
+  their name order after the ones you did, and the congrats "Keep going"
+  list follows the same order.
+
 ### Changed
 - **A deadline that has passed now pauses its deck by default.** Setting
   "Memorize by…" and then being handed 385 reviews in those decks the

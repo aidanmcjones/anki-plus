@@ -1042,7 +1042,9 @@ class AnkiDesignSettingsPage(QWidget):
         v.addWidget(feature_row(
             "deck_drag_move", "Drag decks to move them", True,
             "Drop a deck onto another to nest it, or onto the top-level "
-            "zone to un-nest it. “Move to…” in the deck menu does the same.",
+            "zone to un-nest it. “Move to…” in the deck menu does the same. "
+            "Drop it on the top or bottom edge of a sibling to resort the "
+            "list instead.",
         ))
         v.addWidget(feature_row(
             "deck_subsections", "New subsection…", True,

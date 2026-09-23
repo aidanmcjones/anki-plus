@@ -246,14 +246,48 @@
   function rowDepth(r) { return parseInt(r.getAttribute('data-depth') || '0', 10); }
 
   // ---- Drag to move ---------------------------------------------------
-  // Rows are HTML5 drag sources. Dropping a deck on another deck moves it
-  // underneath (Anki's reparent op — same as its native table); a nested
-  // deck also gets a "top level" drop zone at the head of the list. You
-  // can't drop a deck on itself, on its own descendants, or on the parent
-  // it already has.
+  // Rows are HTML5 drag sources. Dropping a deck on the middle of another
+  // deck moves it underneath (Anki's reparent op — same as its native
+  // table); a nested deck also gets a "top level" drop zone at the head of
+  // the list. You can't drop a deck on itself, on its own descendants, or
+  // on the parent it already has.
+  //
+  // Dropping on the top or bottom EDGE of a sibling instead resorts the
+  // group: the deck lands just before / after that sibling
+  // (`ba:deck:reorder`, an order the add-on keeps itself since Anki only
+  // sorts by name). So dragging a deck onto the top edge of the first
+  // sibling puts it first; onto the bottom edge of the last puts it last.
+  var EDGE = 0.28;  // fraction of the row height that counts as an edge
+
+  // Parent did of a row: the nearest row above it with a smaller depth
+  // ("0" for the top level). Collapsed rows are still in the DOM, so the
+  // walk sees every ancestor.
+  function rowParent(all, idx) {
+    var depth = rowDepth(all[idx]);
+    for (var i = idx - 1; i >= 0; i--) {
+      if (rowDepth(all[i]) < depth) return rowDid(all[i]);
+    }
+    return '0';
+  }
+
   function wireDrag(container, opts) {
-    var drag = { did: null, depth: 0, blocked: {} };
+    var drag = { did: null, depth: 0, parent: '0', blocked: {} };
     var zone = null;
+
+    // Where on `row` the pointer is: 'before' / 'after' when it sits in
+    // an edge band of a sibling row, else null (= nest, the old meaning).
+    function edgeOf(row, e) {
+      if (drag.did == null || rowDid(row) === drag.did) return null;
+      if (rowDepth(row) !== drag.depth) return null;
+      var all = rowsOf(container);
+      if (rowParent(all, all.indexOf(row)) !== drag.parent) return null;
+      var rect = row.getBoundingClientRect();
+      if (!rect.height || typeof e.clientY !== 'number') return null;
+      var frac = (e.clientY - rect.top) / rect.height;
+      if (frac < EDGE) return 'before';
+      if (frac > 1 - EDGE) return 'after';
+      return null;
+    }
 
     function ensureZone() {
       if (zone) return zone;
@@ -264,7 +298,11 @@
       return zone;
     }
     function clearTargets() {
-      rowsOf(container).forEach(function (r) { r.classList.remove('ad-list-row--drop'); });
+      rowsOf(container).forEach(function (r) {
+        r.classList.remove('ad-list-row--drop');
+        r.classList.remove('ad-list-row--before');
+        r.classList.remove('ad-list-row--after');
+      });
       if (zone) zone.classList.remove('ad-list-dropzone--over');
     }
     function cleanup() {
@@ -286,6 +324,17 @@
         }
       } catch (_) {}
     }
+    function finishReorder(targetDid, where) {
+      var src = drag.did;
+      cleanup();
+      if (src == null) return;
+      if (opts.onReorder) { opts.onReorder(src, targetDid, where); return; }
+      try {
+        if (typeof pycmd === "function") {
+          pycmd('ba:deck:reorder:' + src + ':' + targetDid + ':' + where);
+        }
+      } catch (_) {}
+    }
 
     rowsOf(container).forEach(function (row) {
       row.setAttribute('draggable', 'true');
@@ -303,6 +352,7 @@
       var idx = all.indexOf(row);
       drag.did = rowDid(row);
       drag.depth = rowDepth(row);
+      drag.parent = rowParent(all, idx);
       drag.blocked = {};
       drag.blocked[drag.did] = 1;
       var i;
@@ -335,6 +385,13 @@
       }
       var row = e.target.closest && e.target.closest('.ad-list-row');
       if (!row) return;
+      var edge = edgeOf(row, e);
+      if (edge) {
+        e.preventDefault();
+        try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+        row.classList.add('ad-list-row--' + edge);
+        return;
+      }
       if (drag.blocked[rowDid(row)]) return;
       e.preventDefault();
       try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
@@ -353,6 +410,8 @@
       if (!row) return;
       e.preventDefault();
       var did = rowDid(row);
+      var edge = edgeOf(row, e);
+      if (edge) { finishReorder(did, edge); return; }
       if (drag.blocked[did]) { cleanup(); return; }
       finish(did);
     });
@@ -366,6 +425,8 @@
   //   - opts.onStudy(did)        — fired on row-name click
   //   - opts.onOptsClick(did, e) — fired on gear click (default: __adDeckOpts)
   //   - opts.onMove(did, target) — fired on drop (default: ba:deck:reparent)
+  //   - opts.onReorder(did, target, 'before'|'after')
+  //                              — fired on an edge drop (default: ba:deck:reorder)
   //   - opts.dragMove            — false to disable drag-to-move for this list
   function render(container, decks, opts) {
     if (!container) return;
