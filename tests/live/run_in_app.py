@@ -105,6 +105,16 @@ def link_addon(base: str, addon_dir: str) -> str:
     return dest
 
 
+def needs_display(script: str) -> bool:
+    """A script that sets `NEEDS_DISPLAY = True` at module level runs on the
+    real display (QT_QPA_PLATFORM=cocoa), and only when ANKI_LIVE_DISPLAY=1."""
+    try:
+        with open(script) as fh:
+            return any(line.strip() == "NEEDS_DISPLAY = True" for line in fh)
+    except OSError:
+        return False
+
+
 def child_env(script: str, result: str, base: str) -> dict:
     env = dict(os.environ)
     for k in (
@@ -116,8 +126,9 @@ def child_env(script: str, result: str, base: str) -> dict:
         "AD_SHOWCASE",
     ):
         env.pop(k, None)
+    display = needs_display(script) and os.environ.get("ANKI_LIVE_DISPLAY") == "1"
     env.update(
-        QT_QPA_PLATFORM="offscreen",
+        QT_QPA_PLATFORM="cocoa" if display else "offscreen",
         ANKI_SINGLE_INSTANCE_KEY=f"anki-live-{uuid.uuid4().hex}",
         ANKI_DESIGN_LIVE_TEST=script,
         ANKI_DESIGN_LIVE_RESULT=result,
@@ -151,6 +162,9 @@ def report(result: dict, name: str) -> int:
 
 def run_one(script: str, args) -> int:
     name = os.path.basename(script)
+    if needs_display(script) and os.environ.get("ANKI_LIVE_DISPLAY") != "1":
+        print(f"SKIP {name}: real-display test, set ANKI_LIVE_DISPLAY=1 to run it")
+        return 0
     base = tempfile.mkdtemp(prefix="anki-live-")
     result_path = os.path.join(base, "result.json")
     log_path = os.path.join(base, "app.log")

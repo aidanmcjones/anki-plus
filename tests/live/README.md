@@ -58,10 +58,32 @@ this Mac (app launch included).
 | `ANKI_DESIGN_LIVE_TEST` | harness | absolute path of the script to run in the app |
 | `ANKI_DESIGN_LIVE_RESULT` | harness | where the app writes the result JSON |
 | `ANKI_SINGLE_INSTANCE_KEY` | harness | private key so the test app is its own instance |
-| `QT_QPA_PLATFORM=offscreen` | harness | no window on screen |
+| `QT_QPA_PLATFORM=offscreen` | harness | no window on screen (`cocoa` for opt-in display tests) |
 | `ANKI_SRC` | you (optional) | fork location if not `~/dev/anki` |
+| `ANKI_LIVE_DISPLAY=1` | you (opt-in) | run `NEEDS_DISPLAY` scripts on the real display (`QT_QPA_PLATFORM=cocoa`) |
 
 Without `ANKI_DESIGN_LIVE_TEST` the add-on's live-test hook does nothing.
+
+## Real-display tests (opt-in)
+
+A script with `NEEDS_DISPLAY = True` at module level needs the real screen
+(for example macOS full screen, which offscreen cannot do). The harness
+prints `SKIP <script>` and exits 0 for it unless `ANKI_LIVE_DISPLAY=1` is
+set; with it, the throwaway app runs with `QT_QPA_PLATFORM=cocoa`, so a
+real window appears and the test may go full screen and move the cursor.
+Everything else is unchanged (temp base, private instance key, fixture
+profile; the user's Anki+ and profile are never touched). Run one only
+with the user's consent and while they are away from the Mac:
+
+```sh
+cd ~/dev/anki && ANKI_LIVE_DISPLAY=1 out/pyenv/bin/python \
+    ~/dev/anki-design/tests/live/run_in_app.py \
+    ~/dev/anki-design/tests/live/test_fullscreen_display.py
+```
+
+Posted mouse events need Accessibility permission for the Python binary
+(System Settings > Privacy & Security > Accessibility); without it the
+cursor is only warped, which may not reveal the bar, and the test says so.
 
 ## Writing a live test
 
@@ -112,6 +134,18 @@ Rules for a good live test:
 - macOS menu bar, native dialogs' look, and focus between real windows.
 
 ## Current tests
+
+- `test_fullscreen_display.py` (opt-in, `ANKI_LIVE_DISPLAY=1`, arm64): enters
+  macOS full screen, checks the empty toolbar attached on AppKit's
+  did-enter with AutoHideToolbar in effect and that, with the bar hidden,
+  the content starts at the window top (no strip, no margin). Then moves
+  the cursor to the top edge with Quartz (CGWarpMouseCursorPosition plus a
+  posted kCGEventMouseMoved, through ctypes), samples the sidebar
+  wordmark's window-relative y, the content height and the bottom edge of
+  AppKit's full screen toolbar window every 50 ms for 3 s, and asserts the
+  content moved down exactly once, animated, stayed, and sat on the bar's
+  bottom edge in every sample (lockstep, 2 pt). Restores the cursor and
+  leaves full screen.
 
 - `test_smoke.py`: the app starts on the deck list, the add-on is loaded,
   and the home webview lists the fixture decks in tree order.

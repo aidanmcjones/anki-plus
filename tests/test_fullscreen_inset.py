@@ -1,22 +1,26 @@
-"""Regression tests for fullscreen_inset.py.
+"""Regression tests for fullscreen_inset.py (Safari-style full screen reveal).
 
-Ticket 20260922-232122: in macOS full screen the hidden "Anki+" title bar
-slides down over the sidebar wordmark and the top of the page when the
-cursor touches the top edge.
+History:
+  * 20260922-232122: in macOS full screen the revealed "Anki+" title bar
+    slid over the sidebar wordmark and the top of the page.
+  * 20260923-102004: the first fix polled the cursor every 40 ms and set a
+    top margin while the bar was out: a flicker loop.
+  * 20260923-105203: the second fix reserved a static strip for all of full
+    screen, painted in the page colour: a dark band, app pushed down.
 
-Ticket 20260923-102004: the first fix polled the cursor every 40 ms and
-moved the content down while the bar was out. That relayout under the
-cursor made macOS retract the bar, the poll removed the inset, the bar
-revealed again: a flicker loop about twice a second.
+The fix lets AppKit do it the way Safari gets it: an empty NSToolbar is
+attached on NSWindowDidEnterFullScreenNotification (with AutoHideToolbar),
+removed on NSWindowWillExitFullScreenNotification. AppKit then moves the
+content with the bar's own reveal animation. These tests drive the
+controller with a fake Qt and a fake AppKit bridge and assert:
+  * the toolbar is attached only on AppKit's did-enter, once, and removed on
+    will-exit, once;
+  * nothing polls (no QTimer, no QCursor) and nothing changes layout or
+    paint (no setContentsMargins, no setPalette), whatever the cursor does;
+  * AutoHideToolbar is only ever added to a set AppKit accepts;
+  * no bridge (offscreen, other platforms) means install() does nothing.
 
-The fix reserves a constant strip in full screen instead: applied once on
-entering, removed once on leaving, and nothing in between. These tests
-assert there is no timer and no cursor read at all, and that the margin
-changes exactly once per state change, whatever the cursor does.
-
-Runs standalone (no Anki or PyQt install needed):
-`python3 tests/test_fullscreen_inset.py`. `aqt` is stubbed with a small
-fake Qt whose QTimer and QCursor record any use.
+Runs standalone: `python3 tests/test_fullscreen_inset.py`.
 """
 
 import os
@@ -31,65 +35,14 @@ sys.path.insert(0, ROOT)
 # Fake Qt
 # --------------------------------------------------------------------------- #
 
-class _Rect:
-    def __init__(self, x, y, w, h):
-        self._x, self._y, self._w, self._h = x, y, w, h
-
-    def top(self):
-        return self._y
-
-    def left(self):
-        return self._x
-
-    def height(self):
-        return self._h
-
-    def width(self):
-        return self._w
-
-    def contains(self, pt):
-        return (self._x <= pt.x() < self._x + self._w
-                and self._y <= pt.y() < self._y + self._h)
-
-
-class _Point:
-    def __init__(self, x, y):
-        self._x, self._y = x, y
-
-    def x(self):
-        return self._x
-
-    def y(self):
-        return self._y
-
-
-class _Screen:
-    def __init__(self, w, h, menubar_h):
-        self._geo = _Rect(0, 0, w, h)
-        self._avail = _Rect(0, menubar_h, w, h - menubar_h)
-
-    def geometry(self):
-        return self._geo
-
-    def availableGeometry(self):
-        return self._avail
-
-
-class _WindowState:
-    WindowNoState = 0
-    WindowFullScreen = 4
-
-
-class _QtNS:
-    WindowState = _WindowState
-
-
 class _EventType:
     WindowStateChange = 105
+    WinIdChange = 203
     Resize = 14
     Move = 13
     Show = 17
-    Paint = 12
+    Enter = 10
+    MouseMove = 5
 
 
 class QEvent:
@@ -114,13 +67,6 @@ class QTimer:
 
     def __init__(self, *a, **k):
         QTimer.created += 1
-        self.timeout = self
-
-    def connect(self, fn):
-        pass
-
-    def setInterval(self, ms):
-        pass
 
     def start(self, *a):
         QTimer.started += 1
@@ -131,115 +77,109 @@ class QTimer:
 
 
 class QCursor:
-    """Records every read of the cursor position."""
     reads = 0
 
     @classmethod
     def pos(cls):
         QCursor.reads += 1
-        return _Point(800, 0)
+        return None
 
 
-class QColor:
-    def __init__(self, s):
-        self.s = s
-
-
-class QPalette:
-    class ColorRole:
-        Window = 10
-
-    def __init__(self, other=None):
-        self.colors = dict(other.colors) if other is not None else {}
-
-    def setColor(self, role, color):
-        self.colors[role] = color
-
-    def color(self, role):
-        return self.colors.get(role)
-
-
-class _Widget:
+class _Signal:
     def __init__(self):
+        self.slots = []
+
+    def connect(self, fn):
+        self.slots.append(fn)
+
+    def emit(self, *a):
+        for s in list(self.slots):
+            s(*a)
+
+
+class FakeMainWindow:
+    def __init__(self, wid=0x1000):
         self._filters = []
-        self._palette = QPalette()
+        self._fullscreen = False
+        self._wid = wid
+        self.destroyed = _Signal()
+        self.layout_calls = []
 
     def installEventFilter(self, f):
         self._filters.append(f)
 
-    def removeEventFilter(self, f):
-        self._filters.remove(f)
+    def winId(self):
+        return self._wid
 
-    def palette(self):
-        return self._palette
+    def isFullScreen(self):
+        return self._fullscreen
 
-    def setPalette(self, p):
-        self._palette = p
+    # Anything that would change layout or paint is recorded, so a test can
+    # assert that nothing did.
+    def setContentsMargins(self, *a):
+        self.layout_calls.append(("setContentsMargins", a))
+
+    def setPalette(self, *a):
+        self.layout_calls.append(("setPalette", a))
+
+    def move(self, *a):
+        self.layout_calls.append(("move", a))
+
+    def resize(self, *a):
+        self.layout_calls.append(("resize", a))
 
     def event(self, ev):
         for f in list(self._filters):
             f.eventFilter(self, ev)
 
 
-class FakeMainWindow(_Widget):
-    """Only the pieces fullscreen_inset reads: frame vs. client geometry,
-    the screen, fullscreen state, and the contents margins it sets."""
+class FakeBridge:
+    """Stands in for CocoaBridge: an NSWindow with a toolbar slot, the app's
+    presentation options, and a way to post AppKit's notifications."""
 
-    def __init__(self, screen, titlebar_h=28):
-        super().__init__()
-        self._screen = screen
-        self._titlebar_h = titlebar_h
-        self._fullscreen = False
-        self._geo = _Rect(100, 100 + titlebar_h, 1000, 700)
-        self.margins = (0, 0, 0, 0)
-        self.margin_calls = []
+    def __init__(self, nswin=0xBEEF, fullscreen=False):
+        self._nswin = nswin
+        self.fullscreen = fullscreen
+        self.handlers = {}
+        self.toolbar = 0
+        self.calls = []
+        self.options = 0
 
-    def screen(self):
-        return self._screen
+    def nswindow(self, win):
+        return self._nswin if win.winId() else 0
 
-    def geometry(self):
-        return self._geo
+    def is_fullscreen(self, nswin):
+        return self.fullscreen
 
-    def frameGeometry(self):
-        if self._fullscreen:
-            return self._geo
-        return _Rect(self._geo.left(), self._geo.top() - self._titlebar_h,
-                     self._geo.width(), self._geo.height() + self._titlebar_h)
+    def observe(self, nswin, handler):
+        self.calls.append(("observe", nswin))
+        self.handlers[nswin] = handler
 
-    def height(self):
-        return self._geo.height()
+    def unobserve(self, nswin):
+        self.calls.append(("unobserve", nswin))
+        self.handlers.pop(nswin, None)
 
-    def isFullScreen(self):
-        return self._fullscreen
+    def attach_toolbar(self, nswin):
+        self.calls.append(("attach", nswin))
+        self.toolbar = 0x70
 
-    def windowState(self):
-        return _WindowState.WindowFullScreen if self._fullscreen else 0
+    def detach_toolbar(self, nswin):
+        self.calls.append(("detach", nswin))
+        self.toolbar = 0
 
-    def setContentsMargins(self, l, t, r, b):
-        self.margins = (l, t, r, b)
-        self.margin_calls.append((l, t, r, b))
+    def autohide_toolbar(self):
+        self.calls.append(("autohide",))
 
-    def contentsMargins(self):
-        m = self.margins
+    def restore_options(self):
+        self.calls.append(("restore",))
 
-        class _M:
-            def top(self_inner):
-                return m[1]
-        return _M()
+    def post(self, name):
+        h = self.handlers.get(self._nswin)
+        if h:
+            h(name)
 
-    # test drivers ------------------------------------------------------
-    def enter_fullscreen(self, content_h):
-        self._fullscreen = True
-        sg = self._screen.geometry()
-        self._geo = _Rect(0, sg.height() - content_h, sg.width(), content_h)
-        self.event(QEvent(QEvent.Type.Resize))
-        self.event(QEvent(QEvent.Type.WindowStateChange))
-
-    def leave_fullscreen(self):
-        self._fullscreen = False
-        self._geo = _Rect(100, 100 + self._titlebar_h, 1000, 700)
-        self.event(QEvent(QEvent.Type.WindowStateChange))
-        self.event(QEvent(QEvent.Type.Resize))
+    def count(self, what):
+        return sum(1 for c in self.calls if c[0] == what)
 
 
 def _stub(name, **attrs):
@@ -256,153 +196,175 @@ class _AddonManager:
     def getConfig(self, *a, **k):
         return dict(self.cfg)
 
-    def addonFromModule(self, m):
-        return "anki-design"
-
 
 _mw = types.SimpleNamespace(addonManager=_AddonManager())
 _stub("aqt", mw=_mw)
-_stub(
-    "aqt.qt",
-    QObject=QObject, QEvent=QEvent, QTimer=QTimer, QCursor=QCursor,
-    Qt=_QtNS, QPalette=QPalette, QColor=QColor,
-)
+_stub("aqt.qt", QObject=QObject, QEvent=QEvent, QTimer=QTimer, QCursor=QCursor)
 
-import fullscreen_inset  # noqa: E402
-
-_orig_paper = fullscreen_inset._paper_color
+import fullscreen_inset as fi  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
 
-def _boot(screen_w=1728, screen_h=1117, menubar_h=24, titlebar_h=28):
+def _boot(**bridge_kw):
     QTimer.created = QTimer.started = 0
     QCursor.reads = 0
-    fullscreen_inset._controller = None
-    screen = _Screen(screen_w, screen_h, menubar_h)
-    win = FakeMainWindow(screen, titlebar_h=titlebar_h)
-    ctl = fullscreen_inset.install(win)
+    _AddonManager.cfg = {}
+    fi._controller = None
+    win = FakeMainWindow()
+    br = FakeBridge(**bridge_kw)
+    ctl = fi.install(win, bridge=br)
     assert ctl is not None, "install() returned nothing"
-    # A normal windowed session first, so the title bar height is known.
-    win.event(QEvent(QEvent.Type.Show))
-    win.event(QEvent(QEvent.Type.Resize))
-    return win, ctl
+    return win, br, ctl
 
 
-def _assert_no_polling():
-    assert QTimer.created == 0, "fullscreen_inset created a QTimer"
-    assert QTimer.started == 0, "fullscreen_inset started a timer"
-    assert QCursor.reads == 0, "fullscreen_inset read the cursor position"
+def _assert_untouched(win):
+    assert QTimer.created == 0, "created a QTimer"
+    assert QTimer.started == 0, "started a timer"
+    assert QCursor.reads == 0, "read the cursor position"
+    assert win.layout_calls == [], f"changed layout/paint: {win.layout_calls}"
 
 
-def _churn(win):
-    """Everything the old loop reacted to: the window keeps getting Resize,
-    Move, Paint and Show events while the bar reveals and retracts."""
-    for t in (QEvent.Type.Resize, QEvent.Type.Move, QEvent.Type.Paint,
-              QEvent.Type.Show, QEvent.Type.Resize):
-        win.event(QEvent(t))
+def _cursor_churn(win):
+    """What happens while the cursor sits at the top edge and the bar comes
+    and goes: AppKit moves/resizes the content, Qt sends Move/Resize/Enter/
+    MouseMove. None of it may make the module act."""
+    for _ in range(20):
+        for t in (QEvent.Type.Move, QEvent.Type.Resize, QEvent.Type.Enter,
+                  QEvent.Type.MouseMove, QEvent.Type.Show):
+            win.event(QEvent(t))
 
 
 # --------------------------------------------------------------------------- #
 # Tests
 # --------------------------------------------------------------------------- #
 
-def test_module_has_no_timer_or_cursor_poll():
-    src = open(os.path.join(ROOT, "fullscreen_inset.py")).read()
-    for bad in ("QTimer", "startTimer", "QCursor", "POLL_MS", "RevealTracker"):
-        assert bad not in src, f"{bad} is back in fullscreen_inset.py"
+def test_install_observes_the_nswindow_and_does_nothing_else():
+    win, br, ctl = _boot()
+    assert br.calls == [("observe", 0xBEEF)], br.calls
+    assert br.toolbar == 0
+    _assert_untouched(win)
 
 
-def test_notched_display_inset_applied_once_on_enter_removed_once_on_exit():
-    # 16in MacBook Pro: 37pt menu-bar strip beside the notch, so only the
-    # 28pt title bar can drop over the content.
-    win, _ = _boot(screen_h=1117, menubar_h=37, titlebar_h=28)
-    assert win.margin_calls == []
-    win.enter_fullscreen(content_h=1117 - 37)
-    assert win.margin_calls == [(0, 28, 0, 0)]
-    _churn(win)
-    # A repeated state-change notification in the same state is a no-op.
+def test_did_enter_attaches_toolbar_once_will_exit_removes_it_once():
+    win, br, ctl = _boot()
+    win._fullscreen = True
+    br.fullscreen = True
+    br.post(fi.NOTE_DID_ENTER)
+    # Qt's own state change follows AppKit's notification; it must not
+    # attach a second time.
     win.event(QEvent(QEvent.Type.WindowStateChange))
-    assert win.margin_calls == [(0, 28, 0, 0)]
-    win.leave_fullscreen()
-    assert win.margin_calls == [(0, 28, 0, 0), (0, 0, 0, 0)]
-    _churn(win)
+    assert br.count("attach") == 1 and br.toolbar, br.calls
+    assert br.count("autohide") == 1, br.calls
+    _cursor_churn(win)
+    assert br.count("attach") == 1 and br.count("detach") == 0, br.calls
+
+    br.post(fi.NOTE_WILL_EXIT)
+    assert br.count("detach") == 1 and br.toolbar == 0, br.calls
+    assert br.count("restore") == 1, br.calls
+    br.post(fi.NOTE_DID_EXIT)
+    win._fullscreen = False
+    br.fullscreen = False
     win.event(QEvent(QEvent.Type.WindowStateChange))
-    assert win.margin_calls == [(0, 28, 0, 0), (0, 0, 0, 0)]
-    _assert_no_polling()
+    assert br.count("detach") == 1, "exit handled more than once"
+    _assert_untouched(win)
 
 
-def test_full_screen_without_notch_reserves_menu_and_title_bar():
-    win, _ = _boot(menubar_h=24, titlebar_h=28)
-    win.enter_fullscreen(content_h=1117)
-    assert win.margin_calls == [(0, 52, 0, 0)]
-    _churn(win)
-    assert win.margin_calls == [(0, 52, 0, 0)]
-    _assert_no_polling()
+def test_qt_state_change_alone_never_attaches():
+    """Entering is AppKit's did-enter only: Qt's WindowStateChange may arrive
+    while the window is still in its windowed frame, and a toolbar there
+    would flash a taller title bar."""
+    win, br, ctl = _boot()
+    win._fullscreen = True
+    win.event(QEvent(QEvent.Type.WindowStateChange))
+    assert br.count("attach") == 0, br.calls
+    _assert_untouched(win)
 
 
-def test_reveal_cannot_move_content():
-    # Simulate many reveal/retract cycles: whatever Qt events the reveal
-    # produces, the margin never changes while the window stays full screen.
-    win, _ = _boot(menubar_h=37)
-    win.enter_fullscreen(content_h=1080)
-    for _ in range(50):
-        _churn(win)
-    assert win.margin_calls == [(0, 28, 0, 0)]
-    _assert_no_polling()
+def test_qt_state_change_is_the_exit_fallback():
+    win, br, ctl = _boot()
+    br.post(fi.NOTE_DID_ENTER)
+    win._fullscreen = False
+    win.event(QEvent(QEvent.Type.WindowStateChange))
+    assert br.count("detach") == 1 and br.toolbar == 0, br.calls
 
 
-def test_strip_painted_in_paper_then_palette_restored():
-    win, _ = _boot(menubar_h=37)
-    orig = dict(win.palette().colors)
-    fullscreen_inset._paper_color = lambda: QColor("#123456")
-    try:
-        win.enter_fullscreen(content_h=1080)
-        assert win.palette().color(QPalette.ColorRole.Window).s == "#123456"
-        win.leave_fullscreen()
-        assert win.palette().colors == orig
-    finally:
-        fullscreen_inset._paper_color = _orig_paper
+def test_repeated_cycles_stay_balanced():
+    win, br, ctl = _boot()
+    for _ in range(5):
+        br.post(fi.NOTE_DID_ENTER)
+        _cursor_churn(win)
+        br.post(fi.NOTE_WILL_EXIT)
+        br.post(fi.NOTE_DID_EXIT)
+    assert br.count("attach") == 5 and br.count("detach") == 5, br.calls
+    assert br.toolbar == 0
+    _assert_untouched(win)
 
 
-def test_windowed_never_touches_margins():
-    win, _ = _boot()
-    _churn(win)
-    assert win.margin_calls == []
-    _assert_no_polling()
+def test_install_while_already_full_screen_attaches():
+    win, br, ctl = _boot(fullscreen=True)
+    assert br.count("attach") == 1, br.calls
 
 
-def test_titlebar_height_is_measured_from_the_windowed_frame():
-    win, _ = _boot(menubar_h=37, titlebar_h=22)
-    win.enter_fullscreen(content_h=1080)
-    assert win.margin_calls == [(0, 22, 0, 0)]
+def test_winid_change_rebinds_to_the_new_nswindow():
+    win, br, ctl = _boot()
+    br._nswin = 0xCAFE
+    win.event(QEvent(QEvent.Type.WinIdChange))
+    assert ("unobserve", 0xBEEF) in br.calls and ("observe", 0xCAFE) in br.calls
 
 
-def test_config_off_installs_nothing():
+def test_destroyed_unobserves():
+    win, br, ctl = _boot()
+    br.post(fi.NOTE_DID_ENTER)
+    win.destroyed.emit()
+    assert br.count("detach") == 1 and ("unobserve", 0xBEEF) in br.calls
+
+
+def test_no_bridge_means_no_controller():
+    fi._controller = None
+    win = FakeMainWindow()
+    assert fi.install(win, bridge=None) is None
+    # And on this (non-cocoa, fake) platform the automatic bridge is None.
+    fi._controller = None
+    assert fi.install(win) is None
+    assert win._filters == []
+
+
+def test_config_switch_disables():
+    fi._controller = None
     _AddonManager.cfg = {"fullscreen_bar_inset": False}
     try:
-        fullscreen_inset._controller = None
-        screen = _Screen(1728, 1117, 24)
-        win = FakeMainWindow(screen)
-        ctl = fullscreen_inset.install(win)
-        assert ctl is None
-        assert win._filters == []
+        assert fi.install(FakeMainWindow(), bridge=FakeBridge()) is None
     finally:
         _AddonManager.cfg = {}
 
 
-def test_inset_pure_logic():
-    f = fullscreen_inset.fullscreen_inset
-    assert f(28, 37, False) == 28
-    assert f(28, 24, True) == 52
-    assert f(-5, 24, False) == 0
+def test_autohide_toolbar_only_with_a_valid_option_set():
+    f = fi.with_autohide_toolbar
+    fs, mb, tb = fi.PRESENT_FULLSCREEN, fi.PRESENT_AUTOHIDE_MENUBAR, fi.PRESENT_AUTOHIDE_TOOLBAR
+    assert f(fs | mb) == fs | mb | tb
+    assert f(fs | mb | (1 << 1)) == fs | mb | tb | (1 << 1)
+    assert f(fs | mb | tb) == fs | mb | tb
+    # Not in full screen, or menu bar not auto-hidden: AppKit would throw.
+    assert f(0) == 0
+    assert f(fs) == fs
+    assert f(mb) == mb
+    assert tb == 1 << 11 and fs == 1 << 10 and mb == 1 << 2
+
+
+def test_source_has_no_polling_margin_or_paint():
+    src = open(os.path.join(ROOT, "fullscreen_inset.py")).read()
+    for bad in ("QTimer", "startTimer", "QCursor", "setContentsMargins",
+                "QPalette", "setPalette", "singleShot"):
+        assert bad not in src, f"{bad} is back in fullscreen_inset.py"
 
 
 if __name__ == "__main__":
-    names = [n for n in sorted(globals()) if n.startswith("test_")]
-    for n in names:
-        globals()[n]()
-        print("ok", n)
-    print("PASS test_fullscreen_inset")
+    tests = [v for k, v in sorted(globals().items())
+             if k.startswith("test_") and callable(v)]
+    for t in tests:
+        t()
+        print(f"ok  {t.__name__}")
+    print(f"PASS test_fullscreen_inset ({len(tests)} tests)")

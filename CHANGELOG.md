@@ -16,6 +16,13 @@ All notable changes to Anki Design are documented here. Format loosely follows
   list follows the same order.
 
 ### Fixed
+- **Full screen title bar reveals like Safari's.** In macOS full screen the
+  "Anki+" bar used to slide over the sidebar wordmark; the first fix made
+  it flicker, the second reserved a dark strip across the top of the
+  scene. Now, while full screen, the window carries an empty auto-hiding
+  toolbar, so AppKit itself slides the content down with the bar and back
+  up again, in the bar's own animation. No strip, no timer, no cursor
+  polling (`fullscreen_inset.py`).
 - **Deck drag-to-reorder now works in the app.** Two things stopped it
   that the synthetic-event tests could not see: Chromium (so QtWebEngine)
   cancels a drag whose `dragstart` inserts the "top level" drop zone, so

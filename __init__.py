@@ -4758,12 +4758,11 @@ except Exception as _e:
         pass
 
 
-# macOS full screen: the auto-hidden "Anki+" title bar slides down over the
-# content when the cursor touches the top edge. fullscreen_inset reserves a
-# constant strip of that height at the top while the window is full screen
-# (set once on entering, removed once on leaving), so the bar reveals over
-# the strip instead of the sidebar wordmark and the top of the page. It
-# never reacts to the reveal itself. Attaches on main_window_did_init.
+# macOS full screen: without a toolbar, AppKit slides the auto-hidden
+# "Anki+" title bar over the content. fullscreen_inset gives the window an
+# empty auto-hiding NSToolbar while it is full screen (attached on AppKit's
+# did-enter, removed on will-exit), so AppKit moves the content down with
+# the bar's reveal and back, as in Safari. Attaches on main_window_did_init.
 try:
     from . import fullscreen_inset as _fullscreen_inset
 
