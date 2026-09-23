@@ -49,6 +49,13 @@ environment (`${node_path}`), so run node tests plainly:
 
 ${test_commands}
 
+The following are known, pre-existing failures unrelated to any fix (they
+fail or hang for reasons outside this ticket, e.g. missing test
+infrastructure). They are excluded from tests_green automatically, so do not
+spend turns trying to make them pass unless your fix specifically touches
+the code they cover:
+${known_failing_tests}
+
 ## Required procedure (output contract)
 
 1. **Reproduce first.** Find the responsible code and write a test that

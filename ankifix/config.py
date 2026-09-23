@@ -43,6 +43,17 @@ class Config:
             "python3 tests/test_<name>.py   (run EVERY tests/test_*.py file, one command per file)",
         ]
     )
+    # test commands (matched as a substring of the command actually run) that
+    # are known to be broken independently of any fix: `tests/editor_tools.cjs`
+    # times out under `claude -p` (Playwright + node in that harness), and
+    # `tests/test_editor_crop.py` needs Anki's `aqt`, which only the Anki venv
+    # (anki_python below) provides. Both are excluded from tests_green /
+    # tests_passed everywhere they're computed (runner.py, apply.py) and
+    # recorded separately as fix.tests_skipped / fix.applied.tests_skipped so
+    # the exclusion is visible, not silent.
+    known_failing_tests: List[str] = field(
+        default_factory=lambda: ["tests/editor_tools.cjs", "tests/test_editor_crop.py"]
+    )
 
     # --- deck bugs ------------------------------------------------------
     deck_build_dir: Path = FB_BUILD
@@ -227,6 +238,10 @@ class Config:
             if d not in parts:
                 parts.append(d)
         return os.pathsep.join(parts)
+
+    def is_known_failing_test(self, cmd: str) -> bool:
+        """True if cmd matches (as a substring) one of known_failing_tests."""
+        return any(sub in cmd for sub in self.known_failing_tests)
 
     def worktree_path(self, ticket_id: str) -> Path:
         return self.app_repo / self.worktrees_subdir / f"fix-{ticket_id}"

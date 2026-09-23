@@ -210,6 +210,20 @@ def test_render_app_prompt(env):
     assert "restart Anki+" in p
 
 
+def test_render_app_prompt_includes_known_failing_tests(env):
+    cfg = env["cfg"]
+    t = make_ticket(cfg)
+    p = prompts.render_app(t, cfg)
+    assert "${known_failing_tests}" not in p
+    assert "known, pre-existing failures" in p
+    assert "`tests/editor_tools.cjs`" in p
+    assert "`tests/test_editor_crop.py`" in p
+    cfg.known_failing_tests = ["tests/only_this_one.cjs"]
+    p2 = prompts.render_app(t, cfg)
+    assert "`tests/only_this_one.cjs`" in p2
+    assert "tests/test_editor_crop.py" not in p2
+
+
 def test_render_deck_prompt_matches_build_out(env):
     cfg = env["cfg"]
     t = make_ticket(cfg, note="the answer on this card is wrong",
@@ -754,6 +768,52 @@ def test_apply_exports_node_path_and_times_out(apply_repo, monkeypatch):
     env = apply_mod.test_env(cfg)
     assert env["NODE_PATH"] == "/live/node_modules"
     assert env["PATH"] == cfg.subprocess_path()
+
+
+def test_apply_excludes_known_failing_tests_and_flips_to_fixed(apply_repo):
+    """A ticket the fixer left needs-review only because a known-failing,
+    pre-existing test was on the harness list: apply excludes it, the fix's
+    own test passes, and the ticket's status is corrected to fixed without a
+    human relabeling it."""
+    cfg, repo = apply_repo["cfg"], apply_repo["repo"]
+    t = _apply_ticket_dict("20260923-100000-apply-known-failing", "fix/t1", "main", tests=[
+        "node tests/editor_tools.cjs",  # known failing: must be skipped, not run
+        "true",  # the fix's own test: passes
+    ])
+    t["status"] = "needs-review"
+    save_ticket(cfg.tickets_dir, t)
+
+    out = apply_mod.apply_ticket(t["id"], cfg, echo=lambda *a: None)
+
+    applied = out["fix"]["applied"]
+    assert applied["tests_passed"] is True
+    assert applied["tests_skipped"] == ["node tests/editor_tools.cjs"]
+    assert "tests_timed_out" not in applied
+    assert out["status"] == "fixed"
+    reread = load_ticket(cfg.tickets_dir, t["id"])
+    assert reread["status"] == "fixed"
+    assert reread["fix"]["applied"]["tests_skipped"] == ["node tests/editor_tools.cjs"]
+
+
+def test_apply_real_failure_keeps_needs_review(apply_repo):
+    """A genuine failure in the fix's own (non-excluded) test must still land
+    needs-review, even with a known-failing test also on the list."""
+    cfg, repo = apply_repo["cfg"], apply_repo["repo"]
+    t = _apply_ticket_dict("20260923-100100-apply-real-failure", "fix/t1", "main", tests=[
+        "node tests/editor_tools.cjs",  # known failing: skipped
+        "false",  # a genuine failure of the fix's own test
+    ])
+    t["status"] = "fixed"
+    save_ticket(cfg.tickets_dir, t)
+
+    out = apply_mod.apply_ticket(t["id"], cfg, echo=lambda *a: None)
+
+    applied = out["fix"]["applied"]
+    assert applied["tests_passed"] is False
+    assert applied["tests_skipped"] == ["node tests/editor_tools.cjs"]
+    assert out["status"] == "needs-review"
+    reread = load_ticket(cfg.tickets_dir, t["id"])
+    assert reread["status"] == "needs-review"
 
 
 def test_retry_cap_gives_up_after_two_attempts(env, monkeypatch):

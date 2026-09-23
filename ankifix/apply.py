@@ -134,8 +134,19 @@ def apply_ticket(ticket_id: str, cfg: Config, echo=print) -> Dict[str, Any]:
 
     env = test_env(cfg)
     tests_passed = True
+    tests_run: List[str] = []
+    tests_skipped: List[str] = []
     timed_out_tests: List[str] = []
     for cmd in fix.get("tests") or []:
+        # known-failing pre-existing tests (cfg.known_failing_tests) are never
+        # re-run here: they fail (or hang) for reasons unrelated to this fix,
+        # so they must not count against tests_passed. Recorded separately,
+        # never silently dropped.
+        if cfg.is_known_failing_test(cmd):
+            tests_skipped.append(cmd)
+            echo(f"ankifix: {ticket_id} apply test skipped (known failing): {cmd}")
+            continue
+        tests_run.append(cmd)
         rc, out, err, timed_out = run_test_command(cmd, repo, env, cfg.apply_test_timeout_s)
         if timed_out:
             tests_passed = False
@@ -146,8 +157,28 @@ def apply_ticket(ticket_id: str, cfg: Config, echo=print) -> Dict[str, Any]:
             echo(f"ankifix: {ticket_id} apply test failed: {cmd}\n{out}\n{err}")
 
     ticket["fix"]["applied"] = {"at": now_iso(), "patch": PATCH_NAME, "tests_passed": tests_passed}
+    if tests_skipped:
+        ticket["fix"]["applied"]["tests_skipped"] = tests_skipped
     if timed_out_tests:
         ticket["fix"]["applied"]["tests_timed_out"] = timed_out_tests
+
+    # The apply step is the authority for the ticket's final status: it is
+    # the only place that actually re-runs the fix's own tests against the
+    # live checkout. A ticket the fixer reported fixed (status fixed or
+    # needs-review) is corrected here, explicitly and logged, once known-
+    # failing pre-existing tests are excluded - so a fix whose own tests are
+    # green does not sit in needs-review just because two unrelated,
+    # already-broken tests were on the harness list.
+    prior_status = ticket.get("status")
+    if prior_status in ("fixed", "needs-review"):
+        new_status = "fixed" if tests_passed else "needs-review"
+        outcome = "all passed" if tests_passed else "failures remain"
+        echo(
+            f"ankifix: {ticket_id}: apply re-ran {len(tests_run)} tests, {len(tests_skipped)} "
+            f"skipped (known failing), {outcome} -> {new_status}"
+        )
+        ticket["status"] = new_status
+
     save_ticket(cfg.tickets_dir, ticket)
     notify(cfg, f"ankifix: {ticket_id} applied, restart Anki+")
     echo(f"ankifix: {ticket_id} applied to {repo} (tests_passed={tests_passed})")

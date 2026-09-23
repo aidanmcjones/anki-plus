@@ -75,6 +75,32 @@ their rendering, it changes what gets written. Tickets already on disk with
   `test_editor_crop.py` needing the Anki venv - see "Permission matching for
   compound commands" below) made `tests_green: false`. That is a fix branch
   worth a human look, not a silent `failed`.
+- **`known_failing_tests`** (default `["tests/editor_tools.cjs",
+  "tests/test_editor_crop.py"]`, a `Config` field, substring-matched against
+  each test command): those two commands are broken for reasons unrelated to
+  any given ticket (`editor_tools.cjs` times out under `claude -p`,
+  `test_editor_crop.py` needs Anki's `aqt`, which only `anki_python`
+  provides), so every fix that reached the end of its run legitimately was
+  landing `needs-review` even when the fix's own tests passed - the user had
+  to relabel those by hand. Now: any test command matching a
+  `known_failing_tests` substring is excluded everywhere tests_green/
+  tests_passed is computed, and recorded separately (never silently dropped)
+  as `fix.tests_skipped` (set in `runner.py`, from the commands the fixer's
+  transcript/result block listed) and `fix.applied.tests_skipped` (set in
+  `apply.py`, from `fix.tests` re-run during `ankifix apply`). The fixer's
+  prompt (`docs/prompt_app.md`, `${known_failing_tests}`) also lists them, so
+  it doesn't waste turns chasing a fix for a test that isn't really broken by
+  its change. **The apply step is the authority for the final status**: when
+  a ticket the fixer reported fixed (`status` `fixed` or `needs-review`) is
+  applied, its non-excluded `fix.tests` are re-run against the live checkout,
+  and the ticket's `status` is set from that re-run, not from the fixer's own
+  `tests_green` self-report - `fixed` if all non-excluded tests pass, else
+  `needs-review`. The transition is logged: `<id>: apply re-ran N tests, M
+  skipped (known failing), all passed -> fixed` (or `failures remain ->
+  needs-review`). Since `auto_apply` (default on) runs the apply step right
+  after every app-ticket run in `--watch` mode, this means a ticket whose own
+  tests are green no longer needs a human to relabel it away from
+  `needs-review`.
 - `failed` otherwise: no commits, no `ankifix-result` block, `status` in the
   block isn't `fixed`, or the wall clock expired.
 - Re-running a `fixed` or `needs-review` ticket needs `--force`, same as
@@ -288,7 +314,9 @@ New config keys (all optional in `~/.config/ankifix/config.json`):
 `no_card_app_bias` (0.5), `apply_test_timeout_s` (120), `extra_path`,
 `max_attempts` (2), `terminal_fallback` (true), `ankifix_bin`,
 `osascript_bin`, `osascript_timeout_s` (150), `terminal_fallback_timeout_min`
-(40), `terminal_poll_s` (5), `doctor_interval_s` (3600).
+(40), `terminal_poll_s` (5), `doctor_interval_s` (3600),
+`known_failing_tests` (`["tests/editor_tools.cjs",
+"tests/test_editor_crop.py"]`, see above).
 
 ## Autonomy: the watcher never dies on one ticket
 

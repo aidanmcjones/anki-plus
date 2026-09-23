@@ -393,7 +393,7 @@ def plan(ticket: Dict[str, Any], cfg: Config, kind_override: Optional[str] = Non
 def new_fix(started: Optional[str] = None, prev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """A schema-complete ticket.fix, carrying attempts over from prev."""
     fix: Dict[str, Any] = {
-        "branch": None, "commits": [], "tests": [], "log_path": LOG_NAME,
+        "branch": None, "commits": [], "tests": [], "tests_skipped": [], "log_path": LOG_NAME,
         "started": started, "finished": None, "summary": None,
     }
     if prev and prev.get("attempts"):
@@ -481,7 +481,13 @@ def run_ticket(
         # not failed, so a human looks at it instead of it silently vanishing.
         reported_fixed = block.get("status") == "fixed"
         tests_green = bool(block.get("tests_green"))
-        tests = parsed["tests"] or list(block.get("tests") or [])
+        all_tests = parsed["tests"] or list(block.get("tests") or [])
+        # known-failing pre-existing tests (cfg.known_failing_tests, e.g. the
+        # add-on's own editor_tools.cjs/test_editor_crop.py) are excluded from
+        # the tests this ticket is judged by; recorded separately (never
+        # silently dropped) so `ankifix apply` can skip re-running them too.
+        tests = [t for t in all_tests if not cfg.is_known_failing_test(t)]
+        tests_skipped = [t for t in all_tests if cfg.is_known_failing_test(t)]
 
         if kind == "app":
             commits = branch_commits(cfg, cwd)
@@ -511,6 +517,8 @@ def run_ticket(
             summary_extra.insert(0, "no ankifix-result block in transcript")
         if has_fix and not tests_green:
             summary_extra.insert(0, "fix branch exists but tests_green is false; needs human review")
+        if tests_skipped:
+            summary_extra.append(f"tests_skipped (known failing): {', '.join(tests_skipped)}")
         if rev.get("total_cost_usd") is not None:
             summary_extra.append(f"cost ${rev['total_cost_usd']:.2f}, {rev.get('num_turns')} turns")
         if parsed["session_id"]:
@@ -518,7 +526,7 @@ def run_ticket(
 
         claude_summary = block.get("summary") or (parsed["result_text"] or "").strip()[-600:]
         ticket["fix"].update(
-            commits=commits, tests=tests, finished=now_iso(),
+            commits=commits, tests=tests, tests_skipped=tests_skipped, finished=now_iso(),
             summary=" | ".join([s for s in [claude_summary] + summary_extra if s]),
         )
         if has_fix and tests_green:

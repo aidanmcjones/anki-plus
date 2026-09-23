@@ -80,6 +80,9 @@ def render_app(ticket: Dict[str, Any], cfg: Config) -> str:
         # the worktree may not exist yet (dry run); fall back to the main checkout's copy
         claude_md_pointers=claude_md_pointers(wt if (wt / "CLAUDE.md").is_file() else cfg.app_repo),
         test_commands="\n".join(f"- `{c}`" for c in cfg.app_test_commands),
+        known_failing_tests=(
+            "\n".join(f"- `{t}`" for t in cfg.known_failing_tests) or "  - (none)"
+        ),
     )
     return Template(Path(cfg.prompt_app).read_text()).safe_substitute(ctx)
 
