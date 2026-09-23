@@ -42,13 +42,21 @@ case "$mode" in
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
     git push -q -u origin "$(git rev-parse --abbrev-ref HEAD)" 2>/dev/null
     echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"node tests/reviewer_click.cjs && python3 tests/test_fake_bug.py"}}]}}'
-    echo '{"type":"result","subtype":"success","is_error":false,"num_turns":7,"total_cost_usd":0.42,"session_id":"fake-session-1","result":"Done.\n\n```ankifix-result\n{\"status\": \"fixed\", \"tests_green\": true, \"tests\": [\"node tests/reviewer_click.cjs\"], \"reproduced\": true, \"pushed\": true, \"summary\": \"Root cause X; fixed Y; added test Z.\"}\n```\n"}'
+    echo '{"type":"result","subtype":"success","is_error":false,"num_turns":7,"total_cost_usd":0.42,"session_id":"fake-session-1","result":"Done.\n\n```ankifix-result\n{\"status\": \"fixed\", \"tests_green\": true, \"tests\": [\"node tests/reviewer_click.cjs\"], \"reproduced\": true, \"pushed\": true, \"live_tests\": [\"tests/live/test_fake_bug.py\"], \"summary\": \"Root cause X; fixed Y; added test Z.\"}\n```\n"}'
     ;;
   deck)
     echo "- set: {id: C1-Q04, Answer: fixed}" >> cards/overrides.yaml
     printf 'warn something\nRESULT: PASS (0 failures, 1 warnings)\n' > preflight_report.txt
     echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"/x/fb-anki/bin/python build_deck.py"}}]}}'
     echo '{"type":"result","subtype":"success","is_error":false,"num_turns":5,"total_cost_usd":0.1,"result":"```ankifix-result\n{\"status\": \"fixed\", \"tests_green\": true, \"tests\": [\"build_deck.py\"], \"card_ids\": [\"C1-Q04\"], \"apply_command\": \"cd ~/dev/anki && out/pyenv/bin/python apply_highyield.py --repatch=C1-Q04\", \"summary\": \"Answer typo fixed via overrides.\"}\n```"}'
+    ;;
+  nolive)
+    echo 'fixed' > fixed.txt
+    git add -A >/dev/null
+    git commit -q -m "Fix with only a stubbed-Qt test
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+    echo '{"type":"result","subtype":"success","is_error":false,"num_turns":4,"result":"```ankifix-result\n{\"status\": \"fixed\", \"tests_green\": true, \"tests\": [\"python3 tests/test_fake_bug.py\"], \"reproduced\": true, \"pushed\": true, \"summary\": \"fake-Qt test only.\"}\n```"}'
     ;;
   nofix)
     echo '{"type":"result","subtype":"error_max_turns","is_error":true,"num_turns":60,"result":"ran out"}'
@@ -126,6 +134,7 @@ def env(tmp_path, monkeypatch):
     cfg.notify = False
     cfg.auto_apply = False
     cfg.doctor_interval_s = 0  # the hourly doctor runs real node/git checks
+    cfg.auto_restart_app = False  # never touch the real Anki+ from tests
     return {"cfg": cfg, "repo": repo, "build": build, "fake": fake_dir, "tmp": tmp_path, "course": course}
 
 
@@ -521,6 +530,9 @@ def apply_repo(tmp_path):
     cfg.app_base_branch = "main"
     cfg.tickets_dir = tmp_path / "AnkiTickets"
     cfg.notify = False
+    cfg.auto_restart_app = False  # never touch the real Anki+ from tests
+    # these apply tests predate live tests; the live-test tests turn it on
+    cfg.require_live_tests = False
     return {"cfg": cfg, "repo": repo}
 
 
@@ -976,3 +988,346 @@ def test_watch_check_notifies_on_flip(tmp_path, monkeypatch):
     prev = doctor_mod.watch_check(cfg, prev, echo=lambda *a: None)
     prev = doctor_mod.watch_check(cfg, prev, echo=lambda *a: None)
     assert sent == ["ankifix doctor FAIL: x"]  # once, on the flip
+
+
+# ------------------------------------------------------------ live tests
+FAKE_HARNESS = r'''#!/usr/bin/env python3
+# Fake tests/live/run_in_app.py: records argv; a test "fails" if its file says FAIL.
+import os, sys
+args = sys.argv[1:]
+with open(os.environ.get("FAKE_HARNESS_LOG", "/dev/null"), "a") as fh:
+    fh.write(" ".join(args) + "\n")
+scripts = [a for a in args if a.endswith(".py")]
+bad = [s for s in scripts if "FAIL" in open(s).read()]
+for s in scripts:
+    print(("FAIL " if s in bad else "PASS ") + s + ": check -- detail")
+sys.exit(1 if bad else 0)
+'''
+
+
+def test_app_run_records_live_tests_and_allows_harness(env):
+    cfg = env["cfg"]
+    t = make_ticket(cfg)
+    out = runner.run_ticket(t["id"], cfg, echo=lambda *a: None)
+    assert out["status"] == "fixed", out["fix"]["summary"]
+    assert out["fix"]["live_tests"] == ["tests/live/test_fake_bug.py"]
+    argv = (env["fake"] / "argv.txt").read_text().splitlines()
+    allowed = argv[argv.index("--allowedTools") + 1]
+    assert f"Bash({cfg.anki_pyenv} tests/live/run_in_app.py*)" in allowed
+    prompt = (env["fake"] / "prompt.txt").read_text()
+    assert f"{cfg.anki_pyenv} tests/live/run_in_app.py tests/live/test_" in prompt
+    assert '"live_tests"' in prompt
+
+
+def test_app_run_without_live_test_is_needs_review(env, monkeypatch):
+    monkeypatch.setenv("FAKE_MODE", "nolive")
+    cfg = env["cfg"]
+    t = make_ticket(cfg)
+    out = runner.run_ticket(t["id"], cfg, echo=lambda *a: None)
+    assert out["status"] == "needs-review"
+    assert "no live test" in out["fix"]["summary"]
+    assert out["fix"]["live_tests"] == []
+
+
+def test_parse_live_tests_normalizes():
+    block = {"live_tests": [
+        "tests/live/test_deck_reorder.py",
+        "/x/out/pyenv/bin/python tests/live/run_in_app.py tests/live/test_a.py tests/live/test_b.py",
+        "tests/live/test_a.py", "node tests/reviewer_click.cjs", 7,
+    ]}
+    assert runner.parse_live_tests(block) == [
+        "tests/live/test_deck_reorder.py", "tests/live/test_a.py", "tests/live/test_b.py",
+    ]
+    assert runner.parse_live_tests({"live_tests": "tests/live/test_x.py"}) == ["tests/live/test_x.py"]
+    assert runner.parse_live_tests({}) == []
+
+
+@pytest.fixture
+def live_repo(apply_repo, tmp_path, monkeypatch):
+    cfg, repo = apply_repo["cfg"], apply_repo["repo"]
+    (repo / "tests" / "live").mkdir(parents=True)
+    (repo / "tests" / "live" / "run_in_app.py").write_text(FAKE_HARNESS)
+    (repo / "tests" / "live" / "test_ok.py").write_text("def run(t): pass\n")
+    (repo / "tests" / "live" / "test_bad.py").write_text("# FAIL\n")
+    log = tmp_path / "harness.log"
+    monkeypatch.setenv("FAKE_HARNESS_LOG", str(log))
+    cfg.anki_pyenv = sys.executable
+    cfg.require_live_tests = True
+    cfg.live_test_timeout_s = 30
+    return {"cfg": cfg, "repo": repo, "log": log}
+
+
+def test_apply_runs_live_tests_green_is_fixed(live_repo):
+    cfg, repo = live_repo["cfg"], live_repo["repo"]
+    t = _apply_ticket_dict("20260923-110000-live-ok", "fix/t1", "main", tests=["true"])
+    t["fix"]["live_tests"] = ["tests/live/test_ok.py"]
+    save_ticket(cfg.tickets_dir, t)
+    out = apply_mod.apply_ticket(t["id"], cfg, echo=lambda *a: None)
+    applied = out["fix"]["applied"]
+    assert out["status"] == "fixed"
+    assert applied["live_tests_passed"] is True
+    assert applied["live_tests"][0]["test"] == "tests/live/test_ok.py"
+    assert "landed" not in applied  # auto_restart_app is off in this fixture
+    ran = live_repo["log"].read_text()
+    assert "--timeout 30 tests/live/test_ok.py" in ran
+
+
+def test_apply_live_test_failure_is_needs_review_not_landed(live_repo, monkeypatch):
+    cfg = live_repo["cfg"]
+    cfg.auto_restart_app = True
+    from ankifix import restart as restart_mod
+    landed = []
+    monkeypatch.setattr(restart_mod, "land", lambda c, tid, echo=print: landed.append(tid))
+    t = _apply_ticket_dict("20260923-110100-live-bad", "fix/t1", "main", tests=["true"])
+    t["fix"]["live_tests"] = ["tests/live/test_ok.py", "tests/live/test_bad.py"]
+    save_ticket(cfg.tickets_dir, t)
+    out = apply_mod.apply_ticket(t["id"], cfg, echo=lambda *a: None)
+    applied = out["fix"]["applied"]
+    assert out["status"] == "needs-review"
+    assert applied["live_tests_passed"] is False
+    assert [r["ok"] for r in applied["live_tests"]] == [True, False]
+    assert "FAIL tests/live/test_bad.py" in applied["live_tests"][1]["output"]
+    assert applied["landed"]["state"] == "not-landed"
+    assert "live test failed" in applied["landed"]["reason"]
+    assert "live test failed: tests/live/test_bad.py" in out["fix"]["summary"]
+    assert landed == []
+
+
+def test_apply_without_live_test_is_needs_review(live_repo):
+    cfg = live_repo["cfg"]
+    t = _apply_ticket_dict("20260923-110200-live-none", "fix/t1", "main", tests=["true"])
+    save_ticket(cfg.tickets_dir, t)
+    out = apply_mod.apply_ticket(t["id"], cfg, echo=lambda *a: None)
+    assert out["status"] == "needs-review"
+    assert out["fix"]["applied"]["landed"]["reason"] == "no live test"
+
+
+def test_apply_missing_harness_fails_live(live_repo):
+    cfg, repo = live_repo["cfg"], live_repo["repo"]
+    (repo / "tests" / "live" / "run_in_app.py").unlink()
+    t = _apply_ticket_dict("20260923-110300-live-noharness", "fix/t1", "main", tests=["true"])
+    t["fix"]["live_tests"] = ["tests/live/test_ok.py"]
+    save_ticket(cfg.tickets_dir, t)
+    out = apply_mod.apply_ticket(t["id"], cfg, echo=lambda *a: None)
+    assert out["status"] == "needs-review"
+    assert "not found" in out["fix"]["applied"]["live_tests"][0]["reason"]
+
+
+def test_apply_green_lands_via_restart(live_repo, monkeypatch):
+    cfg = live_repo["cfg"]
+    cfg.auto_restart_app = True
+    from ankifix import restart as restart_mod
+    landed = []
+    monkeypatch.setattr(restart_mod, "land", lambda c, tid, echo=print: landed.append(tid))
+    t = _apply_ticket_dict("20260923-110400-live-land", "fix/t1", "main", tests=["true"])
+    t["fix"]["live_tests"] = ["tests/live/test_ok.py"]
+    save_ticket(cfg.tickets_dir, t)
+    out = apply_mod.apply_ticket(t["id"], cfg, echo=lambda *a: None)
+    assert out["status"] == "fixed"
+    assert landed == [t["id"]]
+
+
+# ------------------------------------------------------ landing (restart)
+LAND_FAKE_PGREP = """#!/bin/bash
+# running iff $FAKE_DIR/running exists; prints a pid like pgrep
+echo "pgrep $*" >> "$FAKE_DIR/calls.txt"
+[ -f "$FAKE_DIR/running" ] && { echo 424242; exit 0; }
+exit 1
+"""
+LAND_FAKE_OSASCRIPT = """#!/bin/bash
+echo "osascript $*" >> "$FAKE_DIR/calls.txt"
+# the app quits unless told to hang; osascript reports the benign -128
+[ -f "$FAKE_DIR/hang" ] || rm -f "$FAKE_DIR/running"
+echo "execution error: User canceled. (-128)" >&2
+exit 1
+"""
+LAND_FAKE_OPEN = """#!/bin/bash
+echo "open $*" >> "$FAKE_DIR/calls.txt"
+touch "$FAKE_DIR/running"
+exit 0
+"""
+
+
+class _CDP:
+    """A fake Chromium /json endpoint serving whatever `pages` holds."""
+
+    def __init__(self):
+        import http.server
+        import threading
+
+        outer = self
+        self.pages = []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = json.dumps(outer.pages).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}/json"
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.srv.shutdown()
+
+
+def _page(title, url="http://127.0.0.1:40000/_anki/legacyPageData?id=1"):
+    return {"type": "page", "title": title, "url": url, "webSocketDebuggerUrl": "ws://fake"}
+
+
+MAIN_PAGES = [_page("main webview"), _page("top toolbar"), _page("bottom toolbar"),
+              {"type": "page", "title": "", "url": ""}, _page("about:blank", "about:blank")]
+
+
+@pytest.fixture
+def land_env(tmp_path, monkeypatch):
+    from ankifix import restart as restart_mod
+    fake = tmp_path / "fake"
+    fake.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for name, body in (("pgrep", LAND_FAKE_PGREP), ("osascript", LAND_FAKE_OSASCRIPT), ("open", LAND_FAKE_OPEN)):
+        f = bindir / name
+        f.write_text(body)
+        f.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_DIR", str(fake))
+    (fake / "running").touch()
+    cdp = _CDP()
+    cfg = Config()
+    cfg.tickets_dir = tmp_path / "AnkiTickets"
+    cfg.cdp_url = cdp.url
+    cfg.extra_path = [str(bindir)]
+    cfg.restart_quit_timeout_s = 2
+    notes = []
+    monkeypatch.setattr(restart_mod, "notify", lambda c, msg: notes.append(msg))
+    monkeypatch.setattr(restart_mod, "app_started_at", lambda c: None)
+    t = _apply_ticket_dict("20260923-120000-land", "fix/t1", "main")
+    t["fix"]["applied"] = {"at": "x", "patch": "apply.patch", "tests_passed": True}
+    save_ticket(cfg.tickets_dir, t)
+    yield {"cfg": cfg, "cdp": cdp, "fake": fake, "notes": notes, "id": t["id"], "mod": restart_mod}
+    cdp.close()
+
+
+def _calls(e):
+    p = e["fake"] / "calls.txt"
+    return p.read_text().splitlines() if p.exists() else []
+
+
+def test_land_restarts_when_on_deck_list(land_env):
+    e = land_env
+    e["cdp"].pages = MAIN_PAGES
+    state = e["mod"].land(e["cfg"], e["id"], echo=lambda *a: None, probe=lambda p: "decklist")
+    assert state == "restarted"
+    calls = _calls(e)
+    assert 'osascript -e tell application "Anki+" to quit' in calls
+    assert calls[-1] == "open -na Anki+"
+    assert all("kill" not in c for c in calls)
+    assert e["notes"] == [f"ankifix: restarting Anki+ to load {e['id']}"]
+    landed = load_ticket(e["cfg"].tickets_dir, e["id"])["fix"]["applied"]["landed"]
+    assert landed["state"] == "restarted"
+    assert e["mod"].load_pending(e["cfg"]) is None
+
+
+def test_land_congrats_url_is_safe_without_probe(land_env):
+    e = land_env
+    e["cdp"].pages = [_page("main webview", "http://127.0.0.1:40000/congrats#night")] + MAIN_PAGES[1:]
+
+    def no_probe(p):
+        raise AssertionError("congrats URL needs no probe")
+
+    ok, why = e["mod"].check_safe(e["cfg"], probe=no_probe)
+    assert ok and "congrats" in why
+
+
+@pytest.mark.parametrize("pages,probe,reason", [
+    (MAIN_PAGES, "reviewer", "main window shows reviewer"),
+    (MAIN_PAGES, "other", "main window shows other"),
+    (MAIN_PAGES + [_page("editor")], "decklist", "other Anki windows open: editor"),
+    (MAIN_PAGES + [_page("deck options")], "decklist", "other Anki windows open: deck options"),
+    ([_page("top toolbar")], "decklist", "no main webview"),
+])
+def test_check_safe_refuses(land_env, pages, probe, reason):
+    e = land_env
+    e["cdp"].pages = pages
+    ok, why = e["mod"].check_safe(e["cfg"], probe=lambda p: probe)
+    assert not ok and reason in why
+
+
+def test_check_safe_cdp_down(land_env):
+    e = land_env
+    e["cfg"].cdp_url = "http://127.0.0.1:9/json"
+    ok, why = e["mod"].check_safe(e["cfg"], probe=lambda p: "decklist")
+    assert not ok and "not reachable" in why
+
+
+def test_land_unsafe_queues_retry_and_tick_lands_later(land_env):
+    e = land_env
+    mod, cfg = e["mod"], e["cfg"]
+    e["cdp"].pages = MAIN_PAGES
+    state = mod.land(cfg, e["id"], echo=lambda *a: None, probe=lambda p: "reviewer")
+    assert state == "pending"
+    assert not any(c.startswith("osascript") for c in _calls(e))
+    assert e["notes"] == [f"ankifix: {e['id']} fix applied, will load on next restart"]
+    pend = mod.load_pending(cfg)
+    assert pend["ids"] == [e["id"]]
+    t0 = pend["first"]
+    # within the 5 minute retry interval: nothing happens
+    assert mod.tick(cfg, echo=lambda *a: None, now=t0 + 60, probe=lambda p: "decklist") is None
+    # due, still unsafe: stays pending
+    assert mod.tick(cfg, echo=lambda *a: None, now=t0 + 301, probe=lambda p: "reviewer") == "pending"
+    # due again, now on the deck list: restarts and clears the queue
+    assert mod.tick(cfg, echo=lambda *a: None, now=t0 + 700, probe=lambda p: "decklist") == "restarted"
+    assert mod.load_pending(cfg) is None
+    assert _calls(e)[-1] == "open -na Anki+"
+
+
+def test_tick_gives_up_after_window(land_env):
+    e = land_env
+    mod, cfg = e["mod"], e["cfg"]
+    e["cdp"].pages = MAIN_PAGES
+    mod.land(cfg, e["id"], echo=lambda *a: None, probe=lambda p: "reviewer")
+    t0 = mod.load_pending(cfg)["first"]
+    assert mod.tick(cfg, echo=lambda *a: None, now=t0 + 7201, probe=lambda p: "decklist") == "gave-up"
+    assert mod.load_pending(cfg) is None
+    landed = load_ticket(cfg.tickets_dir, e["id"])["fix"]["applied"]["landed"]
+    assert landed["state"] == "gave-up"
+    assert not any(c.startswith("osascript") for c in _calls(e))
+
+
+def test_tick_sees_user_restart(land_env, monkeypatch):
+    e = land_env
+    mod, cfg = e["mod"], e["cfg"]
+    e["cdp"].pages = MAIN_PAGES
+    mod.land(cfg, e["id"], echo=lambda *a: None, probe=lambda p: "reviewer")
+    t0 = mod.load_pending(cfg)["first"]
+    monkeypatch.setattr(mod, "app_started_at", lambda c: t0 + 100)
+    assert mod.tick(cfg, echo=lambda *a: None, now=t0 + 400, probe=lambda p: "decklist") == "loaded"
+    assert not any(c.startswith("osascript") for c in _calls(e))
+
+
+def test_land_never_force_kills_a_hung_app(land_env):
+    e = land_env
+    (e["fake"] / "hang").touch()
+    e["cdp"].pages = MAIN_PAGES
+    state = e["mod"].land(e["cfg"], e["id"], echo=lambda *a: None, probe=lambda p: "decklist")
+    assert state == "failed"
+    calls = _calls(e)
+    assert not any(c.startswith("open") for c in calls)
+    assert all("kill" not in c for c in calls)
+    landed = load_ticket(e["cfg"].tickets_dir, e["id"])["fix"]["applied"]["landed"]
+    assert "not force-killing" in landed["reason"]
+
+
+def test_land_when_app_not_running(land_env):
+    e = land_env
+    (e["fake"] / "running").unlink()
+    state = e["mod"].land(e["cfg"], e["id"], echo=lambda *a: None, probe=lambda p: "decklist")
+    assert state == "not-running"
+    assert not any(c.startswith(("osascript", "open")) for c in _calls(e))

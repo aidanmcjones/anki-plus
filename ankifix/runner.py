@@ -204,6 +204,7 @@ def build_command(cfg: Config, kind: str, ticket_id: str, add_dirs: List[Path]) 
         kw = dict(
             remote=cfg.app_remote, branch=cfg.branch_name(ticket_id),
             base=cfg.app_base_branch, anki_python=cfg.anki_python,
+            anki_pyenv=cfg.anki_pyenv, live_harness=cfg.live_harness,
         )
         allowed = _fmt(cfg.app_allowed_tools, **kw)
         denied = _fmt(cfg.app_disallowed_tools, **kw)
@@ -331,6 +332,26 @@ def parse_transcript(log_path: Path) -> Dict[str, Any]:
     return out
 
 
+LIVE_TEST_RE = re.compile(r"tests/live/[\w./-]*?test_[\w.-]+\.py")
+
+
+def parse_live_tests(block: Dict[str, Any]) -> List[str]:
+    """Normalize the result block's `live_tests` to worktree-relative script
+    paths (tests/live/test_*.py). Entries may be bare paths or whole harness
+    commands; anything that names no tests/live/test_*.py script is dropped."""
+    raw = block.get("live_tests") if isinstance(block, dict) else None
+    if isinstance(raw, str):
+        raw = [raw]
+    out: List[str] = []
+    for item in raw or []:
+        if not isinstance(item, str):
+            continue
+        for hit in LIVE_TEST_RE.findall(item):
+            if hit not in out:
+                out.append(hit)
+    return out
+
+
 # ----------------------------------------------------------------- deck io
 def _snapshot(build_dir: Path) -> Dict[str, str]:
     files = sorted((build_dir / "cards").glob("*.yaml")) + [build_dir / "build_deck.py"]
@@ -393,7 +414,8 @@ def plan(ticket: Dict[str, Any], cfg: Config, kind_override: Optional[str] = Non
 def new_fix(started: Optional[str] = None, prev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """A schema-complete ticket.fix, carrying attempts over from prev."""
     fix: Dict[str, Any] = {
-        "branch": None, "commits": [], "tests": [], "tests_skipped": [], "log_path": LOG_NAME,
+        "branch": None, "commits": [], "tests": [], "tests_skipped": [], "live_tests": [],
+        "log_path": LOG_NAME,
         "started": started, "finished": None, "summary": None,
     }
     if prev and prev.get("attempts"):
@@ -488,6 +510,9 @@ def run_ticket(
         # silently dropped) so `ankifix apply` can skip re-running them too.
         tests = [t for t in all_tests if not cfg.is_known_failing_test(t)]
         tests_skipped = [t for t in all_tests if cfg.is_known_failing_test(t)]
+        # live tests (tests/live/*, run in the real app by the harness) are
+        # the proof a user-visible fix works; `ankifix apply` re-runs them
+        live_tests = parse_live_tests(block) if kind == "app" else []
 
         if kind == "app":
             commits = branch_commits(cfg, cwd)
@@ -517,6 +542,13 @@ def run_ticket(
             summary_extra.insert(0, "no ankifix-result block in transcript")
         if has_fix and not tests_green:
             summary_extra.insert(0, "fix branch exists but tests_green is false; needs human review")
+        missing_live = kind == "app" and has_fix and cfg.require_live_tests and not live_tests
+        if missing_live:
+            summary_extra.insert(
+                0, "no live test (tests/live/ in the real app); unit tests alone are not proof, needs human review"
+            )
+        if live_tests:
+            summary_extra.append(f"live tests: {', '.join(live_tests)}")
         if tests_skipped:
             summary_extra.append(f"tests_skipped (known failing): {', '.join(tests_skipped)}")
         if rev.get("total_cost_usd") is not None:
@@ -526,10 +558,11 @@ def run_ticket(
 
         claude_summary = block.get("summary") or (parsed["result_text"] or "").strip()[-600:]
         ticket["fix"].update(
-            commits=commits, tests=tests, tests_skipped=tests_skipped, finished=now_iso(),
+            commits=commits, tests=tests, tests_skipped=tests_skipped, live_tests=live_tests,
+            finished=now_iso(),
             summary=" | ".join([s for s in [claude_summary] + summary_extra if s]),
         )
-        if has_fix and tests_green:
+        if has_fix and tests_green and not missing_live:
             ticket["status"] = "fixed"
         elif has_fix:
             ticket["status"] = "needs-review"
@@ -750,6 +783,13 @@ def watch(cfg: Config, interval: float, once: bool = False, echo=print) -> int:
     last_doctor = 0.0
     doctor_state: Dict[str, bool] = {}
     while True:
+        if cfg.auto_restart_app:
+            try:
+                from . import restart as restart_mod
+
+                restart_mod.tick(cfg, echo=echo)
+            except Exception as e:  # noqa: BLE001
+                echo(f"ankifix: restart retry error: {type(e).__name__}: {e}")
         if cfg.doctor_interval_s and time.time() - last_doctor >= cfg.doctor_interval_s:
             last_doctor = time.time()
             try:

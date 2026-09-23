@@ -129,6 +129,12 @@ been patched into the live add-on checkout:
 {"at": "2026-09-22T22:05:00-05:00", "patch": "apply.patch", "tests_passed": true}
 ```
 
+plus, when the fix lists live tests (`fix.live_tests`, tests/live/test_*.py
+run in the real app by the add-on's harness), `live_tests_passed` (bool) and
+`live_tests` (one `{"test", "ok", "rc", "command", "output"?}` per test),
+and `landed`: `{"state": "restarted" | "loaded" | "pending" | "not-running"
+| "failed" | "gave-up" | "not-landed", "at", "reason"}`.
+
 or, if `git apply --check` failed against the checkout's current working
 tree:
 

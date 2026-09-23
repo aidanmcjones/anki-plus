@@ -249,11 +249,57 @@ committing there: that checkout normally carries your own uncommitted edits.
    `ticket.fix.tests` is then re-run from `app_repo`, with `NODE_PATH` set to
    `apply_node_path` (the live checkout's own npx cache, not the fixer
    worktree's - a separate `Config` field from `node_path`).
-5. `fix.applied: {"at", "patch", "tests_passed"}` is recorded, and an "applied,
-   restart Anki+" notification fires.
+5. Each live test in `ticket.fix.live_tests` (tests/live/test_*.py, from the
+   fixer's result block) is run through the add-on's live harness:
+   `<anki_pyenv> <app_repo>/<live_harness> --timeout <live_test_timeout_s>
+   <test>` from `app_repo`. The harness launches a throwaway, offscreen copy
+   of the REAL Anki app (fixture collection, the checkout's add-on code) and
+   runs the test inside it; see the add-on's `tests/live/README.md`.
+6. `fix.applied: {"at", "patch", "tests_passed", "live_tests_passed",
+   "live_tests": [{"test", "ok", "rc", "command", "output"?}], "landed"?}` is
+   recorded.
+7. Status: `fixed` only when the tests pass AND every live test passes AND
+   there is at least one live test (`require_live_tests`, default true).
+   Otherwise `needs-review`, `fix.applied.landed = {"state": "not-landed",
+   "reason": "live test failed: ..." | "no live test" | "tests failed"}`, the
+   summary starts with that reason, and the notification says
+   `ankifix: <id> live test failed..., not landed`. The patch stays in the
+   working tree (it is still uncommitted there); the app is NOT restarted.
+8. Fully green: the fix is landed in the running app (below).
 
-**You must restart Anki+ to pick up an applied fix**, and the patch sits
-uncommitted in `app_repo` until you commit it yourself.
+### Landing: restarting Anki+ (auto_restart_app)
+
+The running app only loads add-on code at startup. After a fully green apply
+`ankifix/restart.py` restarts Anki+ when it is safe:
+
+- `cdp_url` (`http://127.0.0.1:8080/json`) answers, and its page list has
+  no Anki webview besides `main webview` / `top toolbar` / `bottom toolbar`
+  (an `editor`, add-card, browser, deck options, previewer... window means
+  unsafe);
+- the main webview shows the deck list or the congrats page (congrats by
+  URL; otherwise one read-only `Runtime.evaluate` classifies the DOM:
+  `#qa` = reviewer, `.ad-list-row` = deck list).
+
+Safe: notification `ankifix: restarting Anki+ to load <id>`, then
+`osascript -e 'tell application "Anki+" to quit'` (its -128 error is
+benign), wait up to `restart_quit_timeout_s` (30) for `pgrep -f anki-dev` to
+come back empty, then `open -na "Anki+"`. Never force-kills: an app that
+does not quit is left alone and the fix loads on the next restart.
+
+Not safe: notification `ankifix: <id> fix applied, will load on next
+restart`, and the id is queued in `<tickets_dir>/.pending_restart.json`.
+The watcher retries every `restart_retry_interval_s` (300) for up to
+`restart_retry_window_s` (7200). If Anki+ was restarted by the user after
+the apply, the queue is cleared as `loaded`. The outcome is recorded as
+`fix.applied.landed.state`: `restarted`, `loaded`, `pending`,
+`not-running`, `failed`, `gave-up`.
+
+Set `{"auto_restart_app": false}` to go back to restarting by hand. The
+watcher only reloads its own code on restart:
+`launchctl kickstart -k gui/$(id -u)/com.aidanjones.ankifix-watch`, then
+look for a fresh `ankifix: watcher started pid <pid>` line in its log.
+
+The patch sits uncommitted in `app_repo` until you commit it yourself.
 
 `ankifix apply` never runs `git checkout`, `git reset`, or `git commit` in
 `app_repo`, and never touches anything outside it.

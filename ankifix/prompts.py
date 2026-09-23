@@ -80,6 +80,9 @@ def render_app(ticket: Dict[str, Any], cfg: Config) -> str:
         # the worktree may not exist yet (dry run); fall back to the main checkout's copy
         claude_md_pointers=claude_md_pointers(wt if (wt / "CLAUDE.md").is_file() else cfg.app_repo),
         test_commands="\n".join(f"- `{c}`" for c in cfg.app_test_commands),
+        anki_pyenv=cfg.anki_pyenv,
+        live_harness=cfg.live_harness,
+        live_test_timeout=f"{cfg.live_test_timeout_s:g}",
         known_failing_tests=(
             "\n".join(f"- `{t}`" for t in cfg.known_failing_tests) or "  - (none)"
         ),

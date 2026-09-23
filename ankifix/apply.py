@@ -9,6 +9,14 @@ working tree with a plain `git apply` (no `--index`, no `--cached`, no
 `--3way`): the checkout carries the user's own uncommitted edits, so this
 only ever touches file contents, never the index, and never commits.
 
+After the patch it re-runs the fix's own tests and then its LIVE tests
+(`fix.live_tests`, tests/live/test_*.py) through the add-on's live harness
+(`cfg.anki_pyenv cfg.live_harness`), which runs each one inside a throwaway,
+offscreen copy of the real Anki app. A failing live test, or an app fix with
+no live test at all (cfg.require_live_tests), leaves the ticket in
+needs-review and the fix is NOT landed. A fully green apply is landed in the
+user's running Anki+ by restart.land() when cfg.auto_restart_app is on.
+
 It never runs `git checkout`, `git reset`, or `git commit` in `cfg.app_repo`,
 and it refuses anything that is not an `app` ticket with a `fix.branch` -
 deck fixes are applied through the course's own apply scripts, which is the
@@ -17,6 +25,7 @@ user's manual step.
 from __future__ import annotations
 
 import os
+import shlex
 import signal
 import subprocess
 from pathlib import Path
@@ -72,6 +81,35 @@ def run_test_command(cmd: str, cwd: Path, env: Dict[str, str],
                 out, err = "", ""
                 continue
         return proc.returncode, out or "", err or "", True
+
+
+def run_live_tests(cfg: Config, repo: Path, live_tests: List[str], env: Dict[str, str],
+                   echo=print) -> Tuple[bool, List[Dict[str, Any]]]:
+    """Run each live test through the harness in repo (the live checkout,
+    now carrying the fix). Returns (all passed, per-test results)."""
+    harness = repo / cfg.live_harness
+    results: List[Dict[str, Any]] = []
+    if not harness.is_file():
+        for t in live_tests:
+            results.append({"test": t, "ok": False, "reason": f"live harness {harness} not found"})
+        return False, results
+    for t in live_tests:
+        if not (repo / t).is_file():
+            results.append({"test": t, "ok": False, "reason": f"{t} not found in {repo}"})
+            continue
+        cmd = shlex.join([cfg.anki_pyenv, str(harness), "--timeout",
+                          f"{cfg.live_test_timeout_s:g}", t])
+        rc, out, err, timed_out = run_test_command(cmd, repo, env, cfg.live_test_timeout_s + 60)
+        ok = rc == 0 and not timed_out
+        res: Dict[str, Any] = {"test": t, "ok": ok, "rc": rc, "command": cmd}
+        if timed_out:
+            res["reason"] = f"timed out after {cfg.live_test_timeout_s + 60:g}s"
+        if not ok:
+            res["output"] = ((out or "") + (err or ""))[-2000:]
+        results.append(res)
+        echo(f"ankifix: live test {'passed' if ok else 'FAILED'}: {t}"
+             + ("" if ok else f"\n{res.get('output', '')}"))
+    return all(r["ok"] for r in results), results
 
 
 def apply_ticket(ticket_id: str, cfg: Config, echo=print) -> Dict[str, Any]:
@@ -156,7 +194,18 @@ def apply_ticket(ticket_id: str, cfg: Config, echo=print) -> Dict[str, Any]:
             tests_passed = False
             echo(f"ankifix: {ticket_id} apply test failed: {cmd}\n{out}\n{err}")
 
+    # Live tests: the real app, offscreen, with the fix loaded. They are the
+    # proof a user-visible fix works; unit tests against stubbed Qt are not.
+    live_tests = list(fix.get("live_tests") or [])
+    live_ok, live_results = True, []
+    if live_tests:
+        live_ok, live_results = run_live_tests(cfg, repo, live_tests, env, echo=echo)
+    missing_live = cfg.require_live_tests and not live_tests
+
     ticket["fix"]["applied"] = {"at": now_iso(), "patch": PATCH_NAME, "tests_passed": tests_passed}
+    if live_tests:
+        ticket["fix"]["applied"]["live_tests_passed"] = live_ok
+        ticket["fix"]["applied"]["live_tests"] = live_results
     if tests_skipped:
         ticket["fix"]["applied"]["tests_skipped"] = tests_skipped
     if timed_out_tests:
@@ -170,16 +219,42 @@ def apply_ticket(ticket_id: str, cfg: Config, echo=print) -> Dict[str, Any]:
     # green does not sit in needs-review just because two unrelated,
     # already-broken tests were on the harness list.
     prior_status = ticket.get("status")
+    good = tests_passed and live_ok and not missing_live
+    not_landed = ""
+    if not live_ok:
+        failed = [r["test"] for r in live_results if not r["ok"]]
+        not_landed = f"live test failed: {', '.join(failed)}"
+    elif missing_live:
+        not_landed = "no live test"
+    elif not tests_passed:
+        not_landed = "tests failed"
     if prior_status in ("fixed", "needs-review"):
-        new_status = "fixed" if tests_passed else "needs-review"
-        outcome = "all passed" if tests_passed else "failures remain"
+        new_status = "fixed" if good else "needs-review"
+        outcome = "all passed" if good else "failures remain"
         echo(
             f"ankifix: {ticket_id}: apply re-ran {len(tests_run)} tests, {len(tests_skipped)} "
-            f"skipped (known failing), {outcome} -> {new_status}"
+            f"skipped (known failing), {len(live_tests)} live, {outcome} -> {new_status}"
         )
         ticket["status"] = new_status
+    if not_landed:
+        ticket["fix"]["applied"]["landed"] = {"state": "not-landed", "at": now_iso(),
+                                              "reason": not_landed}
+        summary = ticket["fix"].get("summary") or ""
+        ticket["fix"]["summary"] = (f"{not_landed}; fix NOT landed | {summary}").rstrip(" |")
 
     save_ticket(cfg.tickets_dir, ticket)
+    echo(f"ankifix: {ticket_id} applied to {repo} (tests_passed={tests_passed}, "
+         f"live_tests_passed={live_ok if live_tests else 'none'})")
+    if not_landed:
+        notify(cfg, f"ankifix: {ticket_id} {not_landed}, not landed")
+        return ticket
+    if good and prior_status in ("fixed", "needs-review") and cfg.auto_restart_app:
+        from . import restart as restart_mod
+
+        try:
+            restart_mod.land(cfg, ticket_id, echo=echo)
+        except Exception as e:  # noqa: BLE001 - landing never fails the apply
+            echo(f"ankifix: landing {ticket_id} failed: {type(e).__name__}: {e}")
+        return load_ticket(cfg.tickets_dir, ticket_id)
     notify(cfg, f"ankifix: {ticket_id} applied, restart Anki+")
-    echo(f"ankifix: {ticket_id} applied to {repo} (tests_passed={tests_passed})")
     return ticket

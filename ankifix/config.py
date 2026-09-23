@@ -53,6 +53,31 @@ class Config:
     # the exclusion is visible, not silent.
     known_failing_tests: List[str] = field(default_factory=list)
 
+    # --- live tests (real app, offscreen) ---------------------------------
+    # The Anki fork's python (has aqt + anki); runs the add-on's live harness.
+    anki_pyenv: str = str(HOME / "dev/anki/out/pyenv/bin/python")
+    # the harness script, relative to the add-on repo (or its worktree)
+    live_harness: str = "tests/live/run_in_app.py"
+    # per live test, passed to the harness as --timeout
+    live_test_timeout_s: float = 180.0
+    # an app fix with no live test (result block `live_tests` empty) lands as
+    # needs-review: unit tests against stubbed Qt are not proof it works
+    require_live_tests: bool = True
+
+    # --- landing in the live app ------------------------------------------
+    # after a fully green apply (tests + live tests), restart the user's
+    # Anki+ so it loads the fix, but only when that is safe (see restart.py)
+    auto_restart_app: bool = True
+    app_name: str = "Anki+"
+    # `pgrep -f` pattern for the running app (the bundle's bash launcher)
+    app_process_pattern: str = "anki-dev"
+    cdp_url: str = "http://127.0.0.1:8080/json"
+    pgrep_bin: str = "pgrep"
+    open_bin: str = "open"
+    restart_quit_timeout_s: float = 30.0
+    restart_retry_interval_s: float = 300.0
+    restart_retry_window_s: float = 7200.0
+
     # --- deck bugs ------------------------------------------------------
     deck_build_dir: Path = FB_BUILD
     deck_python: str = str(HOME / ".venvs/fb-anki/bin/python")
@@ -145,6 +170,11 @@ class Config:
             "Bash({anki_python} tests/*)",
             'Bash("{anki_python}" tests/*)',
             'Bash("$HOME/Library/Application Support/AnkiProgramFiles/.venv/bin/python" tests/*)',
+            # the live harness: runs tests/live/test_*.py inside a throwaway,
+            # offscreen copy of the real Anki app (never the user's instance)
+            "Bash({anki_pyenv} {live_harness}*)",
+            'Bash("{anki_pyenv}" {live_harness}*)',
+            "Bash({anki_pyenv} tests/live/*)",
             "Bash(ls*)", "Bash(cat*)", "Bash(head*)", "Bash(tail*)",
             "Bash(grep*)", "Bash(rg*)", "Bash(wc*)", "Bash(mkdir -p tests*)",
         ]
