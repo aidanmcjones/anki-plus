@@ -15,6 +15,21 @@ All notable changes to Anki Design are documented here. Format loosely follows
   their name order after the ones you did, and the congrats "Keep going"
   list follows the same order.
 
+### Fixed
+- **Deck drag-to-reorder now works in the app.** Two things stopped it
+  that the synthetic-event tests could not see: Chromium (so QtWebEngine)
+  cancels a drag whose `dragstart` inserts the "top level" drop zone, so
+  every nested deck's drag ended the instant it began; and Anki's
+  webview drops every `drop` event on the deck browser (`allow_drops` is
+  reset by each render), so even a top-level drag never reached the page.
+  The zone now appears a tick later, and `webview_drops.py` lets drags
+  that start inside the page through (files from Finder stay blocked).
+- **Dragging cards in Browse visibly moves them.** Cards dropped on a
+  sidebar deck now leave the list you are browsing (the table re-runs its
+  search), a press-and-pull on an unselected row drags that card, and a
+  drop on a review card's row says that only new cards have a queue
+  position instead of showing a silent "no entry" cursor.
+
 ### Changed
 - **A deadline that has passed now pauses its deck by default.** Setting
   "Memorize by…" and then being handed 385 reviews in those decks the

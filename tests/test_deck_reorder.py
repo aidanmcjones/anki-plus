@@ -202,4 +202,67 @@ assert len(WRITES) == n, "a cross-parent reorder should be a no-op"
 mod._on_js_message(False, "ba:deck:reorder:5:6:nowhere", context=None)
 assert len(WRITES) == n, "an unknown position should be a no-op"
 
+# --- the same round trip on a REAL Anki collection --------------------------
+# deck_due_tree() from the real backend (not fake nodes), with the user's
+# shape: sub-decks of "Exam 1". Runs under the Anki source checkout's pyenv
+# (re-executing this file there) when the system python has no `anki`.
+def _real_collection_round_trip():
+    import tempfile
+    from anki.collection import Collection
+
+    tmp = tempfile.mkdtemp(prefix="ba-deckorder-")
+    col = Collection(os.path.join(tmp, "collection.anki2"))
+    try:
+        ids = {}
+        for name in ("Fundamentals", "Fundamentals::Amino Acids",
+                     "Fundamentals::Exam 1", "Fundamentals::Exam 1::00 Goals",
+                     "Fundamentals::Exam 1::01 pKa",
+                     "Fundamentals::Exam 1::02 Peptides", "MCAT"):
+            ids[name.split("::")[-1]] = int(col.decks.id(name))
+        _mw.col = col
+        _mw.state = "deckBrowser"
+        CONFIG.clear()
+        names = lambda: [r["name"] for r in mod._full_deck_tree_payload()
+                         if r["name"] != "Default"]
+        assert names() == ["Fundamentals", "Amino Acids", "Exam 1", "00 Goals",
+                           "01 pKa", "02 Peptides", "MCAT"], names()
+        refreshed.clear()
+        mod._on_js_message(
+            False, "ba:deck:reorder:%d:%d:before" % (ids["02 Peptides"], ids["00 Goals"]),
+            context=None)
+        assert refreshed, "deck browser not refreshed"
+        assert names() == ["Fundamentals", "Amino Acids", "Exam 1", "02 Peptides",
+                           "00 Goals", "01 pKa", "MCAT"], names()
+        mod._on_js_message(
+            False, "ba:deck:reorder:%d:%d:after" % (ids["Amino Acids"], ids["Exam 1"]),
+            context=None)
+        assert names() == ["Fundamentals", "Exam 1", "02 Peptides", "00 Goals",
+                           "01 pKa", "Amino Acids", "MCAT"], names()
+        assert CONFIG["deck_order"][str(ids["Exam 1"])][0] == ids["02 Peptides"], CONFIG
+        print("ok  real collection: sub-deck reorder persists and the next payload honours it")
+    finally:
+        col.close()
+        _mw.col = None
+
+
+try:
+    import anki.collection  # noqa: F401
+    _have_anki = True
+except Exception:
+    _have_anki = False
+if _have_anki:
+    _real_collection_round_trip()
+elif not os.environ.get("BA_REALCOL_CHILD"):
+    import subprocess
+    _src = os.path.expanduser(os.environ.get("ANKI_SRC", "~/dev/anki"))
+    _py = os.path.join(_src, "out", "pyenv", "bin", "python")
+    if os.path.exists(_py):
+        _env = dict(os.environ, BA_REALCOL_CHILD="1", PYTHONPATH=os.pathsep.join(
+            os.path.join(_src, p) for p in ("pylib", "out/pylib")))
+        _rc = subprocess.call([_py, os.path.abspath(__file__)], cwd=_src, env=_env)
+        if _rc:
+            sys.exit(_rc)
+    else:
+        print("SKIP real-collection round trip: no Anki pyenv")
+
 print("PASS test_deck_reorder")

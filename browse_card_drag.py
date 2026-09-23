@@ -24,13 +24,13 @@ module adds the direct-manipulation route on top:
 How it is wired. QAbstractItemView has its own drag machinery, but it is
 driven by the model (`flags`, `mimeData`), and the table's model is Anki's
 `DataModel`. Rather than reach into that class we watch the table's
-viewport with an event filter: a press on an already-selected row arms a
-drag, and once the cursor travels past Qt's drag distance we start a
-`QDrag` ourselves carrying the selected card ids under a private MIME
-type. Qt defers the selection change on such a press until release, so
-the selection is still intact when the drag starts and a plain click on a
-selected row still collapses the selection to that row, exactly as
-before.
+viewport with an event filter: a press on a row arms a drag, and once the
+cursor travels past Qt's drag distance we start a `QDrag` ourselves
+carrying the selected card ids under a private MIME type. On an
+already-selected row Qt defers the selection change until release, so the
+whole selection travels and a plain click still collapses the selection to
+that row; on an unselected row Qt selects it on the press, so that one
+card travels.
 
 The drop side is another pair of filters, on the sidebar tree and on the
 table. They only react to our MIME type, so Anki's own sidebar drags (deck
@@ -232,15 +232,17 @@ class _TableDrag(QObject):
         if not index.isValid():
             return False
         sel = self.view.selectionModel()
-        if sel is None or not sel.isSelected(index):
-            # An unselected row: Qt selects it on press, and pulling from
-            # it rubber-bands. Select first, then drag, as everywhere else.
+        if sel is None:
             return False
+        # Armed on ANY row. A selected row: with ExtendedSelection Qt
+        # defers the selection change to release, so the whole selection
+        # travels. An unselected row: Qt selects it on this press, and the
+        # pull drags that one card, the way Finder and a drag-enabled Qt
+        # view behave. (This used to be left to the view, which read the
+        # pull as a rubber-band selection, so "grab a card and drag it" in
+        # one motion never moved anything.) Shift/Cmd-click still extend.
         self.press_pos = QPoint(pos)
         self.armed = True
-        # Let the view see the press: with ExtendedSelection it defers the
-        # selection change to release, which is what keeps the selection
-        # whole for the drag.
         return False
 
     def _on_move(self, ev: Any) -> bool:
@@ -341,23 +343,57 @@ def move_to_deck(browser: Any, card_ids: List[int], did: int) -> bool:
             card_ids=[CardId(c) for c in card_ids],
             deck_id=DeckId(did),
         )
+        n = len(card_ids)
         try:
-            from aqt.utils import tooltip
-
-            n = len(card_ids)
             name = mw.col.decks.name(did)
-            op = op.success(
-                lambda _out, n=n, name=name: tooltip(
-                    ("1 card" if n == 1 else f"{n} cards") + f" moved to {name}",
-                    parent=browser,
-                )
-            )
         except Exception:
-            pass
+            name = "deck"
+        op = op.success(
+            lambda _out, n=n, name=name: _on_moved(browser, n, name)
+        )
         op.run_in_background()
         return True
     except Exception:
         return False
+
+
+def _on_moved(browser: Any, n: int, name: str) -> None:
+    """After a sidebar drop lands: say so, and re-run the search.
+
+    `Table.op_executed` only repaints cells over the row snapshot of the
+    last search, so cards moved out of the deck being browsed stayed on
+    screen, looking exactly as before the drop (the embedded Browse is
+    never `current_window()`, so it did not even repaint). Re-searching is
+    what makes them leave a deck-filtered list."""
+    _tooltip(browser, ("1 card" if n == 1 else f"{n} cards") + f" moved to {name}")
+    try:
+        browser.search()
+    except Exception:
+        pass
+
+
+def card_at(browser: Any, pos: QPoint) -> Optional[tuple]:
+    """(card_id, due, is_new) for the table row under `pos`, or None."""
+    try:
+        from anki.consts import CARD_TYPE_NEW
+
+        view = browser.table._view
+        index = view.indexAt(pos)
+        if not index.isValid():
+            return None
+        card = browser.table._model.get_card(index)
+        if card is None:
+            return None
+        return (int(card.id), int(card.due), int(card.type) == int(CARD_TYPE_NEW))
+    except Exception:
+        return None
+
+
+NOT_NEW_TARGET = (
+    "Only new cards have a place in the queue to move to. Review cards are "
+    "ordered by due date. To move cards to another deck, drop them on the "
+    "deck in the sidebar."
+)
 
 
 def new_card_at(browser: Any, pos: QPoint) -> Optional[tuple]:
@@ -739,10 +775,18 @@ class _TableDrop(_DropTarget):
     it."""
 
     def resolve(self, pos: QPoint) -> Optional[tuple]:
-        return new_card_at(self.browser, pos)
+        # Every card row is a drop target, so a drop on a review card is
+        # answered with why nothing moved instead of a silent "no entry"
+        # cursor (the Week 1 decks the user drags in are all review cards).
+        return card_at(self.browser, pos)
 
     def perform(self, card_ids: List[int], target: Any) -> bool:
-        return reposition_before(self.browser, card_ids, target)
+        target_id, due, is_new = target
+        if not is_new:
+            if [c for c in card_ids if int(c) != int(target_id)]:
+                _tooltip(self.browser, NOT_NEW_TARGET)
+            return False
+        return reposition_before(self.browser, card_ids, (target_id, due))
 
 
 # --------------------------------------------------------------------------- #

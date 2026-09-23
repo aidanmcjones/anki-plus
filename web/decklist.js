@@ -369,7 +369,16 @@
       } catch (_) {}
       container.classList.add('ad-list--dragging');
       row.classList.add('ad-list-row--dragging');
-      if (drag.depth > 0) ensureZone().classList.add('ad-list-dropzone--show');
+      // The "top level" zone goes in on the NEXT task, never inside
+      // dragstart itself: Chromium (so QtWebEngine too) aborts a drag
+      // whose dragstart inserts a block that moves the source row, firing
+      // dragend at once. That killed every drag of a nested deck.
+      if (drag.depth > 0) {
+        var started = drag.did;
+        setTimeout(function () {
+          if (drag.did === started) ensureZone().classList.add('ad-list-dropzone--show');
+        }, 0);
+      }
     });
 
     container.addEventListener('dragover', function (e) {
