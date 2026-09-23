@@ -51,9 +51,7 @@ class Config:
     # tests_passed everywhere they're computed (runner.py, apply.py) and
     # recorded separately as fix.tests_skipped / fix.applied.tests_skipped so
     # the exclusion is visible, not silent.
-    known_failing_tests: List[str] = field(
-        default_factory=lambda: ["tests/editor_tools.cjs", "tests/test_editor_crop.py"]
-    )
+    known_failing_tests: List[str] = field(default_factory=list)
 
     # --- deck bugs ------------------------------------------------------
     deck_build_dir: Path = FB_BUILD
