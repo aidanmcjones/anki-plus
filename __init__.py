@@ -404,6 +404,7 @@ def _js_opts(
         },
         "reviewer": {
             "clickToReveal": bool(cfg.get("click_to_reveal", True)),
+            "arrowKeyGrading": bool(cfg.get("arrow_key_grading", True)),
             "pressFeedback": bool(cfg.get("press_feedback", True)),
             "cardStyling": bool(cfg.get("reviewer_card_styling", True)),
             "answerButtons": str(cfg.get("reviewer_answer_buttons", "intervals")),
@@ -4396,6 +4397,32 @@ def _setup_sidebar_shortcuts() -> None:
                 sc.setAutoRepeat(False)
                 sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
                 sc.activated.connect(_open_cmdk_palette)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # Cmd+Shift+B — Report a bug, from anywhere (deck list, reviewer, editor
+    # overlays). Base sequence is configurable via config.json's
+    # `bug_report_shortcut` (default "Ctrl+Shift+B", which Qt already maps
+    # to Cmd+Shift+B on macOS); we also bind the literal Meta+Shift+B form,
+    # belt-and-braces, same as the Ctrl+, / Meta+, settings shortcut below.
+    def _open_bug_report() -> None:
+        try:
+            from . import bugreport as _bugreport
+            _bugreport.open_dialog()
+        except Exception:
+            pass
+    try:
+        from aqt.qt import QShortcut, QKeySequence, Qt
+        base_seq = str(_config().get("bug_report_shortcut", "Ctrl+Shift+B") or "Ctrl+Shift+B")
+        seqs = {base_seq, "Ctrl+Shift+B", "Meta+Shift+B"}
+        for seq in seqs:
+            try:
+                sc = QShortcut(QKeySequence(seq), mw)
+                sc.setAutoRepeat(False)
+                sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+                sc.activated.connect(_open_bug_report)
             except Exception:
                 continue
     except Exception:

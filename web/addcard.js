@@ -117,165 +117,6 @@
     return true;
   }
 
-  // Stock Anki caps a field image's default (and "shrink to fit") display
-  // size at 250x125 (`ImageOverlay maxWidth={250} maxHeight={125}` in
-  // ts/routes/editor/NoteEditor.svelte) — a thumbnail meant for old-style
-  // "paste a screenshot into a field" workflows. It bears no relation to
-  // how big the image actually renders on the card (that's the note type's
-  // own CSS, applied only in Preview/Reviewer, never in the editor), so a
-  // card whose image is meant to fill most of the card shows as a postage
-  // stamp here — you can't judge the real size until you review it.
-  //
-  // ImageOverlay sets four CSS custom properties as an *inline* style on
-  // <html> once, when it mounts (`document.documentElement.style.setProperty`
-  // in its <script> block) — not reactively, so there's no store to hook.
-  // We can't change the 250/125 constants without touching ts/, but the
-  // constants only reach the page as these four custom properties, and
-  // inline styles set later win over inline styles set earlier for the
-  // same property. Re-setting them after Anki's own script has run raises
-  // the cap for every image in every field, in both the "shrunk to fit"
-  // state (`--editor-shrink-max-*`) and the freshly-inserted default state
-  // (`--editor-default-max-*`) — same mechanism Anki itself uses, just a
-  // bigger number. A per-image explicit width/height (or an explicit
-  // `data-editor-shrink="false"`, i.e. "Actual size" already chosen) is
-  // unaffected: this only changes what "fit to a sane size" means.
-  //
-  // 640x480 is a rough stand-in for "roughly how big images look once a
-  // note type is done constraining them" — most reasonably-sized card
-  // images render close to their natural size at that cap, without an
-  // oversized paste turning a field into a giant unscrollable image. It
-  // isn't the note type's actual CSS (that varies per note type and isn't
-  // reachable from this webview), so it's a relative-size improvement,
-  // not a pixel-exact match to the reviewer.
-  var IMG_DEFAULT_MAX_W = "640px";
-  var IMG_DEFAULT_MAX_H = "480px";
-  function raiseImageSizeCap() {
-    var root = document.documentElement;
-    var cur = root.style.getPropertyValue("--editor-default-max-width");
-    if (cur === IMG_DEFAULT_MAX_W) return true; // already applied, nothing to redo
-    root.style.setProperty("--editor-shrink-max-width", IMG_DEFAULT_MAX_W);
-    root.style.setProperty("--editor-shrink-max-height", IMG_DEFAULT_MAX_H);
-    root.style.setProperty("--editor-default-max-width", IMG_DEFAULT_MAX_W);
-    root.style.setProperty("--editor-default-max-height", IMG_DEFAULT_MAX_H);
-    return true;
-  }
-
-  // Stock Anki also never shows the image resize handles on a freshly
-  // inserted/loaded image: ImageOverlay.svelte computes
-  // `isSizeConstrained = getBooleanDatasetAttribute(img, "editorShrink")
-  // ?? $shrinkImagesByDefault`, and $shrinkImagesByDefault defaults to
-  // true, so every image starts "shrunk". HandleControl only lights up
-  // its corner squares when `active={!isSizeConstrained}`
-  // (ts/routes/editor/HandleControl.svelte: the `.control` divs get no
-  // `.active` class, hence no background/cursor, while shrunk — they're
-  // still in the DOM and still clickable, just invisible). A shrunk
-  // image instead shows only the "(double-click to expand)" hint and a
-  // selection box + floating toolbar — exactly what the addon looked
-  // like it might be causing, until you check the source: this is
-  // stock behavior, not an addon regression.
-  //
-  // The same `data-editor-shrink` attribute that gates the CSS shrink
-  // cap (editable-base.scss: `img:not([data-editor-shrink="false"])`)
-  // also gates isSizeConstrained above, and per-image it wins over the
-  // store default. NoteEditor strips it from field HTML before saving
-  // (`content.replace(/ data-editor-shrink="(true|false)"/g, "")`), so
-  // it never reaches the note and never round-trips — purely transient
-  // UI state we're free to force. Setting it to "false" on every field
-  // image makes handles active on the very first click, no double-click
-  // needed, on top of the larger display size raiseImageSizeCap already
-  // gives them. A user who manually re-shrinks an image via the toolbar
-  // (SizeSelect's "shrink" button, which flips this same attribute to
-  // "true") is left alone — we only ever set the attribute on images
-  // that don't already carry it, and mid-session toggles never remove
-  // an img node, so the shadow-root child-list observer below can't
-  // clobber a deliberate user choice.
-  function unshrinkFieldImages(root) {
-    root = root || document;
-    var imgs = root.querySelectorAll
-      ? root.querySelectorAll("img:not(.mathjax)")
-      : [];
-    imgs.forEach(function (img) {
-      if (img.dataset.editorShrink !== "false" && img.dataset.editorShrink !== "true") {
-        img.dataset.editorShrink = "false";
-      }
-    });
-  }
-
-  // unshrinkFieldImages() above is best-effort background coverage (it runs
-  // on a timer/mutation-observer cadence so the image *looks* full-size as
-  // soon as possible) — but it races the field's own content load. A note
-  // just switched to in Browse, or a field whose image finishes rendering
-  // between two observer callbacks, can still have activeImage's dataset
-  // read as unset the moment the user actually clicks it: ImageOverlay's
-  // `isSizeConstrained` is computed once, synchronously, inside the same
-  // click that sets `activeImage` (see maybeShowHandle in
-  // ImageOverlay.svelte) — if our attribute isn't on the element *yet* at
-  // that exact instant, the image opens shrunk-with-inactive-handles and
-  // the "(double-click to expand)" pill appears, no matter how large the
-  // image naturally is. This bit for real users on full-slide-screenshot
-  // sized field images, which take longer to reach a settled DOM state
-  // than the small thumbnails this was first verified against.
-  //
-  // Belt-and-suspenders isn't enough here — we need a hard guarantee. A
-  // capture-phase listener on `document` runs top-down before any
-  // bubble-phase listener anywhere in the tree, including ImageOverlay's
-  // own `on(await input.element, "click", maybeShowHandle)` (bubble
-  // phase, no options — ts/tslib/events.ts's `on()` doesn't pass
-  // `capture`). So this always sets the attribute before Svelte reads it,
-  // regardless of whether the background scan has caught up yet.
-  //
-  // `event.target` would be wrong here: a click that originates inside an
-  // open shadow root (every field is one — RichTextInput.svelte's
-  // `attachShadow({mode:"open"})`) gets *retargeted* to the shadow host
-  // for listeners outside the shadow tree, so `event.target` would be the
-  // field wrapper, never the <img>. `composedPath()[0]` is immune to
-  // retargeting and always gives the true originating element, and click
-  // events are `composed: true` by default so they're observable here at
-  // all despite the shadow boundary.
-  function forceUnshrinkOnClick(event) {
-    var path = typeof event.composedPath === "function" ? event.composedPath() : null;
-    var target = path && path.length ? path[0] : event.target;
-    if (
-      target &&
-      target.tagName === "IMG" &&
-      !target.classList.contains("mathjax") &&
-      target.dataset.editorShrink !== "false" &&
-      target.dataset.editorShrink !== "true"
-    ) {
-      target.dataset.editorShrink = "false";
-    }
-  }
-
-  // Each editable field (RichTextInput.svelte) mounts its own shadow
-  // root (`element.attachShadow({mode:"open"})`), so images live behind
-  // a shadow boundary a plain querySelectorAll from document can't see.
-  // Walk the tree recursively, run the unshrink pass on every shadow
-  // root found, and attach a childList observer to each new one so
-  // images pasted/dropped in after initial load get caught too (adding
-  // an <img> node fires childList; toggling the dataset attribute via
-  // the toolbar does not, so this can't fight a manual re-shrink).
-  var observedShadowRoots = typeof WeakSet !== "undefined" ? new WeakSet() : null;
-  function scanForShadowRoots(root) {
-    root = root || document;
-    var els = root.querySelectorAll ? root.querySelectorAll("*") : [];
-    for (var i = 0; i < els.length; i++) {
-      var el = els[i];
-      var sr = el.shadowRoot;
-      if (!sr) continue;
-      if (observedShadowRoots) {
-        if (observedShadowRoots.has(sr)) continue;
-        observedShadowRoots.add(sr);
-      }
-      unshrinkFieldImages(sr);
-      try {
-        new MutationObserver(function () {
-          unshrinkFieldImages(sr);
-        }).observe(sr, { childList: true, subtree: true });
-      } catch (_) {}
-      scanForShadowRoots(sr);
-    }
-  }
-
   function poll(fn, max) {
     if (fn()) return;
     var n = 0;
@@ -309,8 +150,6 @@
     ok = cleanFieldsCardsLabels() && ok;
     ok = keepTagsOpen() && ok;
     ok = moveTagsIntoFields() && ok;
-    raiseImageSizeCap(); // cosmetic only — never gates reveal
-    scanForShadowRoots(); // ditto — finds fields, unshrinks their images
     if (ok) reveal();
     return ok;
   }
@@ -331,38 +170,7 @@
       cleanFieldsCardsLabels();
       keepTagsOpen();
       moveTagsIntoFields();
-      scanForShadowRoots(); // new field rows/notetype switch mount new shadow roots
     }).observe(document.body, { childList: true, subtree: true });
   } catch (_) {}
 
-  // ImageOverlay is a *component*, not a page-load-once script: switching
-  // Browse between Preview/Edit re-shows the pane without a page reload,
-  // but the editor's Svelte tree (and this fork's NoteEditor instance)
-  // gets torn down and remounted, so ImageOverlay's mount effect reruns
-  // and stomps our --editor-*-max-* overrides back to 250/125 — confirmed
-  // live (measured a field image at 192x125 again after Card→Edit→Card→
-  // Edit, despite raiseImageSizeCap() having already run once on initial
-  // load). The body-mutation observer above doesn't catch this: Anki
-  // writes the reset directly onto <html>'s style attribute, which is
-  // outside document.body entirely. Watch that attribute directly and
-  // reapply whenever it drifts from ours; raiseImageSizeCap()'s own
-  // early-return (cur === IMG_DEFAULT_MAX_W) stops this from looping
-  // against its own writes.
-  try {
-    new MutationObserver(function () {
-      raiseImageSizeCap();
-      scanForShadowRoots(); // Card<->Edit remount tears down old shadow roots too
-    }).observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["style"],
-    });
-  } catch (_) {}
-
-  // Capture-phase, so it always wins the race against ImageOverlay's own
-  // bubble-phase click listener — see forceUnshrinkOnClick's comment above.
-  // Registered once, unconditionally, for the life of the page; cheap
-  // no-op on every click that isn't on a field image.
-  try {
-    document.addEventListener("click", forceUnshrinkOnClick, true);
-  } catch (_) {}
 })();

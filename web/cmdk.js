@@ -28,9 +28,17 @@
       '<circle cx="7.5" cy="7.5" r="1.2"/></svg>',
     add:
       '<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
-    browse:
-      '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/>' +
-      '<path d="M20 20l-4.3-4.3"/></svg>',
+    // Two-hemisphere brain, split down the middle — same path data as the
+    // sidebar's brain icon (web/sidebar.js), just without the <g> hover
+    // hooks cmdk's static rows don't need. Used by "Study" now that the
+    // deck-homepage action carries the sidebar's new label.
+    brain:
+      '<svg viewBox="0 0 24 24">' +
+        '<path d="M12 4.6C9.8 3.3 6.7 4 5.6 6.1C4.6 8 4.6 9.7 5.6 11.3' +
+        'C4.3 13 4.6 15.3 6.6 16.5C8 17.4 9.6 18.3 12 18.4Z"/>' +
+        '<path d="M12 4.6C14.2 3.3 17.3 4 18.4 6.1C19.4 8 19.4 9.7 18.4 11.3' +
+        'C19.7 13 19.4 15.3 17.4 16.5C16 17.4 14.4 18.3 12 18.4Z"/>' +
+      '</svg>',
     stats:
       '<svg viewBox="0 0 24 24"><path d="M4 19V9"/><path d="M10 19V5"/>' +
       '<path d="M16 19v-8"/><path d="M22 19h-22"/></svg>',

@@ -3,6 +3,37 @@
 // field spans (wrapped server-side with data-ba-field) become
 // contenteditable in place, with a small floating toolbar at the bottom.
 (function () {
+  // JS error ring buffer for bugreport.py's ticket capture (Cmd+Shift+B /
+  // "Report a bug"). Capped at 50 so a runaway error loop can't bloat a
+  // ticket; installed first, before anything below gets a chance to throw.
+  // editor-tools.js installs the same buffer for the pages it's loaded on;
+  // whichever webview bugreport.py reads from, __baErrors is there.
+  if (!window.__baErrors) {
+    window.__baErrors = [];
+    var BA_ERR_CAP = 50;
+    function baPushError(entry) {
+      try {
+        window.__baErrors.push(entry);
+        if (window.__baErrors.length > BA_ERR_CAP) {
+          window.__baErrors.splice(0, window.__baErrors.length - BA_ERR_CAP);
+        }
+      } catch (_) {}
+    }
+    window.addEventListener("error", function (e) {
+      baPushError({
+        ts: Date.now(),
+        message: (e && e.message) || "Script error",
+        source: (e && e.filename) || "",
+        line: (e && e.lineno) || 0,
+      });
+    });
+    window.addEventListener("unhandledrejection", function (e) {
+      var reason = e && e.reason;
+      var message = (reason && (reason.message || String(reason))) || "Unhandled rejection";
+      baPushError({ ts: Date.now(), message: message, source: "", line: 0 });
+    });
+  }
+
   // Settings toggles handed over by Python (window.__baOpts.reviewer). A
   // missing key means "on" so older payloads keep working.
   function rvOpts() {
@@ -152,7 +183,8 @@
       // subtree — any selected image / overlay from before is now pointing
       // at detached nodes. Drop it rather than leave a ghost overlay
       // floating over the new card.
-      if (imgResize.active && !document.contains(imgResize.active)) {
+      if (typeof imgResize !== "undefined" && imgResize.active &&
+          !document.contains(imgResize.active) && typeof deselectImage === "function") {
         deselectImage();
       }
     });
@@ -192,8 +224,12 @@
         var tag = (t.tagName || "").toLowerCase();
         if (tag === "a" || tag === "button" || tag === "input"
             || tag === "textarea" || tag === "select" || tag === "audio"
-            || tag === "video" || t.isContentEditable) {
-          return;  // let the user actually interact with that thing
+            || tag === "video" || tag === "details" || tag === "summary"
+            || tag === "label" || t.isContentEditable) {
+          // Let the user actually interact with that thing. <details>
+          // covers the collapsible "Scenario" block on the question side:
+          // opening it to read the setup must not flip the card.
+          return;
         }
         t = t.parentNode;
       }
@@ -306,7 +342,7 @@
     bar.addEventListener("mousedown", function (e) {
       // Don't let the toolbar steal focus from the field — that wipes the
       // selection before execCommand can act on it.
-      e.preventDefault();
+      if (!e.target.closest("select, option, input")) e.preventDefault();
     });
     bar.addEventListener("click", function (e) {
       var t = e.target;
@@ -326,129 +362,8 @@
     return bar;
   }
 
-  // ---------- Inline edit mode: image select / resize ------------------ //
-  // The quick editor's field divs are plain rendered card HTML dropped into
-  // a contenteditable region — there is no Svelte ImageOverlay here (that
-  // tree only exists in the real Editor/AddCards/Browse-edit webview). This
-  // is a small, self-contained equivalent: click an <img> inside a
-  // [data-ba-field] region to select it (outline + 4 corner handles),
-  // drag a corner to resize proportionally, double-click to reset to
-  // natural size. Only active while editState.active is true, and it never
-  // touches anything outside edit mode.
-  var imgResize = { active: null, overlay: null, dragging: null };
-
-  function ensureImgOverlay() {
-    if (imgResize.overlay) return imgResize.overlay;
-    var el = document.createElement("div");
-    el.id = "ba-img-resize-overlay";
-    el.innerHTML =
-        '<div class="ba-img-handle ba-img-handle-nw" data-corner="nw"></div>'
-      + '<div class="ba-img-handle ba-img-handle-ne" data-corner="ne"></div>'
-      + '<div class="ba-img-handle ba-img-handle-sw" data-corner="sw"></div>'
-      + '<div class="ba-img-handle ba-img-handle-se" data-corner="se"></div>';
-    el.hidden = true;
-    document.body.appendChild(el);
-    Array.prototype.forEach.call(
-      el.querySelectorAll(".ba-img-handle"),
-      function (h) { h.addEventListener("mousedown", onImgHandleMousedown); }
-    );
-    imgResize.overlay = el;
-    return el;
-  }
-
-  function positionImgOverlay() {
-    if (!imgResize.active || !imgResize.overlay) return;
-    var r = imgResize.active.getBoundingClientRect();
-    if (!r.width || !r.height) { deselectImage(); return; }
-    var el = imgResize.overlay;
-    el.style.left = r.left + "px";
-    el.style.top = r.top + "px";
-    el.style.width = r.width + "px";
-    el.style.height = r.height + "px";
-  }
-
-  function selectImage(img) {
-    if (!editState.active) return;
-    imgResize.active = img;
-    var el = ensureImgOverlay();
-    el.hidden = false;
-    positionImgOverlay();
-  }
-
   function deselectImage() {
-    imgResize.active = null;
-    imgResize.dragging = null;
-    if (imgResize.overlay) imgResize.overlay.hidden = true;
-  }
-
-  function onImgHandleMousedown(e) {
-    if (!imgResize.active) return;
-    e.preventDefault();
-    e.stopPropagation();
-    var img = imgResize.active;
-    var rect = img.getBoundingClientRect();
-    var ratio = img.naturalWidth && img.naturalHeight
-      ? img.naturalWidth / img.naturalHeight
-      : (rect.width / (rect.height || 1)) || 1;
-    imgResize.dragging = {
-      corner: e.currentTarget.getAttribute("data-corner"),
-      startX: e.clientX,
-      startWidth: rect.width,
-      ratio: ratio,
-    };
-    document.addEventListener("mousemove", onImgHandleMousemove);
-    document.addEventListener("mouseup", onImgHandleMouseup);
-  }
-
-  function onImgHandleMousemove(e) {
-    var d = imgResize.dragging;
-    if (!d || !imgResize.active) return;
-    var west = d.corner === "nw" || d.corner === "sw";
-    var dx = e.clientX - d.startX;
-    var delta = west ? -dx : dx;
-    var newWidth = Math.max(20, Math.round(d.startWidth + delta));
-    // Same reasoning as the full editor's own ImageOverlay: clear any
-    // inline width/height style (older resize add-ons used to set those,
-    // and a leftover style would silently no-op the width attribute we're
-    // about to write), then set only the width attribute so the browser
-    // scales height to match the image's natural aspect ratio.
-    imgResize.active.style.removeProperty("width");
-    imgResize.active.style.removeProperty("height");
-    imgResize.active.removeAttribute("height");
-    imgResize.active.width = newWidth;
-    positionImgOverlay();
-  }
-
-  function onImgHandleMouseup() {
-    imgResize.dragging = null;
-    document.removeEventListener("mousemove", onImgHandleMousemove);
-    document.removeEventListener("mouseup", onImgHandleMouseup);
-  }
-
-  function onDocClickForImageSelect(e) {
-    if (!editState.active) return;
-    var t = e.target;
-    if (t && t.tagName === "IMG" && t.closest && t.closest("[data-ba-field]")) {
-      selectImage(t);
-      return;
-    }
-    if (t && t.closest && t.closest("#ba-img-resize-overlay")) return;
-    deselectImage();
-  }
-
-  function onDocDblClickForImageReset(e) {
-    if (!editState.active || !imgResize.active) return;
-    if (e.target !== imgResize.active) return;
-    e.preventDefault();
-    imgResize.active.removeAttribute("width");
-    imgResize.active.removeAttribute("height");
-    imgResize.active.style.removeProperty("width");
-    imgResize.active.style.removeProperty("height");
-    positionImgOverlay();
-  }
-
-  function onWindowReflowForImageOverlay() {
-    if (imgResize.active) positionImgOverlay();
+    if (window.__baEditorTools) window.__baEditorTools.clear();
   }
 
   function focusFirstField(spans) {
@@ -637,16 +552,76 @@
     }
   }
 
+  // Arrow-key grading (config: arrow_key_grading). Question side: any arrow
+  // reveals the answer, same as Space. Answer side: Up = Easy, Right = Good,
+  // Left = Hard, Down = Again, sent as the stock reviewer's own "easeN" link.
+  // Stays out of the way while typing (focused input / textarea / select /
+  // contenteditable, the quick editor's body.ba-editing) or while one of our
+  // dialogs (cmdk palette, popovers) is open; only then is the default
+  // scroll suppressed. Installed once per page (reviewer.js can be re-eval'd).
+  var ARROW_EASE = { ArrowUp: 4, ArrowRight: 3, ArrowLeft: 2, ArrowDown: 1 };
+
+  function arrowTypingOrModal() {
+    var body = document.body;
+    if (body && body.classList.contains("ba-editing")) return true;
+    var a = document.activeElement;
+    if (a) {
+      var tag = (a.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select"
+          || a.isContentEditable) return true;
+    }
+    if (document.querySelector('.ba-cmdk-back[data-open="true"]')) return true;
+    var dlgs = document.querySelectorAll(
+      'dialog[open], [aria-modal="true"], [role="dialog"]');
+    for (var i = 0; i < dlgs.length; i++) {
+      var d = dlgs[i];
+      // The palette's panel stays in the DOM when closed; checked above.
+      if (d.classList.contains("ba-cmdk") || d.hidden) continue;
+      if (d.getClientRects().length) return true;
+    }
+    return false;
+  }
+
+  // Ease numbers the scheduler offers for this card, read from the ease
+  // chips __baSetEase un-hides. None found (native answer-bar mode) means
+  // the v3 scheduler's fixed 4 buttons.
+  function arrowButtonCount() {
+    var n = 0;
+    document.querySelectorAll(".ba-rv-ease-key[data-ease]").forEach(function (b) {
+      var e = parseInt(b.getAttribute("data-ease"), 10);
+      if (!b.hidden && e > n) n = e;
+    });
+    return n || 4;
+  }
+
+  function onArrowGradeKeydown(e) {
+    var ease = ARROW_EASE[e.key];
+    if (!ease || e.defaultPrevented) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (rvOpts().arrowKeyGrading === false) return;
+    if (arrowTypingOrModal()) return;
+    e.preventDefault();
+    if (e.repeat) return;  // holding a key must not grade a run of cards
+    if (!hasAnswerRevealed()) {
+      try { pycmd("ans"); } catch (_) {}
+      return;
+    }
+    // Fewer buttons: Again stays Again, anything above the top clamps to it.
+    ease = Math.min(ease, arrowButtonCount());
+    try { pycmd("ease" + ease); } catch (_) {}
+  }
+
+  if (!window.__baArrowGrading) {
+    window.__baArrowGrading = true;
+    document.addEventListener("keydown", onArrowGradeKeydown);
+  }
+
   function boot() {
     ensureBar();
     wrapAnswer();
     clickToReveal();
     hookEaseClicks();
     watchBody();
-    document.addEventListener("click", onDocClickForImageSelect);
-    document.addEventListener("dblclick", onDocDblClickForImageReset);
-    window.addEventListener("scroll", onWindowReflowForImageOverlay, true);
-    window.addEventListener("resize", onWindowReflowForImageOverlay);
   }
 
   if (document.readyState === "loading") {

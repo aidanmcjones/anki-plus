@@ -135,6 +135,11 @@ in this file are the raw form the settings page writes.
   answer) or `"native"` (Anki's Again / Hard / Good / Easy bar).
 - **show_progress** — progress strip across the top of the reviewer.
 - **click_to_reveal** — clicking the card shows the answer.
+- **arrow_key_grading**: grade with the arrow keys. Up = Easy, Right =
+  Good, Left = Hard, Down = Again. On the question side any arrow shows the
+  answer (like Space) without grading. Ignored while you type in a field or
+  the quick editor, or while the command palette is open. `false` gives the
+  arrows back to scrolling.
 - **press_feedback** — the bloom animation when grading.
 - **reviewer_hide_answer** — a quiet "Hide Answer" button in the bottom-right
   corner while the answer is showing (also `H`). Returns to the question
@@ -228,6 +233,11 @@ in this file are the raw form the settings page writes.
 
 ## Windows
 - **cmdk** — the ⌘K / Ctrl+K command palette.
+- **bug_report_shortcut** — Qt key sequence for "Report a bug" (default
+  `"Ctrl+Shift+B"`, which Qt maps to ⌘⇧B on macOS). Always also reachable
+  from the command palette ("Report a bug") on every screen. Saves a
+  ticket — a one-line note, an optional "what did you expect", and a
+  screenshot by default — under `~/AnkiTickets/<id>/`.
 - **embed_add**, **embed_browse**, **embed_stats**, **embed_settings** — open
   those inside the main window (needs `sidebar_nav`); `false` uses Anki's
   separate windows.

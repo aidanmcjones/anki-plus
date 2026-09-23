@@ -384,31 +384,36 @@ body.ba-with-side {
 
 /* ---------------------------- ICON HOVER ANIMATIONS ----------------------------
    Each row's icon gets a small, on-hover gesture matched to its glyph:
-   layers lift, plus rotates, search wiggles, bars rise, arrows bob,
+   layers lift, plus rotates, brain pulses, bars rise, arrows bob,
    sync spins, gear turns. Animations target inner <g class="ba-i-*">
    hooks set in sidebar.js so the parent .ba-side-icon's own color
    transition stays clean. `transform-box: fill-box` makes
    transform-origin compute against the group's own bounding box rather
    than the SVG's outer canvas — without it, rotations pivot around the
    (0,0) corner instead of the glyph center. Focus-visible mirrors hover
-   so keyboard nav gets the same gesture. */
+   so keyboard nav gets the same gesture.
 
-.ba-i-decks-top, .ba-i-decks-mid, .ba-i-decks-bot,
-.ba-i-plus, .ba-i-search-lens, .ba-i-bar,
+   Selectors below key off data-cmd, not the glyph class — since the
+   Sept 2026 rename gave "decks"/"browse" each other's icon, the class
+   names (ba-i-layers-*, ba-i-brain-*) describe the drawing, and the
+   [data-cmd=...] on each rule says which row currently shows it. */
+
+.ba-i-layers-top, .ba-i-layers-mid, .ba-i-layers-bot,
+.ba-i-plus, .ba-i-brain-l, .ba-i-brain-r, .ba-i-bar,
 .ba-i-import, .ba-i-sync, .ba-i-gear {
   transform-box: fill-box;
   transform-origin: center;
   transition: transform 260ms cubic-bezier(.2, .8, .2, 1);
 }
 
-/* DECKS — top card peels up, middle nudges a touch — reads as lifting
-   a sheet off the stack. */
-.ba-side-item[data-cmd="decks"]:hover .ba-i-decks-top,
-.ba-side-item[data-cmd="decks"]:focus-visible .ba-i-decks-top {
+/* LAYERS (now on Decks/browse) — top card peels up, middle nudges a touch —
+   reads as lifting a sheet off the stack. */
+.ba-side-item[data-cmd="browse"]:hover .ba-i-layers-top,
+.ba-side-item[data-cmd="browse"]:focus-visible .ba-i-layers-top {
   transform: translateY(-2px);
 }
-.ba-side-item[data-cmd="decks"]:hover .ba-i-decks-mid,
-.ba-side-item[data-cmd="decks"]:focus-visible .ba-i-decks-mid {
+.ba-side-item[data-cmd="browse"]:hover .ba-i-layers-mid,
+.ba-side-item[data-cmd="browse"]:focus-visible .ba-i-layers-mid {
   transform: translateY(-0.5px);
 }
 
@@ -420,15 +425,17 @@ body.ba-with-side {
   transform: rotate(90deg);
 }
 
-/* BROWSE — magnifying lens scans (rotates left, then right). */
-.ba-side-item[data-cmd="browse"]:hover .ba-i-search-lens,
-.ba-side-item[data-cmd="browse"]:focus-visible .ba-i-search-lens {
-  animation: ba-i-search-scan 700ms ease-in-out;
+/* BRAIN (now on Study/decks) — both hemispheres give a quick pulse, like
+   a spark of focus right before a session starts. */
+.ba-side-item[data-cmd="decks"]:hover .ba-i-brain-l,
+.ba-side-item[data-cmd="decks"]:focus-visible .ba-i-brain-l,
+.ba-side-item[data-cmd="decks"]:hover .ba-i-brain-r,
+.ba-side-item[data-cmd="decks"]:focus-visible .ba-i-brain-r {
+  animation: ba-i-brain-pulse 520ms cubic-bezier(.2, .8, .2, 1);
 }
-@keyframes ba-i-search-scan {
-  0%, 100% { transform: rotate(0); }
-  30%      { transform: rotate(-12deg); }
-  70%      { transform: rotate(12deg); }
+@keyframes ba-i-brain-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.12); }
 }
 
 /* STATS — bars rise from their base, staggered 70ms apart. */
@@ -482,8 +489,8 @@ body.ba-with-side {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ba-i-decks-top, .ba-i-decks-mid, .ba-i-decks-bot,
-  .ba-i-plus, .ba-i-search-lens, .ba-i-bar,
+  .ba-i-layers-top, .ba-i-layers-mid, .ba-i-layers-bot,
+  .ba-i-plus, .ba-i-brain-l, .ba-i-brain-r, .ba-i-bar,
   .ba-i-import, .ba-i-sync, .ba-i-gear {
     transition: none !important;
     animation: none !important;
