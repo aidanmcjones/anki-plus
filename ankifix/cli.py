@@ -160,6 +160,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(write_index(cfg.tickets_dir))
         return 0
     if args.watch:
+        # under launchd stdout is a file, so Python block-buffers it and the
+        # log shows nothing until 8 KB accumulate; line-buffer instead
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+            except (AttributeError, ValueError):
+                pass
         try:
             watch(cfg, args.interval, once=args.once)
         except KeyboardInterrupt:
