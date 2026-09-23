@@ -125,6 +125,7 @@ def env(tmp_path, monkeypatch):
     # Both get their own dedicated tests below with these turned on deliberately.
     cfg.notify = False
     cfg.auto_apply = False
+    cfg.doctor_interval_s = 0  # the hourly doctor runs real node/git checks
     return {"cfg": cfg, "repo": repo, "build": build, "fake": fake_dir, "tmp": tmp_path, "course": course}
 
 
@@ -576,6 +577,7 @@ def test_write_plist_contents(tmp_path):
     assert data["ProgramArguments"] == ["/x/bin/ankifix", "--watch", "--interval", "20"]
     assert data["RunAtLoad"] is True
     assert data["KeepAlive"] is True
+    assert data["ThrottleInterval"] == 30
     assert data["StandardOutPath"] == str(tmp_path / "ankifix-watch.log")
     assert data["StandardErrorPath"] == str(tmp_path / "ankifix-watch.log")
     assert data["EnvironmentVariables"] == {"PATH": "/a/bin:/b/bin"}
@@ -587,3 +589,327 @@ def test_install_agent_refuses_when_watch_already_running(tmp_path, monkeypatch)
     with pytest.raises(runner.AnkifixError):
         agent_mod.install_agent(plist_path=dest)
     assert not dest.exists()
+
+
+# ------------------------------------------------ overnight crash-loop fixes
+DRAG_NOTE = ("When selecting one card or multiple, I should be able to select one or a group "
+             "and drag and drop it to another deck or a different place in the deck")
+
+
+@pytest.mark.parametrize("note,reviewer,expected", [
+    # ticket 20260923-085141: UI interaction words, no notetype, state question
+    (DRAG_NOTE, {"state": "question", "notetype": None}, "app"),
+    (DRAG_NOTE, {"state": None, "notetype": None}, "app"),
+    (DRAG_NOTE, {}, "app"),
+    ("I should be able to resort the list of decks", {"state": "deckBrowser", "notetype": None}, "app"),
+    ("in full screen the dropdown is cut off", {"state": "question", "notetype": None}, "app"),
+    # ticket 20260923-091337: deck names in the search bar / deck column
+    ("The names of decks, as seen in the top search bar and in the deck column, shouldn't have "
+     ":: or quotations, it should just be the clean title of the deck. That's it this should "
+     "apply to the entire Anki Plus app. No unnecessary punctuation or formatting in deck names",
+     {"state": "question", "card_id": None, "notetype": None}, "app"),
+    # genuine deck notes still go to deck, with or without a card on screen
+    ("the answer on card C2-Q05 is wrong", {"state": "question", "card_id": None, "notetype": None}, "deck"),
+    ("the answer on card C2-Q05 is wrong", {"state": "answer", "notetype": None}, "deck"),
+    ("the answer on card C2-Q05 is wrong", {"state": None, "notetype": None}, "deck"),
+    ("the answer on card C2-Q05 is wrong", {"state": "answer", "notetype": "CourseB-Basic"}, "deck"),
+    ("image on card is cut off", {"state": None, "notetype": None}, "deck"),
+])
+def test_classify_ui_interaction_vs_deck(note, reviewer, expected):
+    t = {"note": note, "reviewer": reviewer, "capture": {"console_errors": []}}
+    kind, reason = classify(t, Config())
+    assert kind == expected, reason
+
+
+def test_classify_no_card_bias_leans_app():
+    cfg = Config()
+    t = {"note": "the card", "reviewer": {"state": "question", "notetype": None}}
+    assert classify(t, cfg)[0] == "deck"  # 1 deck word, captured on a card
+    cfg.no_card_app_bias = 1.0
+    t["reviewer"]["state"] = "deckBrowser"
+    kind, reason = classify(t, cfg)
+    assert kind == "app" and "leaning app" in reason
+
+
+def test_watch_survives_a_ticket_that_raises(env, monkeypatch):
+    cfg = env["cfg"]
+    make_ticket(cfg, tid="t1", created="2026-09-22T21:00:00-05:00")
+    make_ticket(cfg, tid="t2", created="2026-09-22T22:00:00-05:00")
+    notified = []
+    cfg.notify = True
+    monkeypatch.setattr(runner, "notify", lambda c, msg: notified.append(msg))
+    real = runner.run_ticket
+
+    def fake_run(tid, c, **kw):
+        if tid == "t1":
+            raise RuntimeError("boom from a fake run")
+        return real(tid, c, **kw)
+
+    monkeypatch.setattr(runner, "run_ticket", fake_run)
+    seen = []
+    n = runner.watch(cfg, interval=0, once=True, echo=seen.append)
+    assert n == 2
+    t1 = load_ticket(cfg.tickets_dir, "t1")
+    assert t1["status"] == "failed"
+    assert "RuntimeError: boom from a fake run" in t1["fix"]["summary"]
+    err = (cfg.tickets_dir / "t1" / "error.log").read_text()
+    assert "Traceback" in err and "boom from a fake run" in err
+    assert load_ticket(cfg.tickets_dir, "t2")["status"] == "fixed"
+    assert notified == ["ankifix: t1 failed", "ankifix: t2 fixed"]
+
+
+def test_run_ticket_records_plan_failure_instead_of_raising(env, monkeypatch):
+    cfg = env["cfg"]
+    t = make_ticket(cfg)
+
+    def bad_plan(*a, **k):
+        raise ValueError("plan exploded")
+
+    monkeypatch.setattr(runner, "plan", bad_plan)
+    out = runner.run_ticket(t["id"], cfg, echo=lambda *a: None)
+    assert out["status"] == "failed"  # direct (terminal) run: no automatic retry
+    assert out["fix"]["attempts"] == 1
+    assert "ValueError: plan exploded" in out["fix"]["summary"]
+    assert load_ticket(cfg.tickets_dir, t["id"])["status"] == "failed"
+    assert "plan exploded" in (cfg.tickets_dir / t["id"] / "error.log").read_text()
+
+
+def test_deck_ticket_without_files_access_is_needs_review(env, monkeypatch):
+    cfg = env["cfg"]
+    t = make_ticket(cfg, note="the answer on card C1-Q04 is wrong", kind="deck",
+                    deck_build={"course_dir": str(env["course"]), "build_marker": None})
+    real_open = open
+
+    def tcc_open(path, *a, **k):
+        if str(path).startswith(str(env["build"])):
+            raise PermissionError(1, "Operation not permitted", str(path))
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr("builtins.open", tcc_open)
+    monkeypatch.setattr(runner, "tcc_binary", lambda: "/X/Python.app")
+    cfg.terminal_fallback = False
+    out = runner.run_ticket(t["id"], cfg, echo=lambda *a: None)
+    assert out["status"] == "needs-review"
+    s = out["fix"]["summary"]
+    assert "deck fixes need Files access for the watcher" in s
+    assert f"run `ankifix {t['id']}` from a terminal" in s
+    assert "grant Full Disk Access to /X/Python.app in System Settings > Privacy & Security" in s
+    assert out["fix"]["blocked"] == runner.FILES_ACCESS
+    assert not (env["fake"] / "argv.txt").exists()  # claude never ran
+    # watch() never picks it up again; a terminal run needs no --force
+    monkeypatch.setattr("builtins.open", real_open)
+    assert runner.next_new(cfg) is None
+    assert runner.run_ticket(t["id"], cfg, echo=lambda *a: None)["status"] == "fixed"
+
+
+def test_files_access_error_detection():
+    assert runner.is_files_access_error(PermissionError(1, "Operation not permitted"))
+    assert not runner.is_files_access_error(PermissionError(13, "Permission denied"))
+    assert not runner.is_files_access_error(FileNotFoundError(2, "x"))
+
+
+def test_child_env_has_explicit_path(env, monkeypatch):
+    cfg = env["cfg"]
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    cfg.extra_path = ["/opt/node/bin", "/usr/bin"]
+    e = runner.child_env(cfg, "t1", "app")
+    assert e["PATH"] == "/usr/bin:/bin:/opt/node/bin"
+    assert e["NODE_PATH"] == "/fake/node_modules"
+
+
+def test_write_plist_path_contains_resolved_node_dir(tmp_path, monkeypatch):
+    bindir = tmp_path / "node-home" / "bin"
+    bindir.mkdir(parents=True)
+    node = bindir / "node"
+    node.write_text("#!/bin/sh\n")
+    node.chmod(0o755)
+    monkeypatch.setenv("PATH", f"/usr/bin:/bin:{bindir}")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(agent_mod, "running_watch_pids", lambda: [])
+    dest = agent_mod.install_agent(plist_path=tmp_path / "x.plist", load=False)
+    import plistlib
+    envv = plistlib.loads(dest.read_bytes())["EnvironmentVariables"]
+    parts = envv["PATH"].split(":")
+    assert str(bindir) in parts
+    assert parts.index(str(bindir)) < parts.index("/opt/homebrew/bin")  # resolved dirs first
+    assert envv["HOME"] == str(tmp_path)
+
+
+def test_apply_exports_node_path_and_times_out(apply_repo, monkeypatch):
+    cfg, repo = apply_repo["cfg"], apply_repo["repo"]
+    cfg.apply_node_path = "/live/node_modules"
+    cfg.apply_test_timeout_s = 1
+    t = _apply_ticket_dict("20260922-220400-apply-env", "fix/t1", "main", tests=[
+        'test "$NODE_PATH" = /live/node_modules && command -v node >/dev/null || command -v git >/dev/null',
+        "sleep 30",
+    ])
+    save_ticket(cfg.tickets_dir, t)
+    import time as _time
+    t0 = _time.time()
+    out = apply_mod.apply_ticket(t["id"], cfg, echo=lambda *a: None)
+    assert _time.time() - t0 < 15
+    applied = out["fix"]["applied"]
+    assert applied["tests_passed"] is False
+    assert applied["tests_timed_out"] == ["sleep 30"]
+    env = apply_mod.test_env(cfg)
+    assert env["NODE_PATH"] == "/live/node_modules"
+    assert env["PATH"] == cfg.subprocess_path()
+
+
+def test_retry_cap_gives_up_after_two_attempts(env, monkeypatch):
+    cfg = env["cfg"]
+    t = make_ticket(cfg)
+    calls = []
+
+    def bad_plan(*a, **k):
+        calls.append(1)
+        raise ValueError("plan exploded")
+
+    monkeypatch.setattr(runner, "plan", bad_plan)
+    runner.watch(cfg, interval=0, once=True, echo=lambda *a: None)
+    t1 = load_ticket(cfg.tickets_dir, t["id"])
+    assert t1["status"] == "new" and t1["fix"]["attempts"] == 1
+    assert "will retry" in t1["fix"]["summary"]
+    runner.watch(cfg, interval=0, once=True, echo=lambda *a: None)
+    t2 = load_ticket(cfg.tickets_dir, t["id"])
+    assert t2["status"] == "failed" and t2["fix"]["attempts"] == 2
+    assert "gave up after 2 attempts" in t2["fix"]["summary"]
+    runner.watch(cfg, interval=0, once=True, echo=lambda *a: None)
+    assert len(calls) == 2  # never retried automatically again
+
+
+def test_stale_fixing_ticket_is_requeued_then_given_up(env):
+    cfg = env["cfg"]
+    fix = runner.new_fix("2026-09-23T01:00:00-05:00")
+    fix.update(pid=999999, attempts=1)
+    t = make_ticket(cfg, status="fixing", fix=fix)
+    assert runner.recover_stale(cfg, echo=lambda *a: None) == [t["id"]]
+    assert load_ticket(cfg.tickets_dir, t["id"])["status"] == "new"
+    fix["attempts"] = 2
+    t = make_ticket(cfg, status="fixing", fix=fix)
+    runner.recover_stale(cfg, echo=lambda *a: None)
+    t2 = load_ticket(cfg.tickets_dir, t["id"])
+    assert t2["status"] == "failed" and "gave up after 2 attempts" in t2["fix"]["summary"]
+    # a live pid (this process) is not stale
+    fix.update(pid=os.getpid(), attempts=1)
+    make_ticket(cfg, status="fixing", fix=fix)
+    assert runner.recover_stale(cfg, echo=lambda *a: None) == []
+
+
+def test_watch_logs_startup_line(env):
+    seen = []
+    runner.watch(env["cfg"], interval=0, once=True, echo=seen.append)
+    assert seen[0].startswith(f"ankifix: watcher started pid {os.getpid()}")
+
+
+FAKE_OSASCRIPT = r"""#!/bin/bash
+# Fake osascript: record the script; for a Terminal `do script "..."`, run the
+# shell command in the background the way Terminal.app would.
+printf '%s\n' "$@" >> "$FAKE_DIR/osascript.txt"
+if [ -n "$FAKE_OSA_DENY" ]; then
+  echo "execution error: Not authorized to send Apple events to Terminal. (-1743)" >&2
+  exit 1
+fi
+script="$2"
+cmd=$(printf '%s' "$script" | sed -n 's/^tell application "Terminal" to do script "\(.*\)"$/\1/p' | sed 's/\\"/"/g')
+[ -n "$cmd" ] && (bash -c "$cmd" > "$FAKE_DIR/terminal_out.txt" 2>&1 &)
+exit 0
+"""
+
+
+def _tcc_deck_setup(env, monkeypatch):
+    cfg = env["cfg"]
+    bindir = env["tmp"] / "bin"
+    osa = bindir / "osascript"
+    osa.write_text(FAKE_OSASCRIPT)
+    osa.chmod(0o755)
+    ankifix_bin = bindir / "ankifix-test"
+    ankifix_bin.write_text(f"#!/bin/bash\nexec {sys.executable} -m ankifix \"$@\"\n")
+    ankifix_bin.chmod(0o755)
+    cfg.ankifix_bin = str(ankifix_bin)
+    cfg.osascript_bin = str(osa)
+    cfg.terminal_poll_s = 0.2
+    cfg.terminal_fallback_timeout_min = 1
+    # the Terminal child reads config from the environment
+    monkeypatch.setenv("ANKIFIX_TICKETS_DIR", str(cfg.tickets_dir))
+    monkeypatch.setenv("ANKIFIX_APP_REPO", str(cfg.app_repo))
+    monkeypatch.setenv("ANKIFIX_DECK_BUILD_DIR", str(env["build"]))
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
+    # only this (the watcher) process is TCC-blocked; the Terminal child is not
+    monkeypatch.setattr(runner, "probe_files_access",
+                        lambda d: PermissionError(1, "Operation not permitted", str(d / "build_out.json")))
+    t = make_ticket(cfg, note="the answer on card C1-Q04 is wrong", kind="deck",
+                    deck_build={"course_dir": str(env["course"]), "build_marker": None})
+    return cfg, t
+
+
+def test_tcc_deck_ticket_runs_through_terminal(env, monkeypatch):
+    cfg, t = _tcc_deck_setup(env, monkeypatch)
+    out = runner.run_ticket(t["id"], cfg, echo=lambda *a: None)
+    assert out["status"] == "fixed", (env["fake"] / "terminal_out.txt").read_text()
+    assert out["kind"] == "deck"
+    osa = (env["fake"] / "osascript.txt").read_text()
+    assert 'tell application "Terminal" to do script' in osa
+    assert f"{t['id']} --once-from-terminal" in osa
+    assert "APPLY WITH ANKI+ CLOSED" in out["fix"]["summary"]
+
+
+def test_tcc_deck_ticket_osascript_denied_is_needs_review(env, monkeypatch):
+    cfg, t = _tcc_deck_setup(env, monkeypatch)
+    monkeypatch.setenv("FAKE_OSA_DENY", "1")
+    monkeypatch.setattr(runner, "tcc_binary", lambda: "/X/Python.app")
+    out = runner.run_ticket(t["id"], cfg, echo=lambda *a: None)
+    assert out["status"] == "needs-review"
+    s = out["fix"]["summary"]
+    assert "deck fixes need Files access for the watcher" in s
+    assert "grant Full Disk Access to /X/Python.app" in s
+    assert "Not authorized to send Apple events" in s
+    assert out["fix"]["blocked"] == runner.FILES_ACCESS
+
+
+def test_install_agent_refuses_when_tools_missing(tmp_path, monkeypatch):
+    from ankifix import doctor as doctor_mod
+    monkeypatch.setenv("PATH", str(tmp_path))  # nothing resolvable
+    monkeypatch.setattr(agent_mod, "DEFAULT_PATH_ENV", str(tmp_path))
+    monkeypatch.setattr(agent_mod, "running_watch_pids", lambda: [])
+    monkeypatch.setattr(doctor_mod, "check_notifications", lambda c, p: doctor_mod.Check("n", True, ""))
+    cfg = Config()
+    cfg.tickets_dir = tmp_path / "t"
+    cfg.deck_build_dir = tmp_path
+    dest = tmp_path / "x.plist"
+    lines = []
+    with pytest.raises(runner.AnkifixError, match="refusing to install"):
+        agent_mod.install_agent(plist_path=dest, cfg=cfg, echo=lines.append, load=False)
+    assert not dest.exists()
+    assert any(l.startswith("FAIL  node on agent PATH") for l in lines)
+
+
+def test_doctor_exit_code_and_output(tmp_path, monkeypatch):
+    from ankifix import doctor as doctor_mod
+    cfg = Config()
+    cfg.tickets_dir = tmp_path / "t"
+    cfg.deck_build_dir = tmp_path / "nope"
+    monkeypatch.setattr(doctor_mod, "check_agent", lambda: doctor_mod.Check("agent", True, "pid 1"))
+    monkeypatch.setattr(doctor_mod, "check_notifications", lambda c, p: doctor_mod.Check("n", True, ""))
+    lines = []
+    rc = doctor_mod.doctor(cfg, echo=lines.append, path=str(tmp_path))
+    assert rc == 1
+    assert any(l.startswith("PASS  tickets dir writable") for l in lines)
+    assert any(l.startswith("FAIL  course build dir readable") for l in lines)
+
+
+def test_watch_check_notifies_on_flip(tmp_path, monkeypatch):
+    from ankifix import doctor as doctor_mod
+    cfg = Config()
+    cfg.notify = True
+    sent = []
+    monkeypatch.setattr(doctor_mod, "notify", lambda c, m: sent.append(m))
+    state = {"x": True}
+    monkeypatch.setattr(doctor_mod, "run_checks",
+                        lambda *a, **k: [doctor_mod.Check("x", state["x"], "")])
+    prev = doctor_mod.watch_check(cfg, {}, echo=lambda *a: None)
+    assert sent == []
+    state["x"] = False
+    prev = doctor_mod.watch_check(cfg, prev, echo=lambda *a: None)
+    prev = doctor_mod.watch_check(cfg, prev, echo=lambda *a: None)
+    assert sent == ["ankifix doctor FAIL: x"]  # once, on the flip

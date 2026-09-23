@@ -72,6 +72,11 @@ class Config:
             "deck deadline", "card browser", "add card", "add-card",
             "card info", "show answer button", "answer button",
             "answer buttons", "card count", "card counts",
+            "another deck", "other deck", "different deck", "into a deck",
+            "to a deck", "place in the deck", "position in the deck",
+            "list of decks", "order of decks", "deck order",
+            "deck name", "deck names", "names of decks", "name of the deck",
+            "names of the decks", "deck column", "deck title", "deck titles",
         ]
     )
     app_keywords: List[str] = field(
@@ -83,8 +88,23 @@ class Config:
             "heatmap", "backdrop", "video", "window", "add-on", "addon",
             "click", "scroll", "theme", "dark mode", "browser", "popup",
             "deck browser", "card browser", "add card",
+            # UI interaction: "select these cards and drag them to another
+            # deck" is a feature request against the app, not a card fix
+            "select", "selecting", "selected", "selection", "multi-select",
+            "drag", "dragging", "drop", "drag and drop", "drag-and-drop",
+            "dropdown", "drop-down", "deck list", "full screen", "fullscreen",
+            "resort", "re-sort", "reorder", "re-order", "reordering",
+            "shortcuts", "scrolling", "scrolls",
+            "search bar", "searchbar", "column", "columns", "anki plus",
+            "anki+", "layout", "formatting", "punctuation",
         ]
     )
+    # a ticket with no reviewer.notetype whose reviewer.state is not
+    # "question"/"answer", or that has no reviewer.card_id (ankibug records
+    # state "question" on the deck list too), i.e. was not captured on a
+    # card, gets this many extra
+    # app points; below 1 so a single clear deck word still wins
+    no_card_app_bias: float = 0.5
 
     # --- claude ---------------------------------------------------------
     claude_bin: str = "claude"
@@ -163,6 +183,50 @@ class Config:
     # NODE_PATH exported while running ticket.fix.tests during `ankifix apply`
     # (the live checkout's own playwright/npx cache, not the fixer worktree's).
     apply_node_path: str = str(HOME / ".npm/_npx/6bcb61ec6d5aea22/node_modules")
+    # per-command timeout (seconds) for each ticket.fix.tests re-run during
+    # `ankifix apply`, so a hung node/Playwright test cannot block the watcher
+    apply_test_timeout_s: float = 120.0
+
+    # --- subprocess PATH --------------------------------------------------
+    # directories prepended (if missing) to PATH for the `claude -p` child and
+    # the apply step's test runs. launchd starts the watcher with a minimal
+    # PATH; node lives in ~/.local/node/bin, which is on no default PATH.
+    extra_path: List[str] = field(
+        default_factory=lambda: [
+            str(HOME / ".local/node/bin"), str(HOME / ".local/bin"),
+            "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
+        ]
+    )
+
+    # --- autonomy ---------------------------------------------------------
+    # a ticket whose run raises (not a normal failed fix) is retried by the
+    # watcher on its next poll, up to this many attempts in total; then it is
+    # marked failed "gave up after N attempts" and never retried automatically.
+    # A ticket left "fixing" by a watcher that died (sleep, kill) counts too.
+    max_attempts: int = 2
+    # deck tickets the launchd watcher cannot read (macOS TCC, EPERM on
+    # ~/Library/CloudStorage) are handed to Terminal.app, which has Files
+    # access: osascript `do script "<ankifix_bin> <id> --once-from-terminal"`
+    terminal_fallback: bool = True
+    ankifix_bin: str = str(HOME / ".venvs/ankibug/bin/ankifix")
+    osascript_bin: str = "osascript"
+    # osascript itself (Automation permission prompt can hang unattended)
+    osascript_timeout_s: float = 150.0
+    # how long the watcher waits for the Terminal run to finish ticket.json
+    terminal_fallback_timeout_min: float = 40.0
+    terminal_poll_s: float = 5.0
+    # light `ankifix doctor` inside --watch; a check flipping to FAIL posts a
+    # notification. 0 disables.
+    doctor_interval_s: float = 3600.0
+
+    def subprocess_path(self) -> str:
+        """os.environ PATH with extra_path entries appended where missing."""
+        parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+        for d in self.extra_path:
+            d = str(Path(d).expanduser())
+            if d not in parts:
+                parts.append(d)
+        return os.pathsep.join(parts)
 
     def worktree_path(self, ticket_id: str) -> Path:
         return self.app_repo / self.worktrees_subdir / f"fix-{ticket_id}"

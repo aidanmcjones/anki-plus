@@ -41,11 +41,22 @@ def classify(ticket: Dict[str, Any], cfg: Config, override: Optional[str] = None
     app_hits = [h for h in app_hits if not any(h != o and h in o for o in app_hits)]
 
     capture = ticket.get("capture") or {}
-    app_score = len(app_hits) + (1 if capture.get("console_errors") else 0)
+    app_score: float = len(app_hits) + (1 if capture.get("console_errors") else 0)
     deck_score = len(deck_hits)
+    # not captured on a card (no notetype, reviewer not showing a question or
+    # answer): lean app, but less than one deck word
+    on_card = bool(notetype) or (
+        reviewer.get("state") in ("question", "answer")
+        and ("card_id" not in reviewer or reviewer.get("card_id") is not None)
+    )
+    lean = "" if on_card else "; not captured on a card, leaning app"
+    if not on_card:
+        app_score += cfg.no_card_app_bias
 
     if deck_score > app_score:
-        return "deck", f"note mentions {deck_hits} (app hints: {app_hits})"
+        return "deck", f"note mentions {deck_hits} (app hints: {app_hits}{lean})"
     if app_hits or capture.get("console_errors"):
-        return "app", f"note mentions {app_hits or 'console errors'} (deck hints: {deck_hits})"
+        return "app", f"note mentions {app_hits or 'console errors'} (deck hints: {deck_hits}{lean})"
+    if deck_hits:
+        return "app", f"deck hints {deck_hits} do not outweigh app lean{lean}; defaulting to app"
     return "app", "no course notetype and no deck keywords; defaulting to app"

@@ -12,7 +12,7 @@ from .config import load_config
 from .runner import AnkifixError, LockBusy, plan, run_ticket, ticket_lock, watch
 from .tickets import load_ticket, write_index
 
-SUBCOMMANDS = ("apply", "install-agent", "uninstall-agent")
+SUBCOMMANDS = ("apply", "install-agent", "uninstall-agent", "doctor")
 
 
 def build_apply_parser() -> argparse.ArgumentParser:
@@ -56,10 +56,27 @@ def cmd_apply(args: argparse.Namespace) -> int:
         return 2
 
 
+def build_doctor_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        prog="ankifix doctor",
+        description="Check that the watcher can do its job: tools on the agent PATH, Playwright "
+        "NODE_PATH, addon repo, tickets dir, course build dir (macOS Files access), launchd "
+        "agent, notifications. Exits 1 on any FAIL.",
+    )
+    ap.add_argument("--config", help="config JSON (default ~/.config/ankifix/config.json)")
+    return ap
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    from . import doctor as doctor_mod
+
+    return doctor_mod.doctor(load_config(args.config))
+
+
 def cmd_install_agent(args: argparse.Namespace) -> int:
-    load_config(args.config)  # validates --config even though the plist doesn't need it
+    cfg = load_config(args.config)
     try:
-        agent_mod.install_agent(interval=args.interval)
+        agent_mod.install_agent(interval=args.interval, cfg=cfg)
         return 0
     except AnkifixError as e:
         print(f"ankifix: {e}", file=sys.stderr)
@@ -99,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-notify", dest="notify", action="store_false",
         help="with --watch: disable the notification set by the notify config key",
     )
+    ap.add_argument(
+        "--once-from-terminal", action="store_true",
+        help="internal: the Terminal.app side of the watcher's Files-access fallback; runs this "
+        "one ticket without taking the lock (the waiting watcher holds it)",
+    )
     ap.add_argument("--config", help="config JSON (default ~/.config/ankifix/config.json)")
     return ap
 
@@ -118,6 +140,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_install_agent(build_install_agent_parser().parse_args(rest))
         if name == "uninstall-agent":
             return cmd_uninstall_agent(build_uninstall_agent_parser().parse_args(rest))
+        if name == "doctor":
+            return cmd_doctor(build_doctor_parser().parse_args(rest))
 
     args = build_parser().parse_args(argv)
     cfg = load_config(args.config)
@@ -153,8 +177,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"# cmd: {shlex.join(p['cmd'])} < prompt", file=sys.stderr)
             print(p["prompt"])
             return 0
-        with ticket_lock(cfg.tickets_dir):
-            t = run_ticket(args.ticket_id, cfg, kind_override=args.kind, force=args.force)
+        if args.once_from_terminal:
+            t = run_ticket(args.ticket_id, cfg, kind_override=args.kind, force=True,
+                           from_terminal=True)
+        else:
+            with ticket_lock(cfg.tickets_dir):
+                t = run_ticket(args.ticket_id, cfg, kind_override=args.kind, force=args.force)
         return 0 if t.get("status") == "fixed" else 1
     except (AnkifixError, FileNotFoundError) as e:
         print(f"ankifix: {e}", file=sys.stderr)

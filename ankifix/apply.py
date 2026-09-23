@@ -17,9 +17,10 @@ user's manual step.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import Config
 from .runner import AnkifixError, notify
@@ -33,6 +34,44 @@ def _run(cwd: Path, args: List[str], input_text: Optional[str] = None,
     return subprocess.run(
         args, cwd=str(cwd), input=input_text, capture_output=True, text=True, env=env,
     )
+
+
+def test_env(cfg: Config) -> Dict[str, str]:
+    """Environment for re-running ticket.fix.tests: explicit PATH (node lives
+    in ~/.local/node/bin, which launchd's PATH lacks) and NODE_PATH =
+    cfg.apply_node_path (the live checkout's Playwright cache)."""
+    env = dict(os.environ)
+    env["PATH"] = cfg.subprocess_path()
+    env.setdefault("HOME", str(Path.home()))
+    env["NODE_PATH"] = cfg.apply_node_path
+    return env
+
+
+def run_test_command(cmd: str, cwd: Path, env: Dict[str, str],
+                     timeout_s: float) -> Tuple[Optional[int], str, str, bool]:
+    """Run one shell test command in its own process group. On timeout the
+    whole group (shell plus node/Playwright children) is killed. Returns
+    (rc, stdout, stderr, timed_out)."""
+    proc = subprocess.Popen(
+        cmd, shell=True, cwd=str(cwd), env=env, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, start_new_session=True,
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout_s)
+        return proc.returncode, out, err, False
+    except subprocess.TimeoutExpired:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(proc.pid, sig)
+            except ProcessLookupError:
+                break
+            try:
+                out, err = proc.communicate(timeout=5)
+                break
+            except subprocess.TimeoutExpired:
+                out, err = "", ""
+                continue
+        return proc.returncode, out or "", err or "", True
 
 
 def apply_ticket(ticket_id: str, cfg: Config, echo=print) -> Dict[str, Any]:
@@ -93,16 +132,22 @@ def apply_ticket(ticket_id: str, cfg: Config, echo=print) -> Dict[str, Any]:
 
     (tdir / PATCH_NAME).write_text(patch_text)
 
-    env = dict(os.environ)
-    env["NODE_PATH"] = cfg.apply_node_path
+    env = test_env(cfg)
     tests_passed = True
+    timed_out_tests: List[str] = []
     for cmd in fix.get("tests") or []:
-        r = subprocess.run(cmd, shell=True, cwd=str(repo), env=env, capture_output=True, text=True)
-        if r.returncode != 0:
+        rc, out, err, timed_out = run_test_command(cmd, repo, env, cfg.apply_test_timeout_s)
+        if timed_out:
             tests_passed = False
-            echo(f"ankifix: {ticket_id} apply test failed: {cmd}\n{r.stdout}\n{r.stderr}")
+            timed_out_tests.append(cmd)
+            echo(f"ankifix: {ticket_id} apply test timed out after {cfg.apply_test_timeout_s:g}s: {cmd}")
+        elif rc != 0:
+            tests_passed = False
+            echo(f"ankifix: {ticket_id} apply test failed: {cmd}\n{out}\n{err}")
 
     ticket["fix"]["applied"] = {"at": now_iso(), "patch": PATCH_NAME, "tests_passed": tests_passed}
+    if timed_out_tests:
+        ticket["fix"]["applied"]["tests_timed_out"] = timed_out_tests
     save_ticket(cfg.tickets_dir, ticket)
     notify(cfg, f"ankifix: {ticket_id} applied, restart Anki+")
     echo(f"ankifix: {ticket_id} applied to {repo} (tests_passed={tests_passed})")

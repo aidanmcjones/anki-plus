@@ -11,8 +11,9 @@ ankifix --watch --once             # drain the queue once and exit
 ankifix --watch --notify|--no-notify  # override the notify config key for this run
 ankifix --reindex                  # regenerate ~/AnkiTickets/index.md
 ankifix apply <id>                 # apply an app ticket's fix branch to the live checkout
-ankifix install-agent [--interval 20]  # write+load the launchd LaunchAgent for --watch
+ankifix install-agent [--interval 20]  # doctor, then write+load the launchd LaunchAgent
 ankifix uninstall-agent            # unload+remove the LaunchAgent
+ankifix doctor                     # PASS/FAIL health checks; exit 1 on any FAIL
   --kind app|deck                  # override classification
   --max-turns 60  --timeout-min 25 --max-budget-usd X  --model M  --force
 ```
@@ -29,6 +30,15 @@ from `docs/prompt_app.md` and `docs/prompt_deck.md` in this repo).
    UI, deadline, hotkey, crash, button, ...). App surfaces that contain deck words
    ("deck browser", "answer button", "add card") are removed before deck words
    are counted. Console errors add one point to app. Ties go to app.
+   UI-interaction words (select, drag, drop, drag and drop, dropdown, deck
+   list, full screen, resort, reorder, shortcut, scroll, ...) count for app,
+   and phrases like "another deck" / "place in the deck" / "list of decks" are
+   stripped before deck words are counted, so "select cards and drag them to
+   another deck" is an app feature request, not a card fix. A ticket with no
+   `reviewer.notetype` whose `reviewer.state` is neither `question` nor
+   `answer` (not captured on a card) gets `no_card_app_bias` (0.5) extra app
+   points: enough to break a tie, never enough to beat one clear deck word
+   ("the answer on card C2-Q05 is wrong" is still deck).
 
 All lists live in `ankifix/config.py` and can be overridden in
 `~/.config/ankifix/config.json` (any `Config` field, e.g.
@@ -248,24 +258,123 @@ if `terminal-notifier` is on `PATH` it's used; otherwise, if `osascript` is,
 `ankifix install-agent` writes
 `~/Library/LaunchAgents/com.aidanjones.ankifix-watch.plist` (`ProgramArguments`
 `[~/.venvs/ankibug/bin/ankifix, --watch, --interval, 20]`, `RunAtLoad` and
-`KeepAlive` both true, stdout/stderr to `~/AnkiTickets/ankifix-watch.log`,
-`PATH` including `~/.local/bin` - where the `claude` binary lives - plus
-Homebrew/usr paths for `git`/`node`/`python3`) and loads it with
+`KeepAlive` both true, `ThrottleInterval` 30, stdout/stderr to
+`~/AnkiTickets/ankifix-watch.log`, and `EnvironmentVariables` `PATH` + `HOME`)
+and loads it with
 `launchctl bootstrap gui/$(id -u) <plist>`. `ankifix uninstall-agent` runs
 `launchctl bootout gui/$(id -u)/com.aidanjones.ankifix-watch` and removes the
 file.
+
+`PATH` is resolved at install time: the directory of each of `node`,
+`claude`, `git`, `python3` as `shutil.which` finds it on the installing
+shell's PATH (so `~/.local/node/bin` for node), first, then
+`~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`. `HOME` is the
+installer's. Before this, the plist PATH had no node directory, so the fixer
+reported "no node binary exists on this machine" and the apply step's node
+tests failed with `node: command not found` (tickets 232122, 085108).
+Independently of the plist, `claude -p` and the apply step's test runs get
+an explicit `PATH` (`env=`): the process PATH plus any missing `extra_path`
+entries (default `~/.local/node/bin`, `~/.local/bin`, Homebrew, `/usr/bin`,
+`/bin`). Apply test runs also get `NODE_PATH=apply_node_path`, run in their
+own process group, and are killed after `apply_test_timeout_s` (120 s)
+each, recorded in `fix.applied.tests_timed_out`.
 
 `install-agent` refuses (non-zero, clear message) if `pgrep -f
 "ankifix.*--watch"` finds a running watcher, so a hand-started
 (`nohup ankifix --watch ...`) and a launchd-started watcher can never run
 against the same tickets dir at once.
 
-**Migration from the nohup watcher**: the orchestrator runs this once the
-current `nohup ankifix --watch --interval 20` (pid 73347) has been stopped:
+New config keys (all optional in `~/.config/ankifix/config.json`):
+`no_card_app_bias` (0.5), `apply_test_timeout_s` (120), `extra_path`,
+`max_attempts` (2), `terminal_fallback` (true), `ankifix_bin`,
+`osascript_bin`, `osascript_timeout_s` (150), `terminal_fallback_timeout_min`
+(40), `terminal_poll_s` (5), `doctor_interval_s` (3600).
+
+## Autonomy: the watcher never dies on one ticket
+
+Overnight on 2026-09-23 the LaunchAgent crash-looped 84 times on ticket
+`20260923-085141`: it was classified deck, the deck prompt opened
+`build_out.json` under `~/Library/CloudStorage/...`, macOS refused
+(`PermissionError: [Errno 1] Operation not permitted`, a TCC denial, since a
+launchd agent has no Files and Folders access), the exception escaped
+`run_ticket` (the prompt was rendered before its `try`), the process exited
+1, `KeepAlive` respawned it, and it hit the same ticket again. What now
+prevents each part of that:
+
+- **Every failure is recorded on the ticket.** `run_ticket` classifies,
+  plans, renders and runs inside one `try`; any exception sets `status`
+  and `fix.summary` (the error) and appends the traceback to
+  `<ticket>/error.log` (`fix.error_log`). `watch()` additionally wraps each
+  `run_ticket`, each auto-apply and the whole poll pass in `except
+  Exception`, notifies, and moves on. A ticket whose result cannot even be
+  saved is skipped for the life of the process.
+- **Retry cap.** `fix.attempts` counts runs. In `--watch`, a run that raised
+  goes back to `new` and is retried on the next poll; the second exception
+  marks it `failed` with `gave up after 2 attempts` and it is never retried
+  automatically (`max_attempts`, default 2). A ticket left `fixing` by a
+  watcher that died mid-run (`fix.pid` no longer alive: Mac slept, killed)
+  is requeued the same way on the next poll, and given up at the cap.
+- **ThrottleInterval 30** in the plist: launchd waits 30 s before respawning
+  a watcher that exited, so even a crash that escapes all of the above
+  cannot spin. Each start logs `ankifix: watcher started pid N`, so restarts
+  are visible in `~/AnkiTickets/ankifix-watch.log`.
+- **Hourly doctor.** Every `doctor_interval_s` (3600) the watcher runs the
+  light checks below against the PATH it hands its children and posts a
+  notification when one flips to FAIL.
+
+## Deck tickets and macOS Files access (TCC)
+
+A launchd agent cannot read `~/Library/CloudStorage` (OneDrive) until it is
+granted access. Before a deck run the watcher probes the build dir (list it,
+open `build_out.json`). On `EPERM`:
+
+1. **Terminal fallback** (`terminal_fallback`, default on). The ticket is
+   handed to Terminal.app, which has Files access:
+   `osascript -e 'tell application "Terminal" to do script "~/.venvs/ankibug/bin/ankifix <id> --once-from-terminal; exit"'`.
+   `--once-from-terminal` runs that one ticket without taking the lock (the
+   watcher holds it while it waits) and without a fallback of its own. The
+   watcher polls `ticket.json` every 5 s until the status leaves `fixing`
+   (up to `terminal_fallback_timeout_min`, 40). The first time, macOS asks
+   whether Python may control Terminal (Automation); allow it once.
+2. If osascript is refused (Automation denied, error -1743) or times out, the
+   ticket becomes `needs-review` with `fix.blocked: "files-access"` and the
+   summary: *deck fixes need Files access for the watcher; run `ankifix <id>`
+   from a terminal, or grant Full Disk Access to <python> in System Settings
+   > Privacy & Security*. A `files-access` ticket can be re-run with
+   `ankifix <id>` without `--force`.
+
+**One-time step that removes the fallback entirely:** System Settings >
+Privacy & Security > Full Disk Access > `+`, press Cmd+Shift+G and add
 
 ```
-ankifix install-agent --interval 20
+/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app
 ```
+
+Why that path: `~/.venvs/ankibug/bin/python` is a symlink to
+`/Library/Developer/CommandLineTools/usr/bin/python3` (the Command Line Tools
+python 3.9.6, `com.apple.python3`), a framework build that re-execs
+`Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python`.
+`ps` on the running watcher shows that binary, so it is what TCC attributes
+the file access to (`ankifix doctor` prints it). The grant covers every
+script run by the Command Line Tools python, not just ankifix. After
+granting, `launchctl kickstart -k gui/$(id -u)/com.aidanjones.ankifix-watch`.
+
+## ankifix doctor
+
+Prints `PASS`/`FAIL` per check and exits 1 on any FAIL:
+
+- `claude`, `git`, `node`, `python3` resolvable on the agent PATH (the
+  installed plist's PATH, or what install-agent would write);
+- `require('playwright')` works with `node_path` and with `apply_node_path`;
+- the addon repo is a git checkout, `git status` works, the base branch exists;
+- the tickets dir is writable;
+- the course build dir is readable (the TCC check: opens `build_out.json`);
+- the launchd agent is loaded and has a PID;
+- an osascript notification posts.
+
+`install-agent` runs it (minus the agent check) before loading the plist and
+refuses when any of the four tools is missing. The watcher runs the light
+subset (no agent, no notification) hourly.
 
 ## Locking
 

@@ -1,6 +1,7 @@
 """Run one ticket through `claude -p` and record the outcome in ticket.json."""
 from __future__ import annotations
 
+import errno
 import fcntl
 import hashlib
 import json
@@ -9,8 +10,10 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
+import traceback
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -21,7 +24,11 @@ from .config import Config
 from .tickets import load_ticket, now_iso, save_ticket, ticket_dir
 
 LOG_NAME = "fix.log"
+ERROR_LOG_NAME = "error.log"
 LOCK_NAME = ".ankifix.lock"
+# fix.blocked value for a deck ticket the watcher cannot read (macOS TCC)
+FILES_ACCESS = "files-access"
+CLOUD_STORAGE = Path.home() / "Library/CloudStorage"
 
 TEST_PATTERNS = [
     r"node\s+tests/[\w./-]+\.cjs",
@@ -120,6 +127,71 @@ def branch_pushed(cfg: Config, wt: Path, ticket_id: str) -> bool:
         f"refs/remotes/{cfg.app_remote}/{cfg.branch_name(ticket_id)}", check=False,
     )
     return bool(remote) and remote == git(wt, "rev-parse", "HEAD", check=False)
+
+
+# ------------------------------------------------------ files access (TCC)
+def is_files_access_error(e: BaseException) -> bool:
+    """macOS TCC refusal: open() of a protected folder raises EPERM (errno 1),
+    not EACCES, for a process with no Files and Folders / Full Disk Access
+    grant (a launchd agent reading ~/Library/CloudStorage, for example)."""
+    return isinstance(e, PermissionError) and e.errno == errno.EPERM
+
+
+def tcc_binary() -> str:
+    """The binary macOS TCC attributes this process's file access to.
+
+    The ankibug venv python is a symlink chain to the CommandLineTools
+    python3, a framework build whose bin/python3.9 re-execs
+    Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python;
+    that app bundle is what Full Disk Access has to be granted to."""
+    real = Path(os.path.realpath(sys.executable))
+    if ".framework/Versions/" in str(real):
+        app = real.parent.parent / "Resources" / "Python.app"
+        if app.is_dir():
+            return str(app)
+    return str(real)
+
+
+def files_access_summary(ticket_id: str, path: Any = None) -> str:
+    where = f" ({path} is under {CLOUD_STORAGE})" if path and str(path).startswith(str(CLOUD_STORAGE)) else (
+        f" ({path})" if path else "")
+    return (
+        f"deck fixes need Files access for the watcher{where}; run `ankifix {ticket_id}` "
+        f"from a terminal, or grant Full Disk Access to {tcc_binary()} in System Settings "
+        "> Privacy & Security"
+    )
+
+
+def probe_files_access(build_dir: Path) -> Optional[PermissionError]:
+    """Try to list build_dir and open a file in it. Returns the EPERM error if
+    TCC blocks it, else None (other errors are left to the real run)."""
+    try:
+        names = sorted(os.listdir(build_dir))
+        for name in ("build_out.json", "build_deck.py"):
+            if name in names:
+                with open(Path(build_dir) / name, "rb") as fh:
+                    fh.read(1)
+                break
+    except PermissionError as e:
+        if is_files_access_error(e):
+            return e
+    except OSError:
+        pass
+    return None
+
+
+def write_error_log(tdir: Path, ticket_id: str, e: BaseException) -> Optional[Path]:
+    """Append the traceback of e to <ticket>/error.log. Never raises."""
+    try:
+        tdir.mkdir(parents=True, exist_ok=True)
+        path = tdir / ERROR_LOG_NAME
+        with open(path, "a") as fh:
+            fh.write(f"=== {now_iso()} ankifix {ticket_id}: {type(e).__name__}: {e}\n")
+            fh.write("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+            fh.write("\n")
+        return path
+    except OSError:
+        return None
 
 
 # ------------------------------------------------------------------- claude
@@ -289,6 +361,10 @@ def child_env(cfg: Config, ticket_id: str, kind: str) -> Dict[str, str]:
     env = dict(os.environ)
     for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
         env.pop(k, None)
+    # explicit, so claude (and the node/git/python3 it runs) resolve even
+    # under launchd's minimal PATH
+    env["PATH"] = cfg.subprocess_path()
+    env.setdefault("HOME", str(Path.home()))
     env["NODE_PATH"] = cfg.node_path
     env["ANKIFIX_TICKET_ID"] = ticket_id
     env["ANKIFIX_KIND"] = kind
@@ -314,33 +390,71 @@ def plan(ticket: Dict[str, Any], cfg: Config, kind_override: Optional[str] = Non
     }
 
 
+def new_fix(started: Optional[str] = None, prev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """A schema-complete ticket.fix, carrying attempts over from prev."""
+    fix: Dict[str, Any] = {
+        "branch": None, "commits": [], "tests": [], "log_path": LOG_NAME,
+        "started": started, "finished": None, "summary": None,
+    }
+    if prev and prev.get("attempts"):
+        fix["attempts"] = prev["attempts"]
+    return fix
+
+
 def run_ticket(
     ticket_id: str, cfg: Config, kind_override: Optional[str] = None,
-    force: bool = False, echo=print,
+    force: bool = False, echo=print, retry_on_error: bool = False,
+    from_terminal: bool = False,
 ) -> Dict[str, Any]:
+    """Run one ticket. Never raises for a failure inside the run (only for a
+    refused status or a missing ticket): the outcome is recorded on the
+    ticket. retry_on_error (watch mode) puts a ticket whose run raised back
+    to status new until cfg.max_attempts; from_terminal is the Terminal.app
+    child of the TCC fallback (no fallback of its own, attempt not counted)."""
     ticket = load_ticket(cfg.tickets_dir, ticket_id)
     status = ticket.get("status")
-    if status in ("fixed", "needs-review", "wontfix", "fixing") and not force:
+    prev_fix = ticket.get("fix") if isinstance(ticket.get("fix"), dict) else {}
+    # a ticket parked because the watcher had no Files access may be run from
+    # a terminal without --force; that is the documented remedy
+    parked = status == "needs-review" and prev_fix.get("blocked") == FILES_ACCESS
+    if status in ("fixed", "needs-review", "wontfix", "fixing") and not force and not parked:
         raise AnkifixError(f"ticket {ticket_id} is {status}; pass --force to run anyway")
     tdir = ticket_dir(cfg.tickets_dir, ticket_id)
     log_path = tdir / LOG_NAME
     started = now_iso()
     t0 = time.time()
 
-    p = plan(ticket, cfg, kind_override)
-    kind = p["kind"]
-    ticket["kind"] = kind
     ticket["status"] = "fixing"
-    ticket["fix"] = {
-        "branch": cfg.branch_name(ticket_id) if kind == "app" else None,
-        "commits": [], "tests": [], "log_path": LOG_NAME,
-        "started": started, "finished": None, "summary": None,
-    }
-    save_ticket(cfg.tickets_dir, ticket)
-    echo(f"ankifix: {ticket_id} kind={kind} ({p['reason']})")
-
+    ticket["fix"] = new_fix(started, prev_fix)
+    ticket["fix"]["pid"] = os.getpid()
+    if not from_terminal:
+        ticket["fix"]["attempts"] = int(prev_fix.get("attempts") or 0) + 1
+    attempts = int(ticket["fix"].get("attempts") or 1)
     summary_extra: List[str] = []
+    kind = ticket.get("kind")
+    deck_dir: Optional[Path] = None
     try:
+        save_ticket(cfg.tickets_dir, ticket)
+        # plan() reads build_out.json for deck tickets, so it is inside the
+        # try: any failure here is recorded on the ticket, never raised
+        # past the watcher.
+        kind, reason = classify(ticket, cfg, kind_override)
+        if not kind_override and ticket.get("kind") in ("app", "deck"):
+            kind, reason = ticket["kind"], "kind already set on ticket"
+        if kind == "deck":
+            deck_dir = prompts.deck_build_dir(ticket, cfg)
+            blocked = probe_files_access(deck_dir)
+            if blocked:
+                if cfg.terminal_fallback and not from_terminal:
+                    return run_via_terminal(ticket, cfg, blocked, deck_dir, echo=echo)
+                raise blocked
+        p = plan(ticket, cfg, kind_override)
+        kind = p["kind"]
+        ticket["kind"] = kind
+        ticket["fix"]["branch"] = cfg.branch_name(ticket_id) if kind == "app" else None
+        save_ticket(cfg.tickets_dir, ticket)
+        echo(f"ankifix: {ticket_id} kind={kind} ({p['reason']})")
+
         if kind == "app":
             cwd = prepare_worktree(cfg, ticket_id)
             p["prompt"] = prompts.render(ticket, kind, cfg)  # CLAUDE.md now from the worktree
@@ -414,45 +528,251 @@ def run_ticket(
         else:
             ticket["status"] = "failed"
     except BaseException as e:  # noqa: BLE001 - record any failure, incl. ^C
-        ticket["status"] = "failed"
-        ticket["fix"].update(
-            finished=now_iso(),
-            summary=f"ankifix error: {type(e).__name__}: {e}" + (
-                " | " + " | ".join(summary_extra) if summary_extra else ""),
-        )
-        save_ticket(cfg.tickets_dir, ticket)
+        ticket["kind"] = kind if kind in ("app", "deck") else ticket.get("kind")
+        err_log = write_error_log(tdir, ticket_id, e)
+        if is_files_access_error(e):
+            ticket["status"] = "needs-review"
+            ticket["fix"]["blocked"] = FILES_ACCESS
+            summary = files_access_summary(ticket_id, getattr(e, "filename", None) or deck_dir)
+            summary += f" | {type(e).__name__}: {e}"
+        elif isinstance(e, (KeyboardInterrupt, SystemExit)):
+            ticket["status"] = "failed"
+            summary = f"ankifix error: {type(e).__name__}: {e}"
+        elif retry_on_error and attempts < cfg.max_attempts:
+            ticket["status"] = "new"
+            summary = (f"ankifix error on attempt {attempts} of {cfg.max_attempts}, "
+                       f"will retry: {type(e).__name__}: {e}")
+        else:
+            ticket["status"] = "failed"
+            gave_up = f"gave up after {attempts} attempts: " if retry_on_error else ""
+            summary = f"{gave_up}ankifix error: {type(e).__name__}: {e}"
+        if summary_extra:
+            summary += " | " + " | ".join(summary_extra)
+        if err_log:
+            summary += f" | traceback in {err_log}"
+        ticket["fix"].update(finished=now_iso(), summary=summary)
+        if err_log:
+            ticket["fix"]["error_log"] = ERROR_LOG_NAME
+        try:
+            save_ticket(cfg.tickets_dir, ticket)
+        except Exception as save_err:  # noqa: BLE001
+            echo(f"ankifix: {ticket_id}: could not save ticket.json: {save_err}")
         if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
-        echo(f"ankifix: {ticket_id} failed: {e}")
+        echo(f"ankifix: {ticket_id} {ticket['status']}: {summary}")
         return ticket
     save_ticket(cfg.tickets_dir, ticket)
     echo(f"ankifix: {ticket_id} -> {ticket['status']}: {ticket['fix']['summary']}")
     return ticket
 
 
-def next_new(cfg: Config) -> Optional[str]:
+def _applescript_str(s: str) -> str:
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def terminal_command(cfg: Config, ticket_id: str) -> List[str]:
+    """osascript argv that runs `<ankifix_bin> <id> --once-from-terminal` in
+    a new Terminal.app window (Terminal has Files access; launchd agents do not)."""
+    import shlex
+
+    shell = f"{shlex.quote(cfg.ankifix_bin)} {shlex.quote(ticket_id)} --once-from-terminal; exit"
+    script = f'tell application "Terminal" to do script {_applescript_str(shell)}'
+    return [cfg.osascript_bin, "-e", script]
+
+
+def run_via_terminal(
+    ticket: Dict[str, Any], cfg: Config, blocked: BaseException, deck_dir: Optional[Path],
+    echo=print,
+) -> Dict[str, Any]:
+    """TCC fallback for a deck ticket: hand it to Terminal.app and wait for
+    the child to finish ticket.json. If osascript is refused (Automation
+    permission) or never finishes, park the ticket as needs-review with the
+    Full Disk Access instructions."""
+    ticket_id = ticket["id"]
+    ticket["kind"] = "deck"
+    ticket["fix"]["delegated"] = "terminal"
+    ticket["fix"]["summary"] = "no Files access under launchd; handed to Terminal.app"
+    save_ticket(cfg.tickets_dir, ticket)
+    cmd = terminal_command(cfg, ticket_id)
+    echo(f"ankifix: {ticket_id}: no Files access ({blocked}); running it in Terminal.app")
+    err = None
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=cfg.osascript_timeout_s,
+                           env={**os.environ, "PATH": cfg.subprocess_path()})
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout).strip() or f"osascript exited {r.returncode}"
+    except subprocess.TimeoutExpired:
+        err = f"osascript did not return in {cfg.osascript_timeout_s:g}s (Automation prompt unanswered?)"
+    except OSError as e:
+        err = f"{type(e).__name__}: {e}"
+
+    if err is None:
+        deadline = time.time() + cfg.terminal_fallback_timeout_min * 60
+        # the child rewrites ticket.json when it starts (new fix.pid) and ends
+        while time.time() < deadline:
+            time.sleep(cfg.terminal_poll_s)
+            try:
+                cur = load_ticket(cfg.tickets_dir, ticket_id)
+            except (OSError, ValueError):
+                continue
+            if cur.get("status") not in ("fixing", "new"):
+                echo(f"ankifix: {ticket_id} -> {cur.get('status')} (Terminal run)")
+                return cur
+        err = f"Terminal run did not finish within {cfg.terminal_fallback_timeout_min:g} min"
+        try:
+            cur = load_ticket(cfg.tickets_dir, ticket_id)
+            if cur.get("fix", {}).get("pid") not in (None, os.getpid()) and _pid_alive(cur["fix"]["pid"]):
+                # still running in Terminal; leave it to finish on its own
+                echo(f"ankifix: {ticket_id}: {err}; left running in Terminal")
+                return cur
+        except (OSError, ValueError, KeyError):
+            pass
+
+    ticket["status"] = "needs-review"
+    ticket["fix"]["blocked"] = FILES_ACCESS
+    ticket["fix"]["finished"] = now_iso()
+    ticket["fix"]["summary"] = (
+        files_access_summary(ticket_id, getattr(blocked, "filename", None) or deck_dir)
+        + f" | Terminal fallback failed: {err}"
+    )
+    save_ticket(cfg.tickets_dir, ticket)
+    echo(f"ankifix: {ticket_id} needs-review: {ticket['fix']['summary']}")
+    return ticket
+
+
+def _pid_alive(pid: Any) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (TypeError, ValueError, OSError):
+        return False
+
+
+def recover_stale(cfg: Config, echo=print) -> List[str]:
+    """Call with the ticket lock held. A ticket still "fixing" whose fix.pid
+    is gone was orphaned by a watcher that died mid-run (Mac slept, killed):
+    requeue it as new, or give up at cfg.max_attempts."""
+    from .tickets import list_tickets
+
+    touched = []
+    for t in list_tickets(cfg.tickets_dir):
+        if t.get("status") != "fixing":
+            continue
+        fix = t.get("fix") if isinstance(t.get("fix"), dict) else {}
+        pid = fix.get("pid")
+        if pid and _pid_alive(pid):
+            continue
+        attempts = int(fix.get("attempts") or 1)
+        fix = {**new_fix(fix.get("started"), fix), **fix}
+        fix["finished"] = now_iso()
+        if attempts >= cfg.max_attempts:
+            t["status"] = "failed"
+            fix["summary"] = (f"gave up after {attempts} attempts: the run was interrupted "
+                              "(watcher died mid-run)")
+        else:
+            t["status"] = "new"
+            fix["summary"] = f"attempt {attempts} was interrupted (watcher died mid-run); requeued"
+        t["fix"] = fix
+        try:
+            save_ticket(cfg.tickets_dir, t)
+            touched.append(t["id"])
+            echo(f"ankifix: {t['id']}: {fix['summary']}")
+        except Exception as e:  # noqa: BLE001
+            echo(f"ankifix: {t['id']}: could not recover stale ticket: {e}")
+    return touched
+
+
+def next_new(cfg: Config, skip: Optional[set] = None) -> Optional[str]:
     from .tickets import list_tickets
 
     for t in list_tickets(cfg.tickets_dir):
-        if t.get("status") == "new":
+        if t.get("status") == "new" and t["id"] not in (skip or ()):
             return t["id"]
     return None
 
 
-def watch(cfg: Config, interval: float, once: bool = False, echo=print) -> int:
-    """Process status=new tickets one at a time, oldest first."""
-    from . import apply as apply_mod  # local: apply imports this module
+def record_crash(cfg: Config, ticket_id: str, e: BaseException, echo=print) -> None:
+    """Last-resort bookkeeping when run_ticket itself raised: mark the ticket
+    failed with the error and write the traceback to <ticket>/error.log.
+    Never raises."""
+    tdir = ticket_dir(cfg.tickets_dir, ticket_id)
+    err_log = write_error_log(tdir, ticket_id, e)
+    try:
+        ticket = load_ticket(cfg.tickets_dir, ticket_id)
+        prev = ticket.get("fix") if isinstance(ticket.get("fix"), dict) else {}
+        fix = {**new_fix(prev.get("started") or now_iso(), prev), **prev}
+        attempts = int(prev.get("attempts") or 0)
+        if ticket.get("status") in ("new", None):
+            attempts += 1  # run_ticket raised before it could count this one
+        fix["attempts"] = attempts
+        fix.update(
+            finished=now_iso(),
+            summary=f"ankifix crashed: {type(e).__name__}: {e}"
+            + (f" | traceback in {err_log}" if err_log else ""),
+        )
+        if err_log:
+            fix["error_log"] = ERROR_LOG_NAME
+        ticket["fix"] = fix
+        ticket["status"] = "failed"
+        save_ticket(cfg.tickets_dir, ticket)
+    except Exception as e2:  # noqa: BLE001
+        echo(f"ankifix: {ticket_id}: could not record the crash on ticket.json: {e2}")
 
+
+def watch(cfg: Config, interval: float, once: bool = False, echo=print) -> int:
+    """Process status=new tickets one at a time, oldest first.
+
+    One ticket can never take the watcher down: any exception out of
+    run_ticket (or the apply step) is recorded on that ticket and the loop
+    moves on. A ticket whose run raised is retried on the next poll, up to
+    cfg.max_attempts. Tickets that crashed in this process are also skipped
+    for the rest of its life, so a ticket.json that cannot even be rewritten
+    does not spin. Every cfg.doctor_interval_s a light `ankifix doctor` runs
+    and a check that flips to FAIL posts a notification."""
+    from . import apply as apply_mod  # local: apply imports this module
+    from . import doctor as doctor_mod
+
+    echo(f"ankifix: watcher started pid {os.getpid()} at {now_iso()} (interval {interval:g}s)")
     handled = 0
+    skip: set = set()
+    last_doctor = 0.0
+    doctor_state: Dict[str, bool] = {}
     while True:
+        if cfg.doctor_interval_s and time.time() - last_doctor >= cfg.doctor_interval_s:
+            last_doctor = time.time()
+            try:
+                doctor_state = doctor_mod.watch_check(cfg, doctor_state, echo=echo)
+            except Exception as e:  # noqa: BLE001
+                echo(f"ankifix: doctor error: {type(e).__name__}: {e}")
         try:
             with ticket_lock(cfg.tickets_dir):
+                recover_stale(cfg, echo=echo)
+                this_pass: set = set()
                 while True:
-                    tid = next_new(cfg)
+                    tid = next_new(cfg, skip | this_pass)
                     if not tid:
                         break
-                    result = run_ticket(tid, cfg, echo=echo)
+                    this_pass.add(tid)  # a retried ticket waits for the next poll
+                    try:
+                        result = run_ticket(tid, cfg, echo=echo, retry_on_error=True)
+                    except Exception as e:  # noqa: BLE001
+                        skip.add(tid)
+                        handled += 1
+                        echo(f"ankifix: {tid} crashed: {type(e).__name__}: {e}")
+                        record_crash(cfg, tid, e, echo=echo)
+                        notify(cfg, f"ankifix: {tid} failed")
+                        continue
                     handled += 1
+                    try:
+                        on_disk = load_ticket(cfg.tickets_dir, tid).get("status")
+                    except Exception:  # noqa: BLE001
+                        on_disk = None
+                    if on_disk is None or (on_disk == "new" and result.get("status") != "new"):
+                        skip.add(tid)  # result could not be saved; do not spin on it
                     notify(cfg, f"ankifix: {tid} {result.get('status')}")
                     if (
                         cfg.auto_apply
@@ -461,10 +781,13 @@ def watch(cfg: Config, interval: float, once: bool = False, echo=print) -> int:
                     ):
                         try:
                             apply_mod.apply_ticket(tid, cfg, echo=echo)
-                        except AnkifixError as e:
-                            echo(f"ankifix: auto-apply for {tid} failed: {e}")
+                        except Exception as e:  # noqa: BLE001
+                            echo(f"ankifix: auto-apply for {tid} failed: {type(e).__name__}: {e}")
         except LockBusy as e:
             echo(f"ankifix: {e}; waiting")
+        except Exception as e:  # noqa: BLE001 - keep the watcher alive
+            echo(f"ankifix: watch loop error: {type(e).__name__}: {e}")
+            echo(traceback.format_exc())
         if once:
             return handled
         time.sleep(interval)
