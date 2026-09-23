@@ -8,13 +8,20 @@ History:
   * 20260923-105203: the second fix reserved a static strip for all of full
     screen, painted in the page colour: a dark band, app pushed down.
 
-The fix lets AppKit do it the way Safari gets it: an empty NSToolbar is
-attached on NSWindowDidEnterFullScreenNotification (with AutoHideToolbar),
-removed on NSWindowWillExitFullScreenNotification. AppKit then moves the
-content with the bar's own reveal animation. These tests drive the
-controller with a fake Qt and a fake AppKit bridge and assert:
+  * 539a2af attached an auto-hiding NSToolbar and expected AppKit to push
+    the content; on the real display AppKit only moved its own bar window.
+
+The fix: an empty NSToolbar is attached on
+NSWindowDidEnterFullScreenNotification (with AutoHideToolbar), removed on
+NSWindowWillExitFullScreenNotification, and while full screen the content
+view follows AppKit's bar window: every move/resize AppKit makes to it
+(each step of its reveal animation) places the content's top on the bar's
+bottom. These tests drive the controller with a fake Qt and a fake AppKit
+bridge and assert:
   * the toolbar is attached only on AppKit's did-enter, once, and removed on
     will-exit, once;
+  * the content offset is set only from the bar window's moves, equals the
+    bar's reveal at every step, and is back at 0 after will-exit;
   * nothing polls (no QTimer, no QCursor) and nothing changes layout or
     paint (no setContentsMargins, no setPalette), whatever the cursor does;
   * AutoHideToolbar is only ever added to a set AppKit accepts;
@@ -144,6 +151,33 @@ class FakeBridge:
         self.toolbar = 0
         self.calls = []
         self.options = 0
+        self.bar_handler = None
+        self.bar_bottom_y = None   # None: the bar window is not shown
+        self.top = 1084.0
+        self.offsets = []
+
+    # -- the bar window ------------------------------------------------------
+    def observe_bars(self, nswin, handler):
+        self.calls.append(("observe_bars", handler is not None))
+        self.bar_handler = handler
+
+    def find_bar(self, nswin):
+        return 0x5A5A if self.bar_bottom_y is not None else 0
+
+    def content_top(self, nswin):
+        return self.top
+
+    def bar_bottom(self, barwin):
+        return self.bar_bottom_y
+
+    def set_content_offset(self, nswin, offset):
+        self.offsets.append(offset)
+
+    def move_bar(self, bottom):
+        """AppKit moves its bar window (one animation step)."""
+        self.bar_bottom_y = bottom
+        if self.bar_handler:
+            self.bar_handler(0x5A5A)
 
     def nswindow(self, win):
         return self._nswin if win.winId() else 0
@@ -352,6 +386,49 @@ def test_autohide_toolbar_only_with_a_valid_option_set():
     assert f(fs) == fs
     assert f(mb) == mb
     assert tb == 1 << 11 and fs == 1 << 10 and mb == 1 << 2
+
+
+def test_content_follows_the_bar_window_step_by_step():
+    win, br, ctl = _boot()
+    br.move_bar(1000.0)  # not full screen: not followed
+    assert br.offsets == [], br.offsets
+    br.bar_bottom_y = None
+    br.post(fi.NOTE_DID_ENTER)
+    assert ("observe_bars", True) in br.calls
+    assert br.offsets == [], "moved the content with the bar hidden"
+    _cursor_churn(win)
+    assert br.offsets == [], "Qt events moved the content"
+    # AppKit's reveal animation, then the bar sits out, then it hides.
+    steps = [1090.0, 1068.0, 1057.0, 1044.0, 1030.0, 1030.0, 1030.0,
+             1050.0, 1075.0, 1084.0, 1100.0]
+    for b in steps:
+        br.move_bar(b)
+        assert ctl.offset == fi.reveal_amount(br.top, b), (b, ctl.offset)
+    assert br.offsets == [16.0, 27.0, 40.0, 54.0, 34.0, 9.0, 0.0], br.offsets
+    br.move_bar(1030.0)
+    br.post(fi.NOTE_WILL_EXIT)
+    assert br.offsets[-1] == 0.0 and ctl.offset == 0.0, br.offsets
+    assert ("observe_bars", False) in br.calls and br.bar_handler is None
+    n = len(br.offsets)
+    br.move_bar(1040.0)
+    assert len(br.offsets) == n, "followed the bar after will-exit"
+    _assert_untouched(win)
+
+
+def test_did_enter_with_the_bar_already_out_places_the_content():
+    win, br, ctl = _boot()
+    br.bar_bottom_y = 1050.0
+    br.post(fi.NOTE_DID_ENTER)
+    assert br.offsets == [34.0], br.offsets
+
+
+def test_reveal_amount_is_clamped():
+    f = fi.reveal_amount
+    assert f(1084.0, None) == 0.0
+    assert f(1084.0, 1100.0) == 0.0     # bar above the window top: hidden
+    assert f(1084.0, 1084.2) == 0.0
+    assert f(1084.0, 1030.0) == 54.0
+    assert f(1084.0, -500.0) == fi.MAX_REVEAL
 
 
 def test_source_has_no_polling_margin_or_paint():
