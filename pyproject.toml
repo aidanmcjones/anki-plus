@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ankibug"
+version = "0.1.0"
+description = "Bug-ticket capture library and CLI for Anki+ (anki-design)"
+requires-python = ">=3.9"
+dependencies = [
+    "websockets>=11.0",
+]
+
+[project.scripts]
+ankibug = "ankibug.cli:main"
+ankifix = "ankifix.cli:main"
+
+[tool.setuptools]
+packages = ["ankibug", "ankifix"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
