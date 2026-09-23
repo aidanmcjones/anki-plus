@@ -39,10 +39,20 @@ async function fixture(page, mode) {
     parent.appendChild(field); window.field = field;
     // Match the full editor's remirroring of content on blur.
     if (mode !== 'study') field.addEventListener('blur', () => { field.innerHTML = field.innerHTML; });
-    window.crops = [];
+    window.crops = []; window.copies = []; window.pastes = [];
     window.noteId = 1;
     window.getNoteId = () => window.noteId;
     window.pycmd = (cmd, cb) => {
+      if (cmd.startsWith('ba:image-copy:')) {
+        window.copies.push(cmd);
+        cb(window.failCopy ? {error: 'Clipboard unavailable'} : {ok: true});
+        return;
+      }
+      if (cmd.startsWith('ba:image-paste:')) {
+        window.pastes.push(cmd);
+        cb({filename: 'anki-paste-test.png'});
+        return;
+      }
       window.crops.push(cmd);
       if (window.failCrop) cb({error:'Test write failure'});
       else cb({filename: 'anki-crop-test.png'});
@@ -80,7 +90,7 @@ async function fixture(page, mode) {
       assert.equal(await page.locator('#ba-crop-dialog').count(),0);
       assert.equal(await image.evaluate(el => el.getAttribute('src')), cropBefore);
       assert.equal(await page.evaluate(() => crops.length),0);
-      await image.click({button:'right'}); await page.getByRole('menuitem').click();
+      await image.click({button:'right'}); await page.getByRole('menuitem', {name:'Crop image...'}).click();
       const preview = await page.locator('#ba-crop-stage img').boundingBox();
       await page.mouse.move(preview.x + preview.width *.2, preview.y + preview.height *.2);
       await page.mouse.down();
@@ -182,6 +192,91 @@ async function fixture(page, mode) {
       await page.close();
     }
 
+    // Ticket 20260923-102640: the image context menu offers Copy image and Cut
+    // image (the bitmap goes to the system clipboard through Python), and a
+    // clipboard image pastes into any field of the reviewer's quick editor as
+    // a stored media file rather than an inline data: URL.
+    for (const mode of ['study', 'browse']) {
+      const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
+      const errors = []; page.on('pageerror', e => errors.push(e.message));
+      await fixture(page, mode);
+      await page.evaluate(() => { window.inputs = 0; field.addEventListener('input', () => window.inputs++); });
+      const image = page.locator('#host img');
+      await image.click({ button: 'right' });
+      const names = await page.getByRole('menuitem').allTextContents();
+      assert.deepEqual(names, ['Copy image', 'Cut image', 'Crop image...'], `${mode}: menu items ${JSON.stringify(names)}`);
+      await page.getByRole('menuitem', { name: 'Copy image' }).click();
+      await page.waitForFunction(() => window.copies.length === 1);
+      assert.equal(await image.count(), 1, `${mode}: copy removed the image`);
+      assert.equal(await page.locator('#ba-image-menu').isHidden(), true, `${mode}: menu stayed open after copy`);
+      const decodeCmd = (list, prefix) => page.evaluate(async ([list, prefix]) => {
+        const img = new Image(); img.src = 'data:image/png;base64,' + window[list][window[list].length - 1].slice(prefix.length);
+        await img.decode(); return [img.width, img.height];
+      }, [list, prefix]);
+      assert.deepEqual(await decodeCmd('copies', 'ba:image-copy:'), [1600, 1000], `${mode}: copied bitmap is not the full-resolution image`);
+      // A clipboard failure must not cut: the image stays until the copy succeeded.
+      await page.evaluate(() => { window.failCopy = true; });
+      await image.click({ button: 'right' });
+      await page.getByRole('menuitem', { name: 'Cut image' }).click();
+      await page.waitForFunction(() => window.copies.length === 2);
+      assert.equal(await image.count(), 1, `${mode}: cut removed the image although the clipboard write failed`);
+      await page.evaluate(() => { window.failCopy = false; });
+      await image.click({ button: 'right' });
+      await page.getByRole('menuitem', { name: 'Cut image' }).click();
+      await page.waitForFunction(() => window.copies.length === 3);
+      assert.equal(await image.count(), 0, `${mode}: cut left the image in place`);
+      assert.ok(await page.evaluate(() => window.inputs) >= 1, `${mode}: no input event after cut`);
+      assert.ok(await page.evaluate(() => field.textContent.includes('Alpha beta gamma') && field.textContent.includes('Unchanged text')), `${mode}: text damaged by cut`);
+      assert.equal(await page.locator('#ba-image-selection').isHidden(), true, `${mode}: selection handles outlived the cut image`);
+      if (mode === 'study') {
+        // Paste the cut bitmap back at a caret inside the text, the way
+        // QtWebEngine exposes a clipboard bitmap: an image/png File on the
+        // event. The bytes go to Python for storage and the field gets a
+        // plain <img src="filename"> at the caret.
+        await page.evaluate(() => {
+          window.inputs = 0;
+          field.focus();
+          const node = field.querySelector('#words').firstChild;
+          const range = document.createRange(); range.setStart(node, 5); range.collapse(true);
+          const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+          const bytes = Uint8Array.from(atob(copies[0].slice('ba:image-copy:'.length)), c => c.charCodeAt(0));
+          const dt = new DataTransfer(); dt.items.add(new File([bytes], 'image.png', { type: 'image/png' }));
+          field.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+        });
+        await page.waitForFunction(() => window.pastes.length === 1);
+        await page.locator('#host img[src="anki-paste-test.png"]').waitFor({ state: 'attached' });
+        assert.deepEqual(await decodeCmd('pastes', 'ba:image-paste:'), [1600, 1000], 'pasted bytes are not the clipboard bitmap');
+        const words = await page.evaluate(() => field.querySelector('#words').innerHTML);
+        // Chromium keeps the split-off leading space visible as &nbsp;.
+        assert.match(words, /^Alpha<img src="anki-paste-test\.png"[^>]*>(&nbsp;| )beta gamma$/, `image not inserted at the caret: ${words}`);
+        assert.ok(await page.evaluate(() => window.inputs) >= 1, 'no input event after paste');
+        // Chromium's own default paste of a bare bitmap drops an inline
+        // data: URL image. Anything that appears that way during a paste is
+        // moved into the media folder too, so the note never stores base64.
+        await page.evaluate(() => {
+          const dt = new DataTransfer(); dt.setData('text/html', '<b>x</b>');
+          field.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+          const img = document.createElement('img'); img.src = 'data:image/png;base64,' + copies[0].slice('ba:image-copy:'.length);
+          field.querySelector('#words').appendChild(img);
+        });
+        await page.waitForFunction(() => window.pastes.length === 2);
+        await page.locator('#host img[src^="data:"]').waitFor({ state: 'detached' });
+        assert.equal(await page.locator('#host img[src="anki-paste-test.png"]').count(), 2, 'data: URL image was not stored');
+        // The stored image is a normal one: it gets the same context menu.
+        // (Dispatched directly: the test page serves no such file, so the
+        // image has no box for a real right-click to land on.)
+        await page.evaluate(() => {
+          field.querySelector('img').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, composed: true, clientX: 40, clientY: 120 }));
+        });
+        await page.locator('#ba-image-menu').waitFor({ state: 'visible' });
+        assert.equal((await page.getByRole('menuitem').allTextContents()).length, 3);
+        await page.keyboard.press('Escape');
+      }
+      assert.deepEqual(errors, [], `${mode}: page errors ${JSON.stringify(errors)}`);
+      console.log(`PASS ${mode}: Copy/Cut image in the context menu${mode === 'study' ? ', clipboard image pastes as stored media' : ''}`);
+      await page.close();
+    }
+
     // Regression: the +/- stepper (and the size trigger) must not steal the field's selection.
     {
       const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
@@ -264,14 +359,14 @@ async function fixture(page, mode) {
     const page = await browser.newPage(); await fixture(page,'full');
     const original = await page.locator('#host img').getAttribute('src');
     await page.evaluate(()=>window.failCrop=true);
-    await page.locator('#host img').click({button:'right'});await page.getByRole('menuitem').click();
+    await page.locator('#host img').click({button:'right'});await page.getByRole('menuitem', {name:'Crop image...'}).click();
     await page.locator('[data-action="apply"]').click();
     assert.equal(await page.locator('#host img').getAttribute('src'),original);
     assert.equal(await page.locator('#ba-crop-dialog output').textContent(),'Test write failure');
     console.log('PASS storage failure keeps original image');
     await page.keyboard.press('Escape');
     await page.evaluate(()=>window.failCrop=false);
-    await page.locator('#host img').click({button:'right'});await page.getByRole('menuitem').click();
+    await page.locator('#host img').click({button:'right'});await page.getByRole('menuitem', {name:'Crop image...'}).click();
     const oldWrites = await page.evaluate(()=>crops.length);
     await page.evaluate(()=>window.noteId=2);
     // The dialog may already have self-closed here: resolveImage()'s note
@@ -300,7 +395,7 @@ async function fixture(page, mode) {
     // forever, since no menu is ever created).
     const narrowPage = await browser.newPage({ viewport: { width: 375, height: 600 } });
     await fixture(narrowPage,'full');
-    await narrowPage.locator('#host img').click({button:'right'});await narrowPage.getByRole('menuitem').click();
+    await narrowPage.locator('#host img').click({button:'right'});await narrowPage.getByRole('menuitem', {name:'Crop image...'}).click();
     const bounds=await narrowPage.locator('#ba-crop-dialog').boundingBox();
     assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 375);
     assert.ok(bounds.y >= 0 && bounds.y + bounds.height <= 600);

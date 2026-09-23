@@ -1557,7 +1557,8 @@ def _on_js_message(handled, message, context):
     return (True, None) when we handle it."""
     if not isinstance(message, str):
         return handled
-    if message.startswith("ba:image-crop:"):
+    # ba:image-crop: / ba:image-paste: / ba:image-copy: from web/editor-tools.js.
+    if message.startswith("ba:image-"):
         from .editor_tools import on_message
 
         return on_message(handled, message, context)

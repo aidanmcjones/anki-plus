@@ -905,10 +905,13 @@
   }
   function deleteSelectedImage() {
     var img = resolveImage();
-    if (!img) { hideSelection(); return; }
-    var field = fieldFor(img);
-    if (!field) { hideSelection(); return; }
     hideSelection();
+    if (img) removeImage(img);
+  }
+  function removeImage(img) {
+    var field = fieldFor(img);
+    if (!field || !img.isConnected) return;
+    if (selected === img) hideSelection();
     field.focus({ preventScroll: true });
     var removed = false;
     try {
@@ -922,14 +925,112 @@
     changed(field);
     rememberSelection(field);
   }
+  // The bitmap at its natural size. Same-origin media, so the canvas is not
+  // tainted; a data: image works the same way.
+  function imageToPng(img) {
+    if (!img.complete || !img.naturalWidth || !img.naturalHeight) return null;
+    try {
+      var canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+      canvas.getContext("2d").drawImage(img, 0, 0);
+      return canvas.toDataURL("image/png").split(",")[1] || null;
+    } catch (_) { return null; }
+  }
+  // Python owns the system clipboard (editor_tools.copy_image): a real
+  // bitmap there pastes into the quick editor below, into Anki's full editor
+  // (its own paste path stores clipboard images), and into other apps.
+  // navigator.clipboard is not a given inside QtWebEngine.
+  function copySelectedImage(cut) {
+    var img = resolveImage();
+    if (menu) menu.hidden = true;
+    if (!img || !fieldFor(img)) { hideSelection(); return; }
+    var png = imageToPng(img);
+    if (!png) return;
+    pycmd("ba:image-copy:" + png, function (result) {
+      // Cut only once the clipboard really has the image, so a failed
+      // write never loses it.
+      if (!result || result.error || !cut) return;
+      removeImage(img);
+    });
+  }
+  function clipboardImage(data) {
+    if (!data) return null;
+    var items = data.items || [], files = data.files || [], i;
+    for (i = 0; i < items.length; i++) {
+      if (items[i].kind === "file" && /^image\//.test(items[i].type)) return items[i].getAsFile();
+    }
+    for (i = 0; i < files.length; i++) if (/^image\//.test(files[i].type)) return files[i];
+    return null;
+  }
+  function dataUrlImages(field) {
+    return Array.prototype.filter.call(field.querySelectorAll("img"), function (img) {
+      return /^data:image\/[^;]+;base64,/.test(img.getAttribute("src") || "");
+    });
+  }
+  function storeImage(base64, onStored) {
+    pycmd("ba:image-paste:" + base64, function (result) {
+      if (result && !result.error && result.filename) onStored(result.filename);
+    });
+  }
+  function insertImage(field, mark, filename) {
+    if (!field.isConnected || !fieldFor(field)) return;
+    var saved = bookmark;
+    bookmark = mark;
+    var target = restoreSelection();
+    bookmark = saved;
+    if (!target) field.focus({ preventScroll: true });
+    var src = encodeURIComponent(filename), inserted = false;
+    try { inserted = target && document.execCommand("insertHTML", false, '<img src="' + escapeAttr(src) + '">'); } catch (_) {}
+    if (!inserted) { var img = document.createElement("img"); img.setAttribute("src", src); field.appendChild(img); }
+    changed(field);
+    rememberSelection(field);
+  }
+  // The reviewer's quick editor has no paste handling of its own, so a
+  // clipboard bitmap either did nothing or (Chromium's default) landed as a
+  // base64 data: URL that would then be saved straight into the note. Store
+  // it in the media folder instead and insert a plain <img src="file">.
+  function pasteIntoField(event, field) {
+    var file = clipboardImage(event.clipboardData);
+    if (file) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      rememberSelection(field);
+      var mark = bookmark && bookmark.field === field ? bookmark : null;
+      var reader = new FileReader();
+      reader.onload = function () {
+        var base64 = String(reader.result).split(",")[1];
+        if (base64) storeImage(base64, function (filename) { insertImage(field, mark, filename); });
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+    // Nothing we can read up front: let the browser paste, then move any
+    // data: URL image it just dropped in into the media folder.
+    var before = dataUrlImages(field);
+    setTimeout(function () {
+      dataUrlImages(field).forEach(function (img) {
+        if (before.indexOf(img) !== -1) return;
+        storeImage(img.getAttribute("src").split(",")[1], function (filename) {
+          if (!img.isConnected) return;
+          img.setAttribute("src", encodeURIComponent(filename));
+          changed(field);
+        });
+      });
+    }, 0);
+  }
   function showMenu(event, img) {
     selectImage(img);
     if (!menu || !menu.isConnected) {
       menu = document.createElement("div"); menu.id = "ba-image-menu"; menu.setAttribute("role", "menu");
-      var button = document.createElement("button"); button.type = "button";
-      button.textContent = "Crop image..."; button.setAttribute("role", "menuitem");
-      button.addEventListener("click", function () { menu.hidden = true; openCrop(resolveImage()); });
-      menu.appendChild(button); document.body.appendChild(menu);
+      [["Copy image", function () { copySelectedImage(false); }],
+       ["Cut image", function () { copySelectedImage(true); }],
+       ["Crop image...", function () { menu.hidden = true; openCrop(resolveImage()); }]
+      ].forEach(function (item) {
+        var button = document.createElement("button"); button.type = "button";
+        button.textContent = item[0]; button.setAttribute("role", "menuitem");
+        button.addEventListener("click", item[1]);
+        menu.appendChild(button);
+      });
+      document.body.appendChild(menu);
     }
     menu.hidden = false;
     menu.style.left = Math.max(0, Math.min(event.clientX, innerWidth - menu.offsetWidth - 8)) + "px";
@@ -1076,6 +1177,12 @@
       var target = targetOf(event);
       if (target.tagName !== "IMG" || !fieldFor(target) || target.classList.contains("mathjax")) return;
       event.preventDefault(); event.stopImmediatePropagation(); showMenu(event, target);
+    }, true);
+    // Anki's full editor bridges paste to Python itself (Editor.onPaste
+    // stores clipboard images), so only the quick editor needs this.
+    if (!editorPage) document.addEventListener("paste", function (event) {
+      var field = fieldFor(targetOf(event));
+      if (field) pasteIntoField(event, field);
     }, true);
     document.addEventListener("keyup", function (e) { rememberSelection(fieldFor(targetOf(e))); }, true);
     document.addEventListener("pointerup", function (e) { rememberSelection(fieldFor(targetOf(e))); }, true);
