@@ -288,11 +288,14 @@ in this file are the raw form the settings page writes.
   its single-selection default.
 - **browse_card_drag** — drag cards out of the Browse table. Press on a
   selected row and pull: every selected card comes along (in Notes mode,
-  every card of every selected note). Drop on a deck in the sidebar to
-  move them there, one undoable step, the same op as **Change Deck**.
+  every card of every selected note). Press on an unselected row and pull
+  to drag just that card. Drop on a deck in the sidebar to
+  move them there, one undoable step, the same op as **Change Deck**;
+  the list re-runs its search so the moved cards leave it.
   Drop on another row of the table to reposition new cards just before
   that row's card in the new-card queue (the row has to be a new card
-  too, since only new cards have a position). Filtered decks, tags and
+  too, since only new cards have a position; a drop on a review card
+  says so and changes nothing). Filtered decks, tags and
   headings refuse the drop. A plain click on a selected row still
   collapses the selection to it. `false` leaves the table as Anki ships
   it, with **Change Deck** (⌘D) and **Reposition** as the only routes.

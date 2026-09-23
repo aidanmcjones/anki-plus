@@ -4714,6 +4714,23 @@ except Exception as _e:
         pass
 
 
+# Deck list drag (reorder / nest): AnkiWebView drops every drop on the main
+# webview unless `allow_drops` is set, which setHtml resets on each render,
+# so the page's `drop` listener never ran. webview_drops lets drags that
+# started inside the page through (external file drops stay blocked).
+try:
+    from . import webview_drops as _webview_drops
+
+    gui_hooks.main_window_did_init.append(
+        lambda *a: _webview_drops.install(getattr(mw, "web", None))
+    )
+except Exception as _e:
+    try:
+        print(f"[anki-design] webview_drops install failed: {_e}", flush=True)
+    except Exception:
+        pass
+
+
 # --------------------------------------------------------------------------- #
 # Dev hot-reload — web/ assets only, enabled by `make dev` (a .devmode file).
 #

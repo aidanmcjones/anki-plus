@@ -641,13 +641,18 @@ def test_click_on_selected_row_is_still_a_click():
     assert _move(view, 10, 200, buttons=Qt.MouseButton.NoButton) is False
 
 
-def test_pulling_from_an_unselected_row_is_left_to_the_view():
+def test_pulling_from_an_unselected_row_drags_it():
+    # 20260923-101011: grab-and-pull on a row that was not selected used to
+    # be left to the view (a rubber-band selection), so a one-motion drag
+    # never moved anything. The press still reaches the view (which, in
+    # real Qt, selects that row; see test_browse_card_drag_realqt.py) and
+    # the pull now starts a drag.
     br, _ = _boot()
     view = br.table._view
     view.selected = {1}
-    assert _press(view, 10, 85) is False   # row 4, not selected
-    assert _move(view, 10, 130) is False   # rubber-band as before
-    assert not QDrag.instances
+    assert _press(view, 10, 85) is False, "the press must reach the view"
+    assert _move(view, 10, 130) is True
+    assert len(QDrag.instances) == 1
 
 
 def test_modifier_press_never_arms():
@@ -752,15 +757,33 @@ def test_drop_on_a_new_card_row_repositions_before_it():
     assert kw["shift_existing"] is True, "the target and what follows slide back"
 
 
-def test_drop_on_a_review_card_row_is_refused():
-    br, _ = _boot()
+def test_drop_on_a_review_card_row_is_refused_with_a_reason():
+    # 20260923-101011: the user's decks are review cards; a silent "no
+    # entry" cursor over them read as "dragging does nothing". The row now
+    # highlights and the drop explains itself, but still runs no op.
+    br, w = _boot()
     drag = _pull(br, {1}, from_row=1)
     view = br.table._view
     ev, consumed = _drag_to(view, QEvent.Type.DragMove, 10, 85, drag.mime)  # row 4
-    assert consumed and not ev.accepted
+    assert consumed and ev.accepted
+    assert w["table"].marker.visible
     ev, consumed = _drag_to(view, QEvent.Type.Drop, 10, 85, drag.mime)
     assert consumed and not ev.accepted
     assert not OPS
+    assert any("review cards" in t.lower() for t in TOOLTIPS), TOOLTIPS
+
+
+def test_sidebar_move_re_runs_the_search_so_the_cards_leave_the_list():
+    # 20260923-101011: op_executed only repaints the old row snapshot, so
+    # cards moved out of the deck being browsed stayed listed there.
+    br, _ = _boot()
+    drag = _pull(br, {1, 2}, from_row=2)
+    ev, _ = _drag_to(br.sidebar, QEvent.Type.Drop, 10, 45, drag.mime)
+    assert ev.accepted and len(OPS) == 1
+    assert br.searches == 0
+    OPS[0].finish(count=2)
+    assert br.searches == 1
+    assert any("2 cards moved to" in t for t in TOOLTIPS), TOOLTIPS
 
 
 def test_drop_onto_itself_is_a_no_op():
