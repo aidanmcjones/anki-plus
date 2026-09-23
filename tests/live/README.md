@@ -138,18 +138,23 @@ Rules for a good live test:
 
 ## Current tests
 
-- `test_fullscreen_display.py` (opt-in, `ANKI_LIVE_DISPLAY=1`, arm64): enters
-  macOS full screen, checks the empty toolbar attached with AutoHideToolbar
-  in effect and that, with the bar hidden, the content starts at the window
-  top (no strip, no margin). Moves the cursor to the top edge with Quartz
+- `test_fullscreen_display.py` (opt-in, `ANKI_LIVE_DISPLAY=1`, arm64): measures
+  the windowed title bar (frame minus content view, 28 pt) and the top of
+  the content as pixels, enters macOS full screen, then for 1.5 s with the
+  cursor away asserts no NSToolbar is attached and the bar is closed (AppKit's
+  bar window off screen, content not offset, the content's top pixels equal
+  the windowed content's top). Moves the cursor to the top edge with Quartz
   (CGWarpMouseCursorPosition plus a posted kCGEventMouseMoved, through
   ctypes), then back to mid-screen, sampling about every 40 ms: the visible
   bottom of AppKit's bar (its title bar container) and where the app's
   pixels are, measured on screen by matching a strip over the sidebar
   against the baseline. Asserts the content moved down exactly once,
-  animated, stayed, slid back to 0 when the bar hid, and matched the bar's
-  reveal in every sample (lockstep). Restores the cursor and leaves full
-  screen with the content view back in place.
+  animated, stayed, slid back to 0 when the bar hid, matched the bar's
+  reveal in every sample (lockstep), and that the revealed bar is the plain
+  title bar height (within 2 pt). Restores the cursor and leaves full screen
+  with the content view back in place. `ANKI_FS_DEACTIVATE=1` runs only the
+  at-rest part with Finder in front (macOS then shows another Space, so
+  only the AppKit state is compared, not pixels).
 
 - `test_smoke.py`: the app starts on the deck list, the add-on is loaded,
   and the home webview lists the fixture decks in tree order.

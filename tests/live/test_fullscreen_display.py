@@ -12,7 +12,7 @@ while they are not using the Mac:
 
 What it does:
   1. enters macOS full screen on the main window and waits for
-     fullscreen_inset to report its toolbar attached;
+     fullscreen_inset to report it is following AppKit's bar;
   2. with the bar hidden, records the baseline: the window top, the content
      top, the sidebar wordmark, and a strip of screen pixels over the
      sidebar (no strip: the content starts at the window top);
@@ -56,6 +56,10 @@ import time
 NEEDS_DISPLAY = True
 
 SAMPLE_S = 2.5
+REST_S = 1.5         # s: bar must stay closed this long with the cursor away
+TOP_X, TOP_W, TOP_H = 10, 120, 60  # pt: strip at the content's top-left (sidebar)
+REST_ERR_MIN = 400.0  # row-profile units; a bar over the strip is far above
+REST_ERR_FRAC = 0.12  # ... or this fraction of the strip's mean row level
 HIDE_S = 1.5
 LOCKSTEP_TOL = 3.0   # pt, plus the bar's own motion between two reads
 MOVE_MIN = 20.0      # pt: the smallest push that counts as "the bar came out"
@@ -198,6 +202,14 @@ def _shift(base, cur):
     return best
 
 
+def _profile_err(a, b):
+    """Mean absolute row difference of two row profiles (no shift)."""
+    if not a or not b:
+        return None
+    n = min(len(a), len(b))
+    return round(sum(abs(a[i] - b[i]) for i in range(n)) / n, 1)
+
+
 def _analyse(samples, win_top):
     """The checks' inputs from the samples: push per sample (pt), the bar's
     reveal per sample (pt below the window top), and the verdicts."""
@@ -315,7 +327,7 @@ def run(t):
         return out
 
     def cocoa_state():
-        tb = br.toolbar(nswin)
+        tb = o.send(nswin, "toolbar") or 0
         qwin = mw.windowHandle()
         sa = qwin.safeAreaMargins().top() if qwin is not None and hasattr(qwin, "safeAreaMargins") else None
         cv = content_view()
@@ -349,9 +361,9 @@ def run(t):
         cv = o.send(nswin, "contentView")
         cvf = o.send(cv, "frame", restype=NSRect) if cv else None
         t.check("left full screen: toolbar gone, content view back in place",
-                not br.is_fullscreen(nswin) and not ctl.attached and br.toolbar(nswin) == 0
+                not br.is_fullscreen(nswin) and not _following(ctl) and _toolbar_count(o, nswin) == 0
                 and ctl.offset == 0 and cvf is not None and cvf.origin.y == 0,
-                f"fullscreen={br.is_fullscreen(nswin)} attached={ctl.attached} "
+                f"fullscreen={br.is_fullscreen(nswin)} following={_following(ctl)} "
                 f"offset={ctl.offset} cv y={cvf.origin.y if cvf else None}")
         if diag_out:
             try:
@@ -392,9 +404,19 @@ def _sample(t, env, cg, base, sx, top, t0, until_s, out):
         t.pump(10)
 
 
+def _following(ctl) -> bool:
+    """The controller is active in full screen (older builds: toolbar attached)."""
+    return bool(getattr(ctl, "following", getattr(ctl, "attached", False)))
+
+
+def _toolbar_count(o, nswin) -> int:
+    return 1 if o.send(nswin, "toolbar") else 0
+
+
 def _cycle(t, env, res):
-    """Enter full screen, reveal the bar, sample, hide it, sample."""
-    from aqt.qt import Qt
+    """Windowed baseline, enter full screen, check the bar is closed at
+    rest, reveal it, sample, hide it, sample."""
+    from aqt.qt import QPoint, Qt
 
     mw, br, o, fi, ctl, cg = (env[k] for k in ("mw", "br", "o", "fi", "ctl", "cg"))
     nswin, content_rect, win_frame = env["nswin"], env["content_rect"], env["win_frame"]
@@ -404,30 +426,98 @@ def _cycle(t, env, res):
     # window full screen (the user's own apps may be in front).
     _activate(t, br, mw)
     active = _is_active(br)
-    mw.setWindowState(mw.windowState() | Qt.WindowState.WindowFullScreen)
-    entered = t.wait_until(lambda: br.is_fullscreen(nswin) and ctl.attached, timeout=6)
-    how = "setWindowState"
-    if not entered:
-        o.send(nswin, "toggleFullScreen:", None, restype=None, argtypes=(ctypes.c_void_p,))
-        entered = t.wait_until(lambda: br.is_fullscreen(nswin) and ctl.attached, timeout=8)
-        how = "toggleFullScreen:"
-    t.check("entered full screen and the toolbar attached", entered,
-            f"fullscreen={br.is_fullscreen(nswin)} attached={ctl.attached} via {how} "
-            f"app active={active} visible={mw.isVisible()}")
-    if not entered:
-        return
-    opts = br.presentation_options()
-    t.check("AutoHideToolbar in effect", bool(opts & fi.PRESENT_AUTOHIDE_TOOLBAR), hex(opts))
-
-    # Park the cursor mid-screen so the bar is hidden, then baseline.
     scr = mw.screen().geometry()
     mid_x = scr.left() + scr.width() / 2
     _move_cursor(cg, mid_x, scr.top() + scr.height() / 2)
-    t.pump(1500)
+    t.pump(600)
+
+    # Windowed baseline: the plain title bar's height as AppKit lays it out
+    # (frame minus content view), and the top of the content as pixels.
+    wf0 = win_frame()
+    cvf0 = o.send(o.send(nswin, "contentView"), "frame", restype=NSRect)
+    title_h = round(wf0.size.h - cvf0.size.h, 1)
+    res["windowed_title_h"] = title_h
+    g0 = mw.mapToGlobal(QPoint(0, 0))
+    win_strip = _row_profile(cg, g0.x() + TOP_X, g0.y(), TOP_W, TOP_H)
+
+    mw.setWindowState(mw.windowState() | Qt.WindowState.WindowFullScreen)
+    entered = t.wait_until(lambda: br.is_fullscreen(nswin) and _following(ctl), timeout=6)
+    how = "setWindowState"
+    if not entered:
+        o.send(nswin, "toggleFullScreen:", None, restype=None, argtypes=(ctypes.c_void_p,))
+        entered = t.wait_until(lambda: br.is_fullscreen(nswin) and _following(ctl), timeout=8)
+        how = "toggleFullScreen:"
+    t.check("entered full screen and the controller follows the bar", entered,
+            f"fullscreen={br.is_fullscreen(nswin)} following={_following(ctl)} via {how} "
+            f"app active={active} visible={mw.isVisible()}")
+    if not entered:
+        return
+    t.pump(1200)
+    if os.environ.get("ANKI_FS_DEACTIVATE") == "1":
+        # Put another app in front without leaving this Space: Finder.
+        o.send(br._app(), "deactivate", restype=None)
+        apps = o.send(o.cls("NSRunningApplication"),
+                      "runningApplicationsWithBundleIdentifier:",
+                      o.nsstring("com.apple.finder"), argtypes=(ctypes.c_void_p,))
+        finder = o.send(apps, "firstObject") if apps else 0
+        if finder:
+            o.send(finder, "activateWithOptions:", 0, restype=ctypes.c_bool,
+                   argtypes=(ctypes.c_ulong,))
+        t.wait_until(lambda: not _is_active(br), timeout=2)
+        t.pump(400)
+        res["space_still_ours"] = bool(br.is_fullscreen(nswin)) and bool(
+            o.send(nswin, "isOnActiveSpace", restype=ctypes.c_bool))
+        t.note(f"deactivated: app active={_is_active(br)}, "
+               f"window on active space={res['space_still_ours']}")
+    res["options"] = hex(int(o.send(br._app(), "presentationOptions", restype=ctypes.c_ulong)))
+
+    # At rest, before the cursor goes anywhere near the top: no bar, no
+    # toolbar, the content's top pixels are the windowed content's top.
     wf = win_frame()
+    win_top = wf.origin.y + wf.size.h
+    g1 = mw.mapToGlobal(QPoint(0, 0))
+    rest = []
+    t_r = time.monotonic()
+    while time.monotonic() - t_r < REST_S:
+        vis = br.bar_bottom(bar_window()) if bar_window() else None
+        top_prof = _row_profile(cg, g1.x() + TOP_X, g1.y(), TOP_W, TOP_H)
+        e0 = _profile_err(win_strip, top_prof)
+        rest.append({"ms": round((time.monotonic() - t_r) * 1000),
+                     "bar_vis": None if vis is None else round(vis, 1),
+                     "reveal": fi.reveal_amount(win_top, vis) if hasattr(fi, "reveal_amount")
+                     else (0 if vis is None else max(0.0, win_top - vis)),
+                     "toolbar": _toolbar_count(o, nswin), "err": e0,
+                     "active": _is_active(br), "offset": round(ctl.offset, 1)})
+        t.pump(40)
+    res["rest"] = rest
+    ref = _profile_err(win_strip, win_strip)
+    worst = max(r["err"] for r in rest if r["err"] is not None) if rest else None
+    level = (sum(win_strip) / len(win_strip)) if win_strip else 0
+    t.note(f"at rest: windowed title bar {title_h} pt, options {res['options']}, "
+           f"pixel err max {worst} (strip mean {round(level)}), samples "
+           + "; ".join(f"{r['ms']}:vis={r['bar_vis']} rv={r['reveal']} tb={r['toolbar']} "
+                       f"err={r['err']} act={int(r['active'])} off={r['offset']}"
+                       for r in rest[:8]))
+    t.check("no NSToolbar attached in full screen",
+            all(r["toolbar"] == 0 for r in rest), [r["toolbar"] for r in rest][:5])
+    t.check(f"bar closed at rest for {REST_S} s (bar window off screen, content top "
+            "pixels match the windowed content top)",
+            bool(rest) and all(r["reveal"] == 0 and r["offset"] == 0 for r in rest)
+            and (res.get("space_still_ours") is False  # another Space is on screen
+                 or (worst is not None
+                     and worst <= max(REST_ERR_MIN, REST_ERR_FRAC * level))),
+            f"max reveal {max(r['reveal'] for r in rest) if rest else None}, "
+            f"max offset {max(r['offset'] for r in rest) if rest else None}, "
+            f"pixel err {worst} vs limit {round(max(REST_ERR_MIN, REST_ERR_FRAC * level))}, "
+            f"self {ref}"
+            + (" (pixels not compared: macOS switched Spaces when another app came"
+               " to the front)" if res.get("space_still_ours") is False else ""))
+    if os.environ.get("ANKI_FS_DEACTIVATE") == "1":
+        t.note("ANKI_FS_DEACTIVATE=1: app deactivated for the at-rest check; "
+               "reveal checks skipped (AppKit reveals only the active app's bar)")
+        return
     c0 = content_rect()
     top0 = c0.origin.y + c0.size.h
-    win_top = wf.origin.y + wf.size.h
     t.check("no strip: with the bar hidden the content starts at the window top",
             abs(win_top - top0) <= 1.0 and ctl.offset == 0,
             f"window top {win_top} content top {top0} offset {ctl.offset}")
@@ -499,6 +589,10 @@ def _cycle(t, env, res):
             f"out {a['push'][-5:]} hide {hp}")
     t.check("animated (intermediate positions seen), not a jump", len(a["steps"]) >= 3, a["steps"])
     gaps = a["gaps"] + _analyse(hide, win_top)["gaps"]
+    tree_h = [ln for ln in res["bar_tree"] if "TitlebarContainerView" in ln]
+    t.check("revealed bar is the plain title bar height (windowed title bar, within 2 pt)",
+            abs(a["peak"] - title_h) <= 2.0,
+            f"revealed {a['peak']} pt, windowed title bar {title_h} pt, container {tree_h[:1]}")
     t.check("content shift equals the bar's reveal in every sample (lockstep)",
             bool(gaps) and max(gaps) <= LOCKSTEP_TOL,
             f"{len(gaps)} samples, max excess gap {max(gaps) if gaps else None}")
