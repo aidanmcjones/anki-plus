@@ -14,12 +14,16 @@ Two earlier fixes pushed the content by hand and both were wrong:
     it in the page colour: a dark band over the scene backdrop and the whole
     app pushed down (ticket 20260923-105203).
 
-Safari, Finder and Xcode get the behaviour the user wants from AppKit, not
-from their own code: their windows have an NSToolbar, and in full screen
-with NSApplicationPresentationAutoHideToolbar the toolbar hides and reveals
-together with the menu bar while AppKit moves the window's content down and
-back up with the same animation. This module gives the Anki+ window exactly
-that, and only while it is full screen:
+A third fix (539a2af) attached an auto-hiding NSToolbar and expected
+AppKit to move the content with it. On the real display the bar revealed
+and the content did not move: in macOS 26 AppKit's full screen reveal
+(_NSFullScreenToolbarRevealAnimation driving
+_NSFullScreenMenuBarCompanionController) only reshapes the separate
+NSToolbarFullScreenWindow, one setFrame:display: per animation step; it
+never moves or re-lays out the app's own window. An app whose content
+follows the bar has to follow that window itself.
+
+So this module does the same, driven only by AppKit:
 
   * window:willUseFullScreenPresentationOptions: (added to Qt's window
     delegate class, which does not implement it) adds AutoHideToolbar for
@@ -29,13 +33,19 @@ that, and only while it is full screen:
     height) and, if AutoHideToolbar is not already in effect, add it to the
     app's presentation options, so the bar stays hidden until the cursor
     asks for it.
-  * NSWindowWillExitFullScreenNotification: remove the toolbar and restore
-    the window's toolbar style and the presentation options, so the exit
-    animation and the windowed title bar are exactly as before.
+  * NSWindowDidMove/DidResizeNotification of AppKit's bar window (every
+    step of its own reveal animation posts one): the content view is
+    placed so its top edge sits on the bar's bottom edge, in the same run
+    loop turn as the bar's frame change, so both land in the same frame.
+    The view keeps its size (nothing re-lays out or re-renders; the bottom
+    slides off screen for as long as the bar is out).
+  * NSWindowWillExitFullScreenNotification: put the content view back,
+    remove the toolbar and restore the window's toolbar style and the
+    presentation options, so the exit animation and the windowed title bar
+    are exactly as before.
 
-Nothing else. No timer, no cursor read, no contents margin, no painted
-strip. The content only ever moves because AppKit moves it, in the reveal
-animation, which is the native path every toolbar window uses.
+Nothing else. No timer, no cursor read, no Qt contents margin, no painted
+strip. The content only moves when AppKit moves the bar, by exactly as much.
 
 The AppKit calls go through the Objective-C runtime with ctypes (PyObjC is
 not in the Anki pyenv). Every call has an explicit signature, and every step
@@ -66,6 +76,47 @@ TOOLBAR_ID = "net.ankiplus.fullscreen-reveal"
 NOTE_DID_ENTER = "NSWindowDidEnterFullScreenNotification"
 NOTE_WILL_EXIT = "NSWindowWillExitFullScreenNotification"
 NOTE_DID_EXIT = "NSWindowDidExitFullScreenNotification"
+NOTE_DID_MOVE = "NSWindowDidMoveNotification"
+NOTE_DID_RESIZE = "NSWindowDidResizeNotification"
+
+# AppKit's full screen title bar / toolbar window (the "companion" window
+# that slides down with the menu bar). Matched by class name.
+BAR_WINDOW_CLASS = "ToolbarFullScreenWindow"
+BAR_VIEW_CLASS = "TitlebarContainerView"
+MAX_REVEAL = 200.0  # pt: anything larger is not a title bar
+
+
+class _Rect:
+    """NSRect for ctypes, built lazily (ctypes is imported on demand)."""
+    _type: Any = None
+
+    @classmethod
+    def get(cls) -> Any:
+        if cls._type is None:
+            import ctypes
+
+            class NSPoint(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+            class NSSize(ctypes.Structure):
+                _fields_ = [("w", ctypes.c_double), ("h", ctypes.c_double)]
+
+            class NSRect(ctypes.Structure):
+                _fields_ = [("origin", NSPoint), ("size", NSSize)]
+
+            cls._type = NSRect
+        return cls._type
+
+
+def reveal_amount(content_top: float, bar_bottom: Optional[float]) -> float:
+    """How far the revealed bar reaches below the content window's top edge
+    (pt), clamped to [0, MAX_REVEAL]. None (bar not on screen) is 0."""
+    if bar_bottom is None:
+        return 0.0
+    r = float(content_top) - float(bar_bottom)
+    if r <= 0.5:
+        return 0.0
+    return min(r, MAX_REVEAL)
 
 
 def with_autohide_toolbar(options: int) -> int:
@@ -169,6 +220,9 @@ class CocoaBridge:
         self._saved_style: Dict[int, int] = {}
         self._saved_options: Optional[int] = None
         self._set_options: Optional[int] = None
+        self._bar_handlers: Dict[int, Callable[[int], None]] = {}
+        self._bars_observed = False
+        self._content_rest: Dict[int, float] = {}
 
     # -- runtime class -------------------------------------------------------
     def _make_class(self) -> int:
@@ -191,10 +245,12 @@ class CocoaBridge:
             ct.CFUNCTYPE(None, vp, vp, vp)(CocoaBridge._on_note),
             ct.CFUNCTYPE(vp, vp, vp, vp)(CocoaBridge._empty_ids),
             ct.CFUNCTYPE(vp, vp, vp, vp, vp, ct.c_bool)(CocoaBridge._no_item),
+            ct.CFUNCTYPE(None, vp, vp, vp)(CocoaBridge._on_bar_note),
         )
-        note_imp, ids_imp, item_imp = (ct.cast(f, vp) for f in imps)
+        note_imp, ids_imp, item_imp, bar_imp = (ct.cast(f, vp) for f in imps)
         add = o.lib.class_addMethod
         ok = add(cls, o.sel("fullscreenNote:"), note_imp, b"v@:@")
+        ok &= add(cls, o.sel("barNote:"), bar_imp, b"v@:@")
         ok &= add(cls, o.sel("toolbarDefaultItemIdentifiers:"), ids_imp, b"@@:@")
         ok &= add(cls, o.sel("toolbarAllowedItemIdentifiers:"), ids_imp, b"@@:@")
         ok &= add(cls, o.sel("toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:"),
@@ -238,6 +294,23 @@ class CocoaBridge:
             h = br._handlers.get(int(win))
             if h is not None and name:
                 h(name.decode())
+        except Exception:
+            pass
+
+    @staticmethod
+    def _on_bar_note(_self: int, _cmd: int, note: int) -> None:
+        """A window moved or resized. If it is AppKit's full screen bar
+        window of one of our windows, hand it to that window's handler."""
+        br = _SHARED.get("bridge")
+        if br is None or not br._bar_handlers:
+            return
+        try:
+            win = int(br.o.send(note, "object") or 0)
+            if not win or BAR_WINDOW_CLASS not in br.o.class_name(win):
+                return
+            h = br._bar_handlers.get(br.bar_owner(win))
+            if h is not None:
+                h(win)
         except Exception:
             pass
 
@@ -344,6 +417,120 @@ class CocoaBridge:
             o.send(nswin, "setToolbarStyle:", self._saved_style.pop(key),
                    restype=None, argtypes=(ct.c_long,))
 
+    # -- the full screen bar window and the content that follows it ---------
+    def observe_bars(self, nswin: int, handler: Optional[Callable[[int], None]]) -> None:
+        """Start (handler) or stop (None) following the bar window of
+        `nswin`. One app-wide observer for window moves/resizes, filtered to
+        AppKit's bar windows, so a bar window AppKit creates or replaces
+        later is followed too."""
+        o = self.o
+        vp = o.ct.c_void_p
+        if handler is None:
+            self._bar_handlers.pop(int(nswin), None)
+        else:
+            self._bar_handlers[int(nswin)] = handler
+        want = bool(self._bar_handlers)
+        if want == self._bars_observed:
+            return
+        center = o.send(o.cls("NSNotificationCenter"), "defaultCenter")
+        for name in (NOTE_DID_MOVE, NOTE_DID_RESIZE):
+            if want:
+                o.send(center, "addObserver:selector:name:object:",
+                       self._helper, o.sel("barNote:"), o.nsstring(name), None,
+                       restype=None, argtypes=(vp, vp, vp, vp))
+            else:
+                o.send(center, "removeObserver:name:object:",
+                       self._helper, o.nsstring(name), None,
+                       restype=None, argtypes=(vp, vp, vp))
+        self._bars_observed = want
+
+    def bar_owner(self, barwin: int) -> int:
+        """The app window a bar window belongs to (AppKit makes it a child
+        of the full screen window)."""
+        o = self.o
+        parent = int(o.send(barwin, "parentWindow") or 0)
+        if parent in self._bar_handlers:
+            return parent
+        if o.responds(barwin, "_originalWindow"):
+            return int(o.send(barwin, "_originalWindow") or 0)
+        return parent
+
+    def find_bar(self, nswin: int) -> int:
+        o = self.o
+        ul = o.ct.c_ulong
+        wins = o.send(self._app(), "windows")
+        for i in range(o.send(wins, "count", restype=ul) if wins else 0):
+            w = int(o.send(wins, "objectAtIndex:", i, argtypes=(ul,)) or 0)
+            if w and BAR_WINDOW_CLASS in o.class_name(w) and self.bar_owner(w) == int(nswin):
+                return w
+        return 0
+
+    def _screen_rect(self, view: int) -> Any:
+        o = self.o
+        R = _Rect.get()
+        vp = o.ct.c_void_p
+        b = o.send(view, "bounds", restype=R)
+        r = o.send(view, "convertRect:toView:", b, None, restype=R, argtypes=(R, vp))
+        win = o.send(view, "window")
+        return o.send(win, "convertRectToScreen:", r, restype=R, argtypes=(R,))
+
+    def _find_view(self, view: int, cls_part: str, depth: int = 0) -> int:
+        o = self.o
+        ul = o.ct.c_ulong
+        if not view or depth > 5:
+            return 0
+        if cls_part in o.class_name(view):
+            return view
+        subs = o.send(view, "subviews")
+        for i in range(o.send(subs, "count", restype=ul) if subs else 0):
+            hit = self._find_view(o.send(subs, "objectAtIndex:", i, argtypes=(ul,)),
+                                  cls_part, depth + 1)
+            if hit:
+                return hit
+        return 0
+
+    def bar_bottom(self, barwin: int) -> Optional[float]:
+        """Screen y (Cocoa, bottom-left origin) of the bar's visible bottom
+        edge: the title bar container AppKit moved into the bar window, or
+        the window's own frame. None while the bar window is not shown."""
+        o = self.o
+        ct = o.ct
+        if not barwin or not o.send(barwin, "isVisible", restype=ct.c_bool):
+            return None
+        if float(o.send(barwin, "alphaValue", restype=ct.c_double)) <= 0.01:
+            return None
+        v = self._find_view(o.send(barwin, "contentView") or 0, BAR_VIEW_CLASS)
+        if v:
+            return float(self._screen_rect(v).origin.y)
+        return float(o.send(barwin, "frame", restype=_Rect.get()).origin.y)
+
+    def content_top(self, nswin: int) -> float:
+        f = self.o.send(nswin, "frame", restype=_Rect.get())
+        return float(f.origin.y + f.size.h)
+
+    def set_content_offset(self, nswin: int, offset: float) -> None:
+        """Place the window's content view `offset` pt below where AppKit
+        laid it out (same size, so nothing inside re-lays out). 0 puts it
+        back exactly."""
+        o = self.o
+        R = _Rect.get()
+        key = int(nswin)
+        cv = o.send(nswin, "contentView")
+        if not cv:
+            return
+        f = o.send(cv, "frame", restype=R)
+        if key not in self._content_rest:
+            if offset <= 0:
+                return
+            self._content_rest[key] = float(f.origin.y)
+        rest = self._content_rest[key]
+        y = rest - float(offset)
+        if abs(f.origin.y - y) >= 0.25:
+            o.send(cv, "setFrameOrigin:", type(f.origin)(f.origin.x, y),
+                   restype=None, argtypes=(type(f.origin),))
+        if offset <= 0:
+            self._content_rest.pop(key, None)
+
     # -- presentation options ------------------------------------------------
     def _app(self) -> int:
         o = self.o
@@ -424,6 +611,7 @@ def _make_controller_class() -> Any:
             self._bridge = bridge
             self._nswin = 0
             self.attached = False
+            self.offset = 0.0
             win.installEventFilter(self)
             self._bind()
             try:
@@ -476,11 +664,39 @@ def _make_controller_class() -> Any:
                 self._bridge.autohide_toolbar()
             except Exception:
                 pass
+            try:
+                self._bridge.observe_bars(self._nswin, self._on_bar)
+                bar = self._bridge.find_bar(self._nswin)
+                if bar:
+                    self._on_bar(bar)
+            except Exception:
+                pass
+
+        def _on_bar(self, barwin: int) -> None:
+            """AppKit moved its bar window (a step of its own reveal or hide
+            animation): put the content's top edge on the bar's bottom."""
+            if not self.attached or not self._nswin:
+                return
+            br = self._bridge
+            try:
+                r = reveal_amount(br.content_top(self._nswin), br.bar_bottom(barwin))
+                if abs(r - self.offset) < 0.25:
+                    return
+                br.set_content_offset(self._nswin, r)
+                self.offset = r
+            except Exception:
+                pass
 
         def _exit(self) -> None:
             if not self.attached or not self._nswin:
                 return
             self.attached = False
+            try:
+                self._bridge.observe_bars(self._nswin, None)
+                self._bridge.set_content_offset(self._nswin, 0.0)
+            except Exception:
+                pass
+            self.offset = 0.0
             try:
                 self._bridge.detach_toolbar(self._nswin)
             except Exception:

@@ -15,6 +15,9 @@ icon and no focus change. It proves, against the real AppKit:
     toolbar (our delegate, no items, unified compact style);
   * Qt's window delegate answers window:willUseFullScreenPresentationOptions:
     with AutoHideToolbar for this window only;
+  * a move of a window of AppKit's full screen bar class, posted as a real
+    NSWindowDidMoveNotification, moves the content view by the bar's
+    reveal, step by step, and will-exit puts it back and stops following;
   * NSWindowWillExitFullScreenNotification removes it and restores the
     style; the window is never made visible.
 """
@@ -32,6 +35,25 @@ sys.path[:0] = [ROOT] + [os.path.join(SRC, p) for p in ("pylib", "out/pylib", "q
 from aqt.qt import QApplication, QMainWindow, QWidget  # noqa: E402
 
 import fullscreen_inset as fi  # noqa: E402
+
+
+def make_bar_window(o):
+    """A never-shown NSWindow whose class name looks like AppKit's full
+    screen bar window."""
+    L = o.lib
+    name = b"SmokeNSToolbarFullScreenWindow"
+    cls = o.cls(name.decode())
+    if not cls:
+        cls = L.objc_allocateClassPair(o.cls("NSWindow"), name, 0)
+        L.objc_registerClassPair(cls)
+    R = fi._Rect.get()
+    r = R()
+    r.origin.x, r.origin.y, r.size.w, r.size.h = 10.0, 500.0, 300.0, 40.0
+    w = o.send(o.send(cls, "alloc"), "initWithContentRect:styleMask:backing:defer:",
+               r, 0, 2, True,
+               argtypes=(R, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_bool))
+    o.send(w, "setReleasedWhenClosed:", False, restype=None, argtypes=(ctypes.c_bool,))
+    return w
 
 
 def main():
@@ -101,8 +123,43 @@ def main():
     post(fi.NOTE_DID_ENTER)  # idempotent
     assert br.toolbar(nswin) == tb
 
+    # The content follows AppKit's bar window: a real (never shown) window
+    # whose class name matches, moved through the real notification center.
+    bar = make_bar_window(o)
+    assert fi.BAR_WINDOW_CLASS in o.class_name(bar)
+    assert br.bar_bottom(bar) is None, "an invisible bar must count as hidden"
+    R = fi._Rect.get()
+    cv = o.send(nswin, "contentView")
+    rest = o.send(cv, "frame", restype=R).origin.y
+    real_owner, real_bottom = br.bar_owner, br.bar_bottom
+    top = br.content_top(nswin)
+    bottoms = {"y": top}
+    br.bar_owner = lambda w: int(nswin) if w == bar else real_owner(w)
+    br.bar_bottom = lambda w: bottoms["y"]
+    seen = []
+    for step in (12.0, 30.0, 54.0, 54.0, 20.0, 0.0):
+        bottoms["y"] = top - step
+        o.send(bar, "setFrameOrigin:", R().origin.__class__(10.0, 500.0 + step),
+               restype=None, argtypes=(R().origin.__class__,))
+        y = o.send(cv, "frame", restype=R).origin.y
+        seen.append((step, ctl.offset, rest - y))
+        assert abs(ctl.offset - step) < 0.01 and abs((rest - y) - step) < 0.01, seen
+    print(f"ok  content follows the bar window's moves: {seen}")
+    bottoms["y"] = top - 40.0
+    o.send(bar, "setFrameOrigin:", R().origin.__class__(10.0, 700.0),
+           restype=None, argtypes=(R().origin.__class__,))
+    assert ctl.offset == 40.0
+    br.bar_owner, br.bar_bottom = real_owner, real_bottom
+
     post(fi.NOTE_WILL_EXIT)
     assert br.toolbar(nswin) == 0 and not ctl.attached, "will-exit did not detach"
+    assert ctl.offset == 0 and o.send(cv, "frame", restype=R).origin.y == rest, \
+        "will-exit did not put the content view back"
+    assert not br._bars_observed, "bar observer left installed"
+    o.send(bar, "setFrameOrigin:", R().origin.__class__(10.0, 300.0),
+           restype=None, argtypes=(R().origin.__class__,))
+    assert o.send(cv, "frame", restype=R).origin.y == rest
+    print("ok  will-exit: content view back in place, bar no longer followed")
     assert o.send(nswin, "toolbarStyle", restype=lg) == style0
     post(fi.NOTE_DID_EXIT)
     print(f"ok  will-exit: toolbar removed, style restored to {style0}")

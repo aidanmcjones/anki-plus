@@ -81,9 +81,12 @@ cd ~/dev/anki && ANKI_LIVE_DISPLAY=1 out/pyenv/bin/python \
     ~/dev/anki-design/tests/live/test_fullscreen_display.py
 ```
 
-Posted mouse events need Accessibility permission for the Python binary
-(System Settings > Privacy & Security > Accessibility); without it the
-cursor is only warped, which may not reveal the bar, and the test says so.
+Posted mouse events need Accessibility permission and reading screen pixels
+needs Screen Recording permission for the process that launches the
+harness (System Settings > Privacy & Security). If the bar never reveals the
+test says Accessibility is the likely cause; if it reveals and the content
+does not move, it says that instead. A locked screen fails fast. Set
+`ANKI_FS_DIAG_OUT=<file.json>` to keep every sample.
 
 ## Writing a live test
 
@@ -136,16 +139,17 @@ Rules for a good live test:
 ## Current tests
 
 - `test_fullscreen_display.py` (opt-in, `ANKI_LIVE_DISPLAY=1`, arm64): enters
-  macOS full screen, checks the empty toolbar attached on AppKit's
-  did-enter with AutoHideToolbar in effect and that, with the bar hidden,
-  the content starts at the window top (no strip, no margin). Then moves
-  the cursor to the top edge with Quartz (CGWarpMouseCursorPosition plus a
-  posted kCGEventMouseMoved, through ctypes), samples the sidebar
-  wordmark's window-relative y, the content height and the bottom edge of
-  AppKit's full screen toolbar window every 50 ms for 3 s, and asserts the
-  content moved down exactly once, animated, stayed, and sat on the bar's
-  bottom edge in every sample (lockstep, 2 pt). Restores the cursor and
-  leaves full screen.
+  macOS full screen, checks the empty toolbar attached with AutoHideToolbar
+  in effect and that, with the bar hidden, the content starts at the window
+  top (no strip, no margin). Moves the cursor to the top edge with Quartz
+  (CGWarpMouseCursorPosition plus a posted kCGEventMouseMoved, through
+  ctypes), then back to mid-screen, sampling about every 40 ms: the visible
+  bottom of AppKit's bar (its title bar container) and where the app's
+  pixels are, measured on screen by matching a strip over the sidebar
+  against the baseline. Asserts the content moved down exactly once,
+  animated, stayed, slid back to 0 when the bar hid, and matched the bar's
+  reveal in every sample (lockstep). Restores the cursor and leaves full
+  screen with the content view back in place.
 
 - `test_smoke.py`: the app starts on the deck list, the add-on is loaded,
   and the home webview lists the fixture decks in tree order.
