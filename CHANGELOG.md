@@ -48,6 +48,18 @@ All notable changes to Anki Design are documented here. Format loosely follows
   share. Deck ids and card counts are untouched by any of it — these are
   Anki's own reparent operations. `browse_sidebar_multiselect: false`
   restores the tool row.
+- **Decks go by their title.** Clicking a deck in the Browse sidebar
+  filled the search box with `"deck:Fundamentals of Biochemistry::Amino
+  Acids"`, quotes and all, and the Deck column repeated that full path on
+  every row: a deck's name is its title, "Amino Acids", the way the
+  sidebar and the deck list already show it. Now the box reads the title
+  and the column shows it, with the path as the tooltip. The real query
+  is untouched underneath: it is what runs, what Enter re-runs, what
+  ⌘-click and ⇧-click combine with, and what **Create Filtered Deck** and
+  **Save Current Search** are handed; type anything in the box and what
+  you typed is the search again. The reviewer header, the Stats title and
+  the Add screen's deck picker use the title too. `clean_deck_names:
+  false` puts the paths back.
 
 ### Fixed
 - **A deck stranded on a "— deadline" preset parked at 0/day shows its

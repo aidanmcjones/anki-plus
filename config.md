@@ -296,6 +296,15 @@ in this file are the raw form the settings page writes.
   headings refuse the drop. A plain click on a selected row still
   collapses the selection to it. `false` leaves the table as Anki ships
   it, with **Change Deck** (⌘D) and **Reposition** as the only routes.
+- **clean_deck_names** — decks go by their title. Click a deck in the
+  Browse sidebar and the search box reads *Amino Acids*, not
+  `"deck:Fundamentals of Biochemistry::Amino Acids"`; the Deck column
+  shows *Amino Acids* too, with the full path as the row's tooltip. The
+  real query is still what runs, and still what Enter, ⌘-click (AND),
+  ⇧-click (OR), **Create Filtered Deck** and **Save Current Search** see;
+  the moment you type in the box, what you typed is the search. The
+  reviewer header, the Stats title and the Add screen's deck picker use
+  the title as well. `false` shows Anki's paths and queries everywhere.
 - **browse_render_preview** — the Browse right-hand pane leads with the
   selected card, drawn exactly as the reviewer draws it (note type CSS,
   cloze, images, and your Reviewer settings), front *and* back in one

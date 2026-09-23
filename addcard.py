@@ -532,6 +532,31 @@ def _wire_inline_deck_picker(addcards: AddCards, btn: QPushButton) -> None:
             pass
     btn.clicked.connect(_open_menu)
 
+    # The button names the deck by its title, not its `::` path (see
+    # deck_names.py); the path goes in the tooltip. Anki's DeckChooser
+    # rewrites the label itself after every pick (`_update_button_label`,
+    # from the `selected_deck_id` setter), so wrap that on the instance:
+    # it keeps the title, and the ▾ the redress appended, through picks.
+    try:
+        from .deck_names import title as _deck_title
+
+        chooser = addcards.deck_chooser
+        orig_update = chooser._update_button_label
+
+        def _update_button_label() -> None:
+            orig_update()
+            try:
+                full = chooser.selected_deck_name() or ""
+                btn.setText(f"{_deck_title(full).replace('&', '&&')} ▾")
+                btn.setToolTip(full)
+            except Exception:
+                pass
+
+        chooser._update_button_label = _update_button_label  # type: ignore[assignment]
+        _update_button_label()
+    except Exception:
+        pass
+
 
 # --------------------------------------------------------------------------- #
 # Rebuild AddCards chrome on init
