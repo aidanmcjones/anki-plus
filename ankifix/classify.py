@@ -24,11 +24,33 @@ def classify(ticket: Dict[str, Any], cfg: Config, override: Optional[str] = None
 
     reviewer = ticket.get("reviewer") or {}
     notetype = reviewer.get("notetype") or ""
-    for prefix in cfg.course_notetype_prefixes:
-        if notetype.startswith(prefix):
-            return "deck", f"notetype {notetype!r} starts with course prefix {prefix!r}"
-
     text = " ".join(str(ticket.get(k) or "") for k in ("note", "expected")).lower()
+
+    course_prefix = next((p for p in cfg.course_notetype_prefixes if notetype.startswith(p)), None)
+    if course_prefix:
+        # The notetype prefix is evidence a course card was on screen when the
+        # ticket was captured, not a verdict on what the ticket is about: a
+        # ticket captured while a course card happened to be showing (e.g.
+        # "right-click an image and add copy/cut/paste to the pop-up menu")
+        # can still be an app feature request. Content/rendering words about
+        # the card win first (a stray UI-ish word like "image" or "cut" in
+        # "the image on this card is cut off" must not outrun an explicit
+        # reference to the card itself); only when the note says nothing
+        # about the card's content do UI verbs/nouns route it to app; with
+        # neither, the prefix's original default (deck) stands.
+        content_hits = _count(text, cfg.course_content_keywords)
+        if content_hits:
+            return "deck", (
+                f"notetype {notetype!r} (course prefix {course_prefix!r}); "
+                f"note is about the card's content/rendering {content_hits}"
+            )
+        app_signal_hits = _count(text, cfg.course_app_signal_keywords)
+        if app_signal_hits:
+            return "app", (
+                f"notetype {notetype!r} (course prefix {course_prefix!r}) is evidence, not a "
+                f"verdict; note has app signals {app_signal_hits}"
+            )
+        return "deck", f"notetype {notetype!r} starts with course prefix {course_prefix!r}; no signals either way"
 
     # longest-first so "deck browser" is consumed before "deck" is counted
     app_hits = _count(text, sorted(cfg.app_keywords, key=len, reverse=True))

@@ -173,7 +173,10 @@ def make_ticket(cfg, tid="20260922-214503-editor-image-won-t-grow", note="Editor
     ("deck browser freezes", None, "app"),
     ("screen goes blank after hotkey", None, "app"),
     ("something weird", "CourseB-Basic", "deck"),
-    ("editor crashes", "Micro-Cloze", "deck"),
+    # captured on a course card, but "editor crashes" has an app signal
+    # (editor) and no card-content signal: notetype prefix is evidence, not
+    # a verdict - this is an app bug, not a card fix
+    ("editor crashes", "Micro-Cloze", "app"),
     ("something weird", "Basic", "app"),
 ])
 def test_classify(note, notetype, expected):
@@ -183,7 +186,10 @@ def test_classify(note, notetype, expected):
 
 
 def test_classify_override_and_config_prefixes():
-    t = {"note": "editor crash", "reviewer": {"notetype": "Genetics-Basic"}}
+    # neutral note (no app or deck signal words) so this test isolates the
+    # prefix mechanism itself, not the app-signal/content-signal weighing
+    # (see test_classify_course_notetype_is_evidence_not_verdict for that)
+    t = {"note": "something about this", "reviewer": {"notetype": "Genetics-Basic"}}
     cfg = Config()
     assert classify(t, cfg)[0] == "app"
     cfg.course_notetype_prefixes.append("Genetics-")
@@ -648,6 +654,28 @@ def test_classify_ui_interaction_vs_deck(note, reviewer, expected):
     assert kind == expected, reason
 
 
+TICKET_102640_NOTE = (
+    "I should be able to right-click on an image and copy it or cut it. Add "
+    "these two options to the pop-up menu. From there I should be able to "
+    "paste a copied image from my clipboard into any field I want"
+)
+
+
+@pytest.mark.parametrize("note,notetype,expected", [
+    # ticket 20260923-102640: captured while a CourseB-E1 card was
+    # showing, but it's an app feature request (right-click/copy/cut/paste
+    # a note-editor image) - the course notetype prefix must not force deck
+    (TICKET_102640_NOTE, "CourseB-E1", "app"),
+    # a course card whose note is about the card's own rendering must still
+    # go to deck, even though it also contains app-ish words ("image", "cut")
+    ("the image on this card is cut off", "CourseB-E1", "deck"),
+])
+def test_classify_course_notetype_is_evidence_not_verdict(note, notetype, expected):
+    t = {"note": note, "reviewer": {"notetype": notetype}, "capture": None}
+    kind, reason = classify(t, Config())
+    assert kind == expected, reason
+
+
 def test_classify_no_card_bias_leans_app():
     cfg = Config()
     t = {"note": "the card", "reviewer": {"state": "question", "notetype": None}}
@@ -940,6 +968,102 @@ def test_tcc_deck_ticket_osascript_denied_is_needs_review(env, monkeypatch):
     assert "grant Full Disk Access to /X/Python.app" in s
     assert "Not authorized to send Apple events" in s
     assert out["fix"]["blocked"] == runner.FILES_ACCESS
+
+
+def test_tcc_deck_terminal_child_killed_is_marked_failed_within_one_poll(env, monkeypatch):
+    """20260923-102640: the orchestrator killed both the `ankifix <id>
+    --once-from-terminal` process and its claude child. The old poll loop
+    only asked "has status left {fixing, new}?", which a killed child (status
+    stuck at "fixing" forever, nothing rewrites ticket.json again) never
+    satisfies, so it sat out the rest of terminal_fallback_timeout_min. Now
+    every poll also checks whether the pid recorded in fix.pid is still
+    alive, and ends the wait (failed, "terminal run ended without a result")
+    within one poll interval once it isn't."""
+    import threading
+    import time as _time
+
+    cfg, t = _tcc_deck_setup(env, monkeypatch)
+    monkeypatch.setenv("FAKE_MODE", "sleep")  # the terminal child's `claude` blocks
+    cfg.terminal_fallback_timeout_min = 2  # generous cap we expect to finish well under
+
+    killed = {}
+
+    def killer():
+        deadline = _time.time() + 10
+        while _time.time() < deadline:
+            try:
+                cur = load_ticket(cfg.tickets_dir, t["id"])
+            except (OSError, ValueError):
+                cur = {}
+            pid = (cur.get("fix") or {}).get("pid")
+            if pid and pid != os.getpid():
+                try:
+                    os.kill(pid, 9)
+                except ProcessLookupError:
+                    pass
+                killed["pid"] = pid
+                return
+            _time.sleep(0.05)
+
+    th = threading.Thread(target=killer, daemon=True)
+    th.start()
+    t0 = _time.time()
+    out = runner.run_ticket(t["id"], cfg, echo=lambda *a: None)
+    elapsed = _time.time() - t0
+    th.join(timeout=2)
+
+    assert killed.get("pid"), "killer thread never saw the terminal child's pid"
+    assert out["status"] == "failed"
+    assert out["fix"]["summary"] == "terminal run ended without a result"
+    # caught within about one poll interval (0.2s), nowhere near the timeout cap
+    assert elapsed < 5
+
+
+def test_tcc_deck_terminal_child_killed_and_manually_requeued_is_marked_failed(env, monkeypatch):
+    """Same incident, but someone also ran `ankibug set <id> status=new` by
+    hand right after killing the child (to try to requeue it) before the
+    watcher's poll caught up. A dead pid still ends the wait quickly instead
+    of sitting out the timeout waiting on a "new" that will never move -
+    that hang is what needed a watcher restart in the field."""
+    import threading
+    import time as _time
+
+    cfg, t = _tcc_deck_setup(env, monkeypatch)
+    monkeypatch.setenv("FAKE_MODE", "sleep")
+    cfg.terminal_fallback_timeout_min = 2
+
+    killed = {}
+
+    def killer():
+        deadline = _time.time() + 10
+        while _time.time() < deadline:
+            try:
+                cur = load_ticket(cfg.tickets_dir, t["id"])
+            except (OSError, ValueError):
+                cur = {}
+            pid = (cur.get("fix") or {}).get("pid")
+            if pid and pid != os.getpid():
+                try:
+                    os.kill(pid, 9)
+                except ProcessLookupError:
+                    pass
+                killed["pid"] = pid
+                cur["status"] = "new"  # simulate the manual `ankibug set`
+                save_ticket(cfg.tickets_dir, cur)
+                return
+            _time.sleep(0.05)
+
+    th = threading.Thread(target=killer, daemon=True)
+    th.start()
+    t0 = _time.time()
+    out = runner.run_ticket(t["id"], cfg, echo=lambda *a: None)
+    elapsed = _time.time() - t0
+    th.join(timeout=2)
+
+    assert killed.get("pid"), "killer thread never saw the terminal child's pid"
+    assert out["status"] == "failed"
+    assert out["fix"]["summary"] == "terminal run ended without a result"
+    assert elapsed < 5
 
 
 def test_install_agent_refuses_when_tools_missing(tmp_path, monkeypatch):

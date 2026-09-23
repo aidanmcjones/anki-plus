@@ -24,8 +24,9 @@ from `docs/prompt_app.md` and `docs/prompt_deck.md` in this repo).
 ## Classification
 
 1. `--kind` wins. 2. A ticket whose `kind` is already `app`/`deck` keeps it.
-3. `deck` if `reviewer.notetype` starts with a course prefix (`CourseB-`, `Micro`).
-4. Otherwise keyword scoring on `note` + `expected`: deck words (card, deck,
+3. `reviewer.notetype` starting with a course prefix (`CourseB-`, `Micro`)
+   is *evidence* for `deck`, not a verdict on its own - see "Routing" below.
+4. Otherwise (no course prefix) keyword scoring on `note` + `expected`: deck words (card, deck,
    answer, blank, cloze, image on card, ...) against app words (editor, reviewer
    UI, deadline, hotkey, crash, button, ...). App surfaces that contain deck words
    ("deck browser", "answer button", "add card") are removed before deck words
@@ -52,6 +53,61 @@ at `kind: unknown` until someone runs `ankifix` on it. `ankibug list` and
 `index.md` only ever showed whatever `kind` was on disk; this doesn't change
 their rendering, it changes what gets written. Tickets already on disk with
 `kind: unknown` are left alone; `unknown` is still a valid, accepted `kind`.
+
+### Routing: the course notetype prefix is evidence, not a verdict
+
+Ticket `20260923-102640` ("I should be able to right-click on an image and
+copy it or cut it. Add these two options to the pop-up menu. From there I
+should be able to paste a copied image from my clipboard into any field I
+want") was captured while a CourseB-E1 card happened to be showing. The
+old classifier returned `deck` as soon as it saw the course-prefixed
+notetype, before it ever looked at the words - so this app feature request
+was sent down the deck path, hit the OneDrive Files TCC block, and only
+reached a human via the Terminal fallback.
+
+Now, when `reviewer.notetype` matches a course prefix, `classify()` still
+looks at the note before deciding:
+
+1. **Content/rendering words win first.** If the note mentions the card's
+   own content or rendering (`course_content_keywords`: answer, wrong, typo,
+   missing, "image on the card", cloze, front, back, shows, hidden, blank,
+   definition, slide, and the "on the/this card" phrasings) - `deck`. This
+   check comes first on purpose: "the image on this card is cut off" stays
+   `deck` even though it also contains the app-ish words "image" and "cut".
+2. **Otherwise, UI verbs/nouns route it to app.** If the note has
+   `course_app_signal_keywords` (right-click, menu, pop-up, clipboard, copy,
+   cut, paste, drag, drop, select, dropdown, sidebar, search bar, settings,
+   toolbar, full screen, window, shortcut, hotkey, scroll, editor, field,
+   button, resize, image) - `app`, even on a course card. Ticket 102640
+   (right-click/copy/cut/pop-up menu/paste/clipboard/field) is exactly this
+   case.
+3. **No signal either way** - `deck` (the prefix's original default stands).
+
+Both lists are `Config` fields (`course_app_signal_keywords`,
+`course_content_keywords`), overridable the same way as everything else in
+`~/.config/ankifix/config.json`.
+
+**Manual override:** when the classifier still gets a ticket wrong, fix the
+routing by hand instead of re-running it and hoping - `ankibug set <id>
+kind=app` (or `kind=deck`) sets `ticket.kind` directly, which both `ankibug`
+and `ankifix` (rule 2 above) treat as authoritative from then on, no
+classifier involved. `ankifix <id> --kind app|deck` does the same for one run
+without persisting it to the ticket.
+
+### Held tickets
+
+`status: needs-review` is the only status the watcher's `--watch` loop never
+picks back up on its own - it is the manual hold. Use it (or just leave a
+ticket that landed there) when you want to look at something before it runs
+again.
+
+Do **not** use `status: fixing` as a manual hold. `fixing` means "a live
+process is working on this right now"; a `fixing` ticket with no live
+`fix.pid` (the watcher died mid-run, was killed, the Mac slept) is treated as
+abandoned and requeued as `new` by `recover_stale()` (or, for a Terminal
+fallback delegation, resolved to `failed` by `run_via_terminal` - see below)
+on the very next poll, not held. Setting a ticket to `fixing` by hand just
+gets it silently picked back up.
 
 ## App tickets
 
@@ -406,10 +462,29 @@ open `build_out.json`). On `EPERM`:
    handed to Terminal.app, which has Files access:
    `osascript -e 'tell application "Terminal" to do script "~/.venvs/ankibug/bin/ankifix <id> --once-from-terminal; exit"'`.
    `--once-from-terminal` runs that one ticket without taking the lock (the
-   watcher holds it while it waits) and without a fallback of its own. The
-   watcher polls `ticket.json` every 5 s until the status leaves `fixing`
-   (up to `terminal_fallback_timeout_min`, 40). The first time, macOS asks
-   whether Python may control Terminal (Automation); allow it once.
+   watcher holds it while it waits) and without a fallback of its own; it
+   records its own pid in `fix.pid` the moment it starts (same as any other
+   run). The watcher polls `ticket.json` every `terminal_poll_s` (5) until
+   either the status leaves `fixing` (a real result, or someone changed it
+   by hand - see below), or `fix.pid` is no longer alive while the ticket is
+   still `fixing` (or `new` with the same `fix.attempts` the delegation
+   started with, i.e. reset by hand rather than by a later, different
+   attempt) - that pid-gone case is treated as an abnormal end within one
+   poll interval: the ticket is marked `failed`, `"terminal run ended
+   without a result"`, and control returns to the watcher's loop. Either way
+   the wait is capped at `terminal_fallback_timeout_min` (40). The first
+   time, macOS asks whether Python may control Terminal (Automation); allow
+   it once.
+
+   This closes a real incident: an orchestrator killed both the `ankifix
+   <id> --once-from-terminal` process and its `claude` child for a ticket,
+   then set its status back to `new` by hand. The old poll only asked "has
+   status left `{fixing, new}`?", which a `new` reset (still in that exempt
+   set) never satisfies, so the watcher sat there - doing nothing else
+   either, since `--watch` processes one ticket at a time - for the rest of
+   the timeout window and needed a manual restart. Now a status change away
+   from `fixing` that isn't the delegation's own doing (or a dead pid) ends
+   the wait immediately instead of being waited on.
 2. If osascript is refused (Automation denied, error -1743) or times out, the
    ticket becomes `needs-review` with `fix.blocked: "files-access"` and the
    summary: *deck fixes need Files access for the watcher; run `ankifix <id>`

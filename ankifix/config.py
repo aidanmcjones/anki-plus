@@ -88,6 +88,31 @@ class Config:
     course_notetype_prefixes: List[str] = field(
         default_factory=lambda: ["CourseB-", "Micro"]
     )
+    # a ticket captured on a course-prefixed notetype is only *evidence* for
+    # deck, not a verdict (see classify.py): these UI verbs/nouns route it to
+    # app anyway ("right-click an image and add copy/cut to the pop-up menu"
+    # while a CourseB card happened to be on screen is an app feature).
+    course_app_signal_keywords: List[str] = field(
+        default_factory=lambda: [
+            "right-click", "right click", "menu", "pop-up", "popup", "clipboard",
+            "copy", "cut", "paste", "drag", "drop", "select", "dropdown",
+            "sidebar", "search bar", "settings", "toolbar", "full screen",
+            "window", "shortcut", "hotkey", "scroll", "editor", "field",
+            "button", "resize", "image",
+        ]
+    )
+    # words/phrases that mean the note is about the course card's own content
+    # or rendering, not the app: these take priority over course_app_signal_keywords
+    # ("the image on this card is cut off" stays deck even though it also
+    # contains the app-ish words "image"/"cut").
+    course_content_keywords: List[str] = field(
+        default_factory=lambda: [
+            "answer", "wrong", "typo", "missing", "image on the card",
+            "image on card", "on the card", "on this card", "on card",
+            "cloze", "front", "back", "shows", "hidden", "blank",
+            "definition", "slide",
+        ]
+    )
 
     # --- classification keywords ---------------------------------------
     deck_keywords: List[str] = field(

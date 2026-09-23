@@ -628,12 +628,24 @@ def run_via_terminal(
     """TCC fallback for a deck ticket: hand it to Terminal.app and wait for
     the child to finish ticket.json. If osascript is refused (Automation
     permission) or never finishes, park the ticket as needs-review with the
-    Full Disk Access instructions."""
+    Full Disk Access instructions.
+
+    The status-only poll used to wait out the full terminal_fallback_timeout_min
+    even when the Terminal child (the `ankifix <id> --once-from-terminal`
+    python process; run_ticket records its own pid in fix.pid as soon as it
+    starts) had been killed: a `status` still "fixing", or reset to "new" by
+    hand (`ankibug set`) while nothing was running, both looked the same as
+    "still working" to a check that only asked "did status leave
+    {fixing, new}?". Now every poll also checks whether the pid on record is
+    still alive; once it (or a manual status reset away from "fixing") shows
+    nothing is actually running any more, this returns within one poll
+    interval instead of sitting out the rest of the deadline."""
     ticket_id = ticket["id"]
     ticket["kind"] = "deck"
     ticket["fix"]["delegated"] = "terminal"
     ticket["fix"]["summary"] = "no Files access under launchd; handed to Terminal.app"
     save_ticket(cfg.tickets_dir, ticket)
+    our_attempts = (ticket.get("fix") or {}).get("attempts")
     cmd = terminal_command(cfg, ticket_id)
     echo(f"ankifix: {ticket_id}: no Files access ({blocked}); running it in Terminal.app")
     err = None
@@ -656,8 +668,28 @@ def run_via_terminal(
                 cur = load_ticket(cfg.tickets_dir, ticket_id)
             except (OSError, ValueError):
                 continue
-            if cur.get("status") not in ("fixing", "new"):
-                echo(f"ankifix: {ticket_id} -> {cur.get('status')} (Terminal run)")
+            status = cur.get("status")
+            fix = cur.get("fix") if isinstance(cur.get("fix"), dict) else {}
+            # "fixing" is always ours to wait on; "new" is only ours if it's
+            # still our own attempt (the terminal child never sets "new"
+            # itself - retry_on_error is off for --once-from-terminal - so a
+            # "new" with our attempt count can only be a manual status reset,
+            # e.g. after someone killed the child by hand)
+            ours = status == "fixing" or (status == "new" and fix.get("attempts") == our_attempts)
+            if not ours:
+                echo(f"ankifix: {ticket_id} -> {status} (Terminal run)")
+                return cur
+            pid = fix.get("pid")
+            if pid is not None and not _pid_alive(pid):
+                echo(
+                    f"ankifix: {ticket_id}: terminal child (pid {pid}) is gone but status "
+                    f"is {status!r}; treating as an abnormal end"
+                )
+                cur["status"] = "failed"
+                cur.setdefault("fix", {})
+                cur["fix"]["finished"] = now_iso()
+                cur["fix"]["summary"] = "terminal run ended without a result"
+                save_ticket(cfg.tickets_dir, cur)
                 return cur
         err = f"Terminal run did not finish within {cfg.terminal_fallback_timeout_min:g} min"
         try:
