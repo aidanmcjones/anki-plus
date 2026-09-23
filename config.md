@@ -258,10 +258,11 @@ in this file are the raw form the settings page writes.
 - **silent_sync** — sync progress in the sidebar instead of a dialog.
 - **fullscreen_bar_inset** — in macOS full screen, the hidden "Anki+" title
   bar slides down over the content when the cursor touches the top of the
-  screen. With this on, the content moves down by the bar's height while
-  the bar is revealed and back up once it retracts, so nothing at the top
-  of the page is covered. `false` leaves the content where it is, as stock
-  Anki does.
+  screen. With this on, a constant strip of the bar's height is reserved at
+  the top for as long as the window is full screen, so the bar slides over
+  that strip and nothing at the top of the page is covered. The content
+  never moves when the bar reveals or retracts. `false` leaves the content
+  where it is, as stock Anki does.
 
 ## Browse
 - **browse_restyle** — paint the Browser's Qt chrome (card table, column

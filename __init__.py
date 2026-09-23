@@ -2987,6 +2987,55 @@ def _install_silent_sync() -> None:
         pass
 
 
+def _quiet_ankihub_login_nag() -> bool:
+    """Stop the AnkiHub add-on from popping "Sign in to AnkiHub." on its own.
+
+    AnkiHub (add-on 1322529746) wraps `AnkiQt._sync_collection_and_media`
+    and, with its default `auto_sync: on_ankiweb_sync`, its after_sync
+    callback calls `AnkiHubLogin.display_login()` whenever the user is not
+    signed in to AnkiHub. `_install_silent_sync` bypasses that wrapper for
+    every later sync, but it runs on main_window_did_init, which fires after
+    the startup auto-sync. The native (wrapped) path therefore runs exactly
+    once per launch and the window appears on every restart.
+
+    The callback resolves `AnkiHubLogin` as a module global of
+    `<ankihub>.gui.auto_sync` at call time, so rebinding that one name to a
+    stand-in with a no-op `display_login` silences only the unsolicited
+    prompt. Every deliberate entry point (AnkiHub menu > Sign in,
+    Preferences > Syncing > AnkiHub Log In, AnkiHub features that need an
+    account) imports the class from `gui.menu` and keeps working, and the
+    AnkiHub sync itself is untouched for users who are signed in.
+
+    Returns True once a stand-in is in place. Idempotent, and a no-op when
+    AnkiHub is not installed or is not loaded yet, so it is safe to call
+    from every hook that might precede the prompt."""
+    import sys
+
+    class _QuietAnkiHubLogin:
+        _ba_quiet = True
+
+        @staticmethod
+        def display_login(*args: Any, **kwargs: Any) -> None:
+            return None
+
+    done = False
+    for name, module in list(sys.modules.items()):
+        if module is None or not name.endswith(".gui.auto_sync"):
+            continue
+        cls = getattr(module, "AnkiHubLogin", None)
+        if cls is None or not hasattr(cls, "display_login"):
+            continue
+        if getattr(cls, "_ba_quiet", False):
+            done = True
+            continue
+        try:
+            module.AnkiHubLogin = _QuietAnkiHubLogin
+            done = True
+        except Exception:
+            pass
+    return done
+
+
 # --------------------------------------------------------------------------- #
 # Congrats page (Overview's empty state) — redesigned.
 # Anki's "Congratulations! You have finished this deck for now." is a Svelte
@@ -4600,6 +4649,18 @@ try:
 except Exception:
     pass
 
+# AnkiHub's unsolicited "Sign in to AnkiHub." window: quiet it now (AnkiHub
+# sorts before us in addons21, so it is normally already imported), again
+# when the profile opens, and before every sync. sync_will_start fires inside
+# the native sync, ahead of the after_sync callback that shows the window, so
+# the last of these catches an AnkiHub that loaded after us.
+try:
+    _quiet_ankihub_login_nag()
+    gui_hooks.profile_did_open.append(lambda *a: _quiet_ankihub_login_nag())
+    gui_hooks.sync_will_start.append(lambda *a: _quiet_ankihub_login_nag())
+except Exception:
+    pass
+
 # Hide Anki's top toolbar webview as soon as the main window / profile is up.
 gui_hooks.main_window_did_init.append(_apply_chrome)
 gui_hooks.profile_did_open.append(_apply_chrome)
@@ -4697,10 +4758,11 @@ except Exception as _e:
 
 
 # macOS full screen: the auto-hidden "Anki+" title bar slides down over the
-# content when the cursor touches the top edge. fullscreen_inset pushes the
-# main window's content down by the bar's height while it is revealed, so
-# the sidebar wordmark and the top of the page stay visible. Needs `mw`
-# shown, so it attaches on main_window_did_init.
+# content when the cursor touches the top edge. fullscreen_inset reserves a
+# constant strip of that height at the top while the window is full screen
+# (set once on entering, removed once on leaving), so the bar reveals over
+# the strip instead of the sidebar wordmark and the top of the page. It
+# never reacts to the reveal itself. Attaches on main_window_did_init.
 try:
     from . import fullscreen_inset as _fullscreen_inset
 
@@ -6146,3 +6208,13 @@ gui_hooks.profile_did_open.append(_dev_cmd_start)
 gui_hooks.main_window_did_init.append(_dev_start)
 gui_hooks.main_window_did_init.append(_dev_cmd_start)
 gui_hooks.profile_will_close.append(_dev_shutdown)
+
+
+# Live test harness (tests/live/run_in_app.py). Inert unless the harness set
+# ANKI_DESIGN_LIVE_TEST for a throwaway profile; see tests/live/README.md.
+try:
+    from . import live_test as _live_test
+
+    _live_test.install()
+except Exception:
+    pass
