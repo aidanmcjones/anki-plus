@@ -84,9 +84,12 @@ def run(t):
         act.trigger()
         t.pump(300)
 
-        did = col.decks.id_for_name("Restudy")
+        rs = _module(".restudy")
+        did = rs.find_restudy_deck(col)
         deck = col.decks.get(did) if did else None
-        t.check("a filtered deck named Restudy exists", bool(deck and deck.get("dyn")), deck and deck.get("name"))
+        t.check("a Restudy filtered deck exists", bool(deck and deck.get("dyn")), deck and deck.get("name"))
+        t.check("titled with the count when the cards span decks",
+                bool(deck) and deck["name"] == "Restudy: 3 cards", deck and deck["name"])
         in_deck = sorted(col.find_cards(f"did:{did}")) if did else []
         t.check("it holds exactly the selected cards", in_deck == sorted(pick), in_deck)
         t.check("it is the current deck", col.decks.current()["id"] == did, col.decks.current()["name"])
@@ -113,7 +116,8 @@ def run(t):
         act.trigger()
         t.pump(300)
 
-        did2 = col.decks.id_for_name("Restudy")
+        did2 = rs.find_restudy_deck(col)
+        t.check("retitled for Solo's cards", col.decks.name(did2) == "Restudy: Solo, 2 cards", col.decks.name(did2))
         t.check("the same Restudy deck is reused", did2 == did, (did, did2))
         in_deck = sorted(col.find_cards(f"did:{did2}"))
         t.check("it now holds only the unsuspended Solo card", in_deck == [solo[0]], in_deck)

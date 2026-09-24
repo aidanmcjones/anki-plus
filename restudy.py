@@ -2,7 +2,8 @@
 right-click a tag or a deck (or several) in the sidebar -> "Restudy N
 tags" / "Restudy N decks".
 
-Builds (or rebuilds) one filtered deck, "Restudy", from exactly the
+Builds (or rebuilds) one filtered deck, titled for what it holds
+("Restudy: FunBiochem hi_yield", "Restudy: Microbiology Week 5, 12 cards"), from exactly the
 selected card ids and starts studying it. Answers count toward the cards'
 real schedules (reschedule on), the same as studying them in their own
 decks. Reusing one deck keeps the deck list clean: every restudy empties
@@ -21,8 +22,9 @@ from aqt import mw
 from aqt.qt import QMenu
 
 DECK_NAME = "Restudy"
-# used only when the user already has a NORMAL deck called "Restudy"
-FALLBACK_NAME = "Restudy (selected cards)"
+# the deck is titled for what it holds: "Restudy: FunBiochem hi_yield"
+TITLE_SEP = ": "
+TITLE_MAX_ITEMS = 2
 
 
 def _log(msg: str) -> None:
@@ -38,16 +40,58 @@ def _tooltip(msg: str) -> None:
         _log(msg)
 
 
-def _target_deck_id(col: Any) -> tuple[int, str]:
-    """(existing filtered deck id or 0, name to use)."""
-    for name in (DECK_NAME, FALLBACK_NAME):
-        did = col.decks.id_for_name(name)
-        if not did:
-            return 0, name
-        deck = col.decks.get(did)
+def is_restudy_name(name: str) -> bool:
+    return name == DECK_NAME or name.startswith(DECK_NAME + TITLE_SEP) or name.startswith(DECK_NAME + " (")
+
+
+def find_restudy_deck(col: Any) -> int:
+    """Id of the (one, reused) Restudy filtered deck, whatever its current
+    title, or 0."""
+    for entry in col.decks.all_names_and_ids():
+        if "::" in entry.name or not is_restudy_name(entry.name):
+            continue
+        deck = col.decks.get(entry.id)
         if deck and deck.get("dyn"):
-            return int(did), name
-    return 0, FALLBACK_NAME
+            return int(entry.id)
+    return 0
+
+
+def _clean(label: str) -> str:
+    # "::" would nest the deck; keep the title one level
+    return " ".join(label.replace("::", " ").split())
+
+
+def join_labels(labels: List[str]) -> str:
+    labels = [l for l in (_clean(x) for x in labels) if l]
+    if len(labels) <= TITLE_MAX_ITEMS:
+        return ", ".join(labels)
+    return ", ".join(labels[:TITLE_MAX_ITEMS]) + f" +{len(labels) - TITLE_MAX_ITEMS} more"
+
+
+def tag_label(tag: str) -> str:
+    """Course root + leaf: FunBiochem::Study::hi_yield -> FunBiochem hi_yield."""
+    parts = [p for p in tag.split("::") if p]
+    if len(parts) <= 2:
+        return " ".join(parts)
+    return f"{parts[0]} {parts[-1]}"
+
+
+def deck_label(name: str) -> str:
+    """Course + deck: Microbiology::Exam 2 Content::Week 5 -> Microbiology Week 5."""
+    parts = [p for p in name.split("::") if p]
+    if len(parts) <= 2:
+        return " ".join(parts)
+    return f"{parts[0]} {parts[-1]}"
+
+
+def _title_name(col: Any, title: str, own_did: int) -> str:
+    name = DECK_NAME + (TITLE_SEP + _clean(title) if title else "")
+    other = col.decks.id_for_name(name)
+    if other and int(other) != own_did:
+        deck = col.decks.get(other)
+        if not (deck and deck.get("dyn")):
+            name += " (restudy)"   # a normal deck already has that name
+    return name
 
 
 # Anki refuses a filtered deck search term with a larger limit.
@@ -56,7 +100,7 @@ MAX_LIMIT = 99999
 LEFT_OUT = "suspended, buried, or already in another filtered deck"
 
 
-def build_deck_from_search(search: str, limit: int) -> tuple[int, int]:
+def build_deck_from_search(search: str, limit: int, title: str = "") -> tuple[int, int]:
     """Create or rebuild the Restudy filtered deck from `search`, taking at
     most `limit` cards (capped at Anki's 99999).
 
@@ -64,7 +108,8 @@ def build_deck_from_search(search: str, limit: int) -> tuple[int, int]:
     from anki.decks import FilteredDeckConfig
 
     col = mw.col
-    did, name = _target_deck_id(col)
+    did = find_restudy_deck(col)
+    name = _title_name(col, title, did)
     if did:
         # put the previous selection back first, so cards that are only in
         # "Restudy" because of the last restudy are free to be chosen again
@@ -90,11 +135,29 @@ def build_restudy_deck(cids: List[int]) -> tuple[int, int]:
 
     Returns (deck id, number of cards that made it in)."""
     return build_deck_from_search(
-        "cid:" + ",".join(str(int(c)) for c in cids), len(cids)
+        "cid:" + ",".join(str(int(c)) for c in cids), len(cids), cards_title(mw.col, cids)
     )
 
 
-def restudy_search(search: str, total: int, nothing: str, extra: str = "") -> None:
+def cards_title(col: Any, cids: List[int]) -> str:
+    """"Microbiology Week 5, 12 cards" when they share a home deck, else "12 cards"."""
+    n = len(cids)
+    count = f"{n} card{'s' if n != 1 else ''}"
+    homes = set()
+    for cid in cids:
+        try:
+            c = col.get_card(int(cid))
+            homes.add(int(c.odid or c.did))
+        except Exception:
+            continue
+        if len(homes) > 1:
+            return count
+    if len(homes) == 1:
+        return f"{deck_label(col.decks.name(homes.pop()))}, {count}"
+    return count
+
+
+def restudy_search(search: str, total: int, nothing: str, extra: str = "", title: str = "") -> None:
     """Build the Restudy deck from `search` (`total` cards match it), say
     how many made it in and how many were left out, and open the reviewer.
     `nothing` is the tooltip when none of them can be studied; `extra` is
@@ -102,7 +165,7 @@ def restudy_search(search: str, total: int, nothing: str, extra: str = "") -> No
     if not search or total <= 0 or getattr(mw, "col", None) is None:
         return
     try:
-        did, got = build_deck_from_search(search, total)
+        did, got = build_deck_from_search(search, total, title)
     except Exception as exc:
         _log(f"build failed: {exc!r}")
         _tooltip(f"Couldn't build the Restudy deck: {exc}")
@@ -112,7 +175,8 @@ def restudy_search(search: str, total: int, nothing: str, extra: str = "") -> No
         _tooltip((nothing + " " + extra).strip())
         return
     mw.col.decks.select(did)
-    msg = f"Restudying {got} card{'s' if got != 1 else ''}."
+    msg = f"Restudying {got} card{'s' if got != 1 else ''}"
+    msg += f" in {mw.col.decks.name(did)}." if title else "."
     if left_out:
         msg += f" {left_out} left out ({LEFT_OUT})."
     if extra:
@@ -131,6 +195,7 @@ def restudy(cids: List[int]) -> None:
         "cid:" + ",".join(str(int(c)) for c in ids),
         len(ids),
         f"None of the selected cards can be restudied ({LEFT_OUT}).",
+        title=cards_title(mw.col, ids),
     )
 
 
@@ -165,6 +230,7 @@ def restudy_tags(tags: List[str]) -> None:
         total,
         f"None of the cards with {'that tag' if len(tags) == 1 else 'those tags'} "
         f"can be restudied ({LEFT_OUT}).",
+        title=join_labels([tag_label(t) for t in tags]),
     )
 
 
@@ -233,6 +299,7 @@ def restudy_decks(dids: List[int]) -> None:
         f"None of the cards in {'that deck' if one else 'those decks'} "
         f"can be restudied ({LEFT_OUT}).",
         skipped,
+        title=join_labels([deck_label(n) for n in names]),
     )
 
 
@@ -262,7 +329,7 @@ def on_browser_will_show_context_menu(browser: Any, menu: QMenu) -> None:
     n = len(cids)
     act = _insert_top(menu, f"Restudy {n} selected card{'s' if n != 1 else ''}")
     act.setToolTip(
-        "Study just these cards now, in a filtered deck named Restudy. "
+        "Study just these cards now, in a Restudy filtered deck titled for what it holds. "
         "Answers count toward their normal schedules."
     )
     act.triggered.connect(lambda _checked=False, _c=cids: restudy(_c))
@@ -293,7 +360,7 @@ def on_sidebar_context_menu(sidebar: Any, menu: QMenu, item: Any, index: Any) ->
     act = _insert_top(menu, f"Restudy {n} tag{'s' if n != 1 else ''}")
     act.setToolTip(
         "Study every card with these tags (child tags included) now, in a "
-        "filtered deck named Restudy. Answers count toward their normal schedules."
+        "Restudy filtered deck titled for what it holds. Answers count toward their normal schedules."
     )
     act.triggered.connect(lambda _checked=False, _t=tags: restudy_tags(_t))
 
@@ -317,7 +384,7 @@ def _deck_menu(sidebar: Any, menu: QMenu, item: Any) -> None:
     act = _insert_top(menu, f"Restudy {n} deck{'s' if n != 1 else ''}")
     act.setToolTip(
         "Study every card in these decks (subdecks included) now, in a "
-        "filtered deck named Restudy. Answers count toward their normal "
+        "Restudy filtered deck titled for what it holds. Answers count toward their normal "
         "schedules. Filtered decks are left out."
     )
     act.triggered.connect(lambda _checked=False, _d=dids: restudy_decks(_d))

@@ -148,7 +148,9 @@ def run(t):
         act.trigger()
         t.pump(300)
 
-        did = col.decks.id_for_name("Restudy")
+        rs = _module(".restudy")
+        did = rs.find_restudy_deck(col)
+        t.check("the deck is titled for the tags", did and col.decks.name(did) == "Restudy: alpha, beta", did and col.decks.name(did))
         deck = col.decks.get(did) if did else None
         t.check("a filtered deck named Restudy exists", bool(deck and deck.get("dyn")),
                 deck and deck.get("name"))
@@ -157,7 +159,7 @@ def run(t):
                 in_deck == want_ab, (len(in_deck), in_deck, want_ab))
         t.check("no untagged or gamma card came along",
                 not (set(in_deck) & set(solo)), in_deck)
-        t.check("the tooltip counts the cards", any("Restudying 6 cards." in x for x in tips), tips)
+        t.check("the tooltip counts the cards", any("Restudying 6 cards in Restudy: " in x for x in tips), tips)
         ok = t.wait_until(lambda: mw.state == "review", timeout=10)
         t.check("the app is in the reviewer", ok, mw.state)
         rc = getattr(mw.reviewer, "card", None)
@@ -183,12 +185,12 @@ def run(t):
         tips.clear()
         act.trigger()
         t.pump(300)
-        did2 = col.decks.id_for_name("Restudy")
+        did2 = rs.find_restudy_deck(col)
         t.check("the same Restudy deck is reused", did2 == did, (did, did2))
         in_deck = sorted(col.find_cards(f"did:{did2}"))
         t.check("it holds only gamma's unsuspended card", in_deck == [solo[0]], in_deck)
         t.check("the tooltip says one was left out",
-                any("Restudying 1 card." in x and "1 left out" in x for x in tips), tips)
+                any("Restudying 1 card in Restudy: " in x and "1 left out" in x for x in tips), tips)
         t.check("reviewer again", t.wait_until(lambda: mw.state == "review", timeout=10), mw.state)
     finally:
         QMenu.exec = orig_exec

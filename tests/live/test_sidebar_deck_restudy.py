@@ -138,8 +138,14 @@ def run(t):
     def restudy_act(menu):
         return next((a for a in menu.actions() if a.text().startswith("Restudy")), None) if menu else None
 
+    rs = _module(".restudy")
+
     def restudy_did():
-        return col.decks.id_for_name("Restudy")
+        return rs.find_restudy_deck(col)
+
+    def rname():
+        did = restudy_did()
+        return col.decks.name(did) if did else "Restudy"
 
     def in_restudy():
         did = restudy_did()
@@ -180,7 +186,7 @@ def run(t):
                 in_restudy() == parent6 and len(parent6) == 6, (in_restudy(), parent6))
         t.check("no Solo or Star card came along",
                 not (set(in_restudy()) & set(solo + star + starx)), in_restudy())
-        t.check("the tooltip counts the cards", any("Restudying 6 cards." in x for x in tips), tips)
+        t.check("the tooltip counts the cards", any("Restudying 6 cards in Restudy: " in x for x in tips), tips)
         ok = t.wait_until(lambda: mw.state == "review", timeout=10)
         t.check("the app is in the reviewer", ok, mw.state)
         rc = getattr(mw.reviewer, "card", None)
@@ -212,7 +218,7 @@ def run(t):
                 in_restudy() == sorted(a2 + star), (in_restudy(), a2, star))
         t.check("StarXDeck stays out (the * in the name is not a wildcard)",
                 not (set(in_restudy()) & set(starx)), in_restudy())
-        t.check("the tooltip counts 3", any("Restudying 3 cards." in x for x in tips), tips)
+        t.check("the tooltip counts 3", any("Restudying 3 cards in Restudy: " in x for x in tips), tips)
         t.check("reviewer again", t.wait_until(lambda: mw.state == "review", timeout=10), mw.state)
 
         # 3. the Restudy filtered deck + Solo --------------------------------------
@@ -221,10 +227,10 @@ def run(t):
             t.check("Browse reopens", False, "")
             return
         sb = br.sidebar
-        t.wait_until(lambda: find(sb, "Restudy") is not None, timeout=10)
-        click(sb, "Restudy")
+        t.wait_until(lambda: find(sb, rname()) is not None, timeout=10)
+        click(sb, rname())
         click(sb, "Solo", CMD)
-        t.check("Restudy and Solo are selected", picked(sb) == ["Restudy", "Solo"], picked(sb))
+        t.check("Restudy and Solo are selected", picked(sb) == [rname(), "Solo"], picked(sb))
         menu = right_click(sb, "Solo")
         texts = captured[0] if captured else []
         t.check("Restudy 2 decks on top", bool(texts) and texts[0] == "Restudy 2 decks", texts[:3])
@@ -235,8 +241,9 @@ def run(t):
         act.trigger()
         t.pump(300)
         t.check("only Solo's two cards go in", in_restudy() == solo, (in_restudy(), solo))
+        t.check("the deck is titled for what it holds", rname() == "Restudy: Solo", rname())
         t.check("the tooltip says the filtered deck was left out, and why",
-                any("Restudying 2 cards." in x and "1 filtered deck left out" in x
+                any("Restudying 2 cards in Restudy: " in x and "1 filtered deck left out" in x
                     and "can't go into another filtered deck" in x for x in tips), tips)
         t.check("reviewer again", t.wait_until(lambda: mw.state == "review", timeout=10), mw.state)
 
@@ -246,9 +253,9 @@ def run(t):
             t.check("Browse reopens", False, "")
             return
         sb = br.sidebar
-        t.wait_until(lambda: find(sb, "Restudy") is not None, timeout=10)
-        click(sb, "Restudy")
-        menu = right_click(sb, "Restudy")
+        t.wait_until(lambda: find(sb, rname()) is not None, timeout=10)
+        click(sb, rname())
+        menu = right_click(sb, rname())
         texts = captured[0] if captured else []
         t.check("Restudy 1 deck on the filtered deck's menu too",
                 bool(texts) and texts[0] == "Restudy 1 deck", texts[:3])
