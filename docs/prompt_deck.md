@@ -60,6 +60,23 @@ ${note_fields}
    `cd ~/dev/anki && out/pyenv/bin/python "${build_dir}/apply_highyield.py" --repatch=<ID>,<ID>`
    (or `apply_styles.py` for template/CSS-only changes; see §8).
 
+## Wrong kind: the bug is in the app, not the card content
+
+This ticket was routed to you as a course-deck (card content) bug, but the
+router can be wrong. Check first. If the problem is in the Anki+ add-on or
+app itself (deck list, deck names or titles, filtered/restudy decks,
+buttons, menus, sidebar, editor, reviewer UI, any behavior of the program)
+rather than the content or rendering of a course card you can fix in this
+build directory, do NOT edit anything. End with a result block whose
+`status` is `wrong-kind` and a `reason` naming what in the app is at fault:
+
+```ankifix-result
+{"status": "wrong-kind", "tests_green": false, "tests": [], "reason": "the restudy filtered deck's name is set by the add-on, not by any card", "summary": "1-2 sentences"}
+```
+
+ankifix then re-routes the ticket to the app fixer (once). Use
+`wrong-kind` only for that case; a card bug you could not fix is `failed`.
+
 ## Hard rules
 
 - NEVER run `apply_*.py`, `fix_collection.py`, or anything that opens
@@ -74,7 +91,7 @@ End your final message with a fenced block tagged `ankifix-result`
 containing one JSON object, exactly this shape:
 
 ```ankifix-result
-{"status": "fixed or failed", "tests_green": true, "tests": ["build_deck.py preflight: RESULT: PASS"], "card_ids": ["C4-Q10"], "apply_command": "cd ~/dev/anki && out/pyenv/bin/python \".../apply_highyield.py\" --repatch=C4-Q10", "summary": "2-4 sentences: what was wrong, what you changed, in which file"}
+{"status": "fixed, failed or wrong-kind", "tests_green": true, "tests": ["build_deck.py preflight: RESULT: PASS"], "card_ids": ["C4-Q10"], "apply_command": "cd ~/dev/anki && out/pyenv/bin/python \".../apply_highyield.py\" --repatch=C4-Q10", "summary": "2-4 sentences: what was wrong, what you changed, in which file"}
 ```
 
 Style rule: never use em dashes anywhere you write (code comments, commit messages, docs, summaries). Use a comma, a colon, or a new sentence instead.

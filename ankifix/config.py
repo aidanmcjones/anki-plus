@@ -98,7 +98,7 @@ class Config:
             "copy", "cut", "paste", "drag", "drop", "select", "dropdown",
             "sidebar", "search bar", "settings", "toolbar", "full screen",
             "window", "shortcut", "hotkey", "scroll", "editor", "field",
-            "button", "resize", "image",
+            "button", "resize", "image", "restudy", "filtered deck", "rename",
         ]
     )
     # words/phrases that mean the note is about the course card's own content
@@ -156,6 +156,35 @@ class Config:
             "shortcuts", "scrolling", "scrolls",
             "search bar", "searchbar", "column", "columns", "anki plus",
             "anki+", "layout", "formatting", "punctuation",
+            # app surfaces named off-card (ticket 20260924-131713: "the
+            # restudy deck should have a title ..." filed from the deck list)
+            "restudy", "filtered deck", "filtered decks", "title", "titles",
+            "rename", "renamed", "renaming",
+        ]
+    )
+    # Off-card rule (classify.py): a ticket with no course notetype that was
+    # not captured on a card is kind=app, because a deck fix edits a course
+    # card and there is no card to point at, UNLESS the note itself names card
+    # content with one of these phrases (checked after app_phrases are
+    # stripped, so "answer button" does not count as "answer"), a card id
+    # (card_id_pattern, e.g. "C2-Q05"), or a course name from course_names
+    # with no app hint at all. The bare words "deck"/"card" are NOT enough:
+    # "the restudy deck should have a title" is about the app.
+    card_content_signals: List[str] = field(
+        default_factory=lambda: [
+            "card says", "this card", "that card", "the card says",
+            "on this card", "on the card", "on card", "image on card",
+            "image on the card", "front of the card", "back of the card",
+            "wrong answer", "the answer", "answer is", "answer on", "answers",
+            "typo", "cloze", "question text", "wording", "missing image",
+            "wrong image", "learning goal", "takeaway",
+        ]
+    )
+    card_id_pattern: str = r"(?<![a-z0-9])c\d+-q\d+(?![a-z0-9])"
+    course_names: List[str] = field(
+        default_factory=lambda: [
+            "courseb", "fundamentals of course b", "courseb",
+            "course a",
         ]
     )
     # a ticket with no reviewer.notetype whose reviewer.state is not
@@ -280,6 +309,10 @@ class Config:
     # how long the watcher waits for the Terminal run to finish ticket.json
     terminal_fallback_timeout_min: float = 40.0
     terminal_poll_s: float = 5.0
+    # --watch does not wait for the Terminal child: it releases the ticket
+    # lock and settles the delegation on a later poll. A child that has not
+    # written its own pid this long after osascript returned never started.
+    terminal_start_grace_s: float = 180.0
     # light `ankifix doctor` inside --watch; a check flipping to FAIL posts a
     # notification. 0 disables.
     doctor_interval_s: float = 3600.0

@@ -120,6 +120,55 @@ def set_field(ticket_id: str, dotted_key: str, value: Any, root: str = DEFAULT_R
     return ticket
 
 
+def _now_iso() -> str:
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _apply_dotted(ticket: Dict[str, Any], dotted_key: str, value: Any) -> None:
+    parts = dotted_key.split(".")
+    node = ticket
+    for p in parts[:-1]:
+        if not isinstance(node.get(p), dict):
+            raise schema_mod.SchemaError(
+                "cannot set nested field {!r}: {!r} is null".format(dotted_key, p))
+        node = node[p]
+    node[parts[-1]] = value
+
+
+def set_fields(ticket_id: str, assignments: List[Any], root: str = DEFAULT_ROOT,
+               manual: bool = True) -> Dict[str, Any]:
+    """Apply several (dotted_key, value) assignments to a ticket atomically:
+    every one is applied to an in-memory copy and the result validated before
+    anything is written, so one bad pair writes nothing (the old per-pair
+    writes let `kind=app status=in_progress` persist kind=app and then fail).
+
+    manual=True (the `ankibug set` path) also stamps ticket["manual_set"]
+    = {"at", "fields"}: ankifix compares it before and after a run, so a
+    human change made while a watcher run is in flight is never overwritten,
+    and recover_stale never requeues a ticket a human set to "fixing".
+    Raises SchemaError naming the offending pair."""
+    ticket = read_ticket(ticket_id, root)
+    for key, value in assignments:
+        if not key:
+            raise schema_mod.SchemaError("empty key in {!r}".format("{}={}".format(key, value)))
+        try:
+            _apply_dotted(ticket, key, value)
+            schema_mod.validate(ticket)
+        except schema_mod.SchemaError as exc:
+            raise schema_mod.SchemaError("{}={}: {}".format(key, value, exc))
+    if manual:
+        ticket["manual_set"] = {"at": _now_iso(), "fields": [k for k, _ in assignments]}
+    schema_mod.validate(ticket)
+    path = ticket_json_path(ticket_id, root)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(ticket, f, indent=2, sort_keys=False)
+        f.write("\n")
+    os.replace(tmp, path)
+    regenerate_index(root)
+    return ticket
+
+
 def _escape_pipes(text: str) -> str:
     return (text or "").replace("|", "\\|").replace("\n", " ")
 

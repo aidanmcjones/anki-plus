@@ -132,6 +132,11 @@ containing one JSON object, exactly this shape:
 {"status": "fixed or failed", "tests_green": true, "tests": ["node tests/reviewer_click.cjs", "..."], "live_tests": ["tests/live/test_<name>.py"], "reproduced": true, "pushed": true, "summary": "2-4 sentences: root cause, fix, tests added, and the live test's FAIL-before / PASS-after"}
 ```
 
+`status` is only ever `fixed` or `failed` here. Never return `wrong-kind`:
+this ticket may already have been re-routed to you by the deck fixer, and it
+is never routed back. If you think it is really a course card content
+problem, return `failed` and say so in `summary`.
+
 `live_tests` lists the tests/live/ scripts that prove this fix in the real
 app. After your fix is applied to the live checkout, ankifix re-runs each of
 them through the harness; if any fails (or the list is empty), the ticket

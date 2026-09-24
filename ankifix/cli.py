@@ -10,9 +10,17 @@ from . import agent as agent_mod
 from . import apply as apply_mod
 from .config import load_config
 from .runner import AnkifixError, LockBusy, plan, run_ticket, ticket_lock, watch
-from .tickets import load_ticket, write_index
+from .tickets import load_ticket, now_iso, write_index
 
 SUBCOMMANDS = ("apply", "install-agent", "uninstall-agent", "doctor")
+
+
+def stamped_echo(msg: str) -> None:
+    """print() for the watch log: every line (each line of a multi-line
+    message, e.g. a traceback) starts with an ISO timestamp."""
+    stamp = now_iso()
+    for line in str(msg).splitlines() or [""]:
+        print(f"{stamp} {line}")
 
 
 def build_apply_parser() -> argparse.ArgumentParser:
@@ -119,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--once-from-terminal", action="store_true",
         help="internal: the Terminal.app side of the watcher's Files-access fallback; runs this "
-        "one ticket without taking the lock (the waiting watcher holds it)",
+        "one ticket without taking the lock (the watcher released it after delegating)",
     )
     ap.add_argument("--config", help="config JSON (default ~/.config/ankifix/config.json)")
     return ap
@@ -168,7 +176,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             except (AttributeError, ValueError):
                 pass
         try:
-            watch(cfg, args.interval, once=args.once)
+            watch(cfg, args.interval, once=args.once, echo=stamped_echo)
         except KeyboardInterrupt:
             return 130
         return 0

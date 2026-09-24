@@ -24,6 +24,12 @@ note is empty the slug falls back to `ticket`.
 | `deck_build` | object or `null` | see below |
 | `capture` | object or `null` | see below |
 | `fix` | object or `null` | see below |
+| `manual_set` | object, optional | written by `ankibug set`: `{"at": ISO time, "fields": [keys]}`. ankifix never overwrites a change stamped after its run started (the run's result goes to `fix.result_ignored`) |
+
+ankifix adds optional `fix` keys beyond the required ones: `owner`
+(`watcher`, `cli`, `terminal`), `pid`, `attempts`, `delegated`,
+`delegated_at`, `kind_flip`, `result_ignored`, `blocked`, `error_log`.
+`fix.log_path` names the latest per-attempt transcript, `fix.<n>.log`.
 
 ### `app`
 

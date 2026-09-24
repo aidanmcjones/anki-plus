@@ -23,9 +23,19 @@ from .classify import classify
 from .config import Config
 from .tickets import load_ticket, now_iso, save_ticket, ticket_dir
 
+# fix.log is a symlink to the latest attempt's transcript, fix.<n>.log; every
+# attempt keeps its own file (fix.log used to be reopened with "w", so a
+# retry erased the previous attempt's evidence). A pre-existing regular
+# fix.log (older runs) is preserved as fix.0.log.
 LOG_NAME = "fix.log"
+ATTEMPT_LOG_RE = re.compile(r"fix\.(\d+)\.log")
+# stdout/stderr of the Terminal.app child (--once-from-terminal), tee'd
+TERMINAL_LOG_NAME = "terminal.log"
 ERROR_LOG_NAME = "error.log"
 LOCK_NAME = ".ankifix.lock"
+# ids of Terminal delegations the watcher started whose result it has not
+# logged yet; a file (not memory) so a watcher restart still reports them
+DELEGATIONS_NAME = ".ankifix-delegations.json"
 # fix.blocked value for a deck ticket the watcher cannot read (macOS TCC)
 FILES_ACCESS = "files-access"
 CLOUD_STORAGE = Path.home() / "Library/CloudStorage"
@@ -194,6 +204,41 @@ def write_error_log(tdir: Path, ticket_id: str, e: BaseException) -> Optional[Pa
         return None
 
 
+# ---------------------------------------------------------------- evidence
+def next_attempt_log(tdir: Path) -> Path:
+    """The transcript path for the next attempt: fix.<n+1>.log, n the highest
+    existing attempt number. A legacy regular fix.log becomes fix.0.log first."""
+    tdir.mkdir(parents=True, exist_ok=True)
+    legacy = tdir / LOG_NAME
+    if legacy.is_file() and not legacy.is_symlink():
+        dest = tdir / "fix.0.log"
+        if dest.exists():
+            dest = tdir / f"fix.0.{int(time.time())}.log"
+        os.replace(legacy, dest)
+    nums = [int(m.group(1)) for f in tdir.iterdir() for m in [ATTEMPT_LOG_RE.fullmatch(f.name)] if m]
+    return tdir / f"fix.{max(nums, default=0) + 1}.log"
+
+
+def point_latest_log(log_path: Path) -> None:
+    """Make <ticket>/fix.log a symlink to log_path (best effort)."""
+    link = log_path.parent / LOG_NAME
+    try:
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(log_path.name)
+    except OSError:
+        pass
+
+
+def tail_file(path: Path, lines: int = 6, limit: int = 600) -> str:
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return ""
+    out = " / ".join(l.strip() for l in text.strip().splitlines()[-lines:] if l.strip())
+    return out[-limit:]
+
+
 # ------------------------------------------------------------------- claude
 def _fmt(rules: List[str], **kw: str) -> List[str]:
     return [r.format(**kw) for r in rules]
@@ -236,7 +281,9 @@ def run_claude(
 ) -> Tuple[Optional[int], bool]:
     """Stream claude's stdout (stream-json) into log_path. Returns (rc, timed_out)."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "w") as log:
+    # append, never truncate: log_path is per attempt (next_attempt_log), and
+    # nothing that ran before must be erased even if a name is ever reused
+    with open(log_path, "a") as log:
         log.write(json.dumps({"type": "ankifix", "event": "start", **meta}) + "\n")
         log.flush()
         proc = subprocess.Popen(
@@ -420,19 +467,91 @@ def new_fix(started: Optional[str] = None, prev: Optional[Dict[str, Any]] = None
     }
     if prev and prev.get("attempts"):
         fix["attempts"] = prev["attempts"]
+    if prev and prev.get("kind_flip"):
+        fix["kind_flip"] = prev["kind_flip"]  # the one-flip guard survives reruns
     return fix
+
+
+def _human_touched_since(t: Dict[str, Any], since: Optional[str]) -> bool:
+    """True if `ankibug set` (which stamps ticket.manual_set) wrote this ticket
+    at or after `since` (an ISO timestamp, e.g. fix.started)."""
+    manual = t.get("manual_set")
+    if not isinstance(manual, dict) or not manual.get("at") or not since:
+        return False
+    try:
+        import datetime as _dt
+
+        return _dt.datetime.fromisoformat(manual["at"]) >= _dt.datetime.fromisoformat(since)
+    except (TypeError, ValueError):
+        return False
+
+
+def commit_result(
+    cfg: Config, ticket: Dict[str, Any], started: str, pid: int, manual0: Any, echo=print,
+) -> Dict[str, Any]:
+    """Write a run's result, unless someone else changed the ticket while it
+    ran. Re-reads ticket.json first: if its status left "fixing", fix.started
+    or fix.pid is no longer this run's, or `ankibug set` stamped a new
+    manual_set, the on-disk ticket (the human's decision) is kept and this
+    run's result is recorded under fix.result_ignored instead. The caller
+    (watch) never auto-applies a result that was ignored."""
+    tid = ticket["id"]
+    try:
+        disk = load_ticket(cfg.tickets_dir, tid)
+    except (OSError, ValueError):
+        disk = None
+    if disk is not None:
+        dfix = disk.get("fix") if isinstance(disk.get("fix"), dict) else None
+        ours = (
+            disk.get("status") == "fixing"
+            and dfix is not None
+            and dfix.get("started") == started
+            and dfix.get("pid") == pid
+            and disk.get("manual_set") == manual0
+        )
+        if not ours:
+            fix = ticket.get("fix") or {}
+            ignored = {
+                "at": now_iso(), "status": ticket.get("status"), "kind": ticket.get("kind"),
+                "summary": fix.get("summary"), "commits": fix.get("commits") or [],
+                "log_path": fix.get("log_path"), "started": started,
+            }
+            if dfix is None:
+                dfix = new_fix(started, fix)
+                dfix["finished"] = now_iso()
+            elif dfix.get("started") == started and dfix.get("finished") is None:
+                dfix["finished"] = now_iso()  # this run did end; nothing to requeue
+            dfix["result_ignored"] = ignored
+            disk["fix"] = dfix
+            save_ticket(cfg.tickets_dir, disk)
+            echo(
+                f"ankifix: {tid}: changed by someone else during the run (now "
+                f"{disk.get('status')!r}); keeping that, this run's {ignored['status']!r} "
+                "result is in fix.result_ignored and will not be applied"
+            )
+            return disk
+    save_ticket(cfg.tickets_dir, ticket)
+    return ticket
 
 
 def run_ticket(
     ticket_id: str, cfg: Config, kind_override: Optional[str] = None,
     force: bool = False, echo=print, retry_on_error: bool = False,
-    from_terminal: bool = False,
+    from_terminal: bool = False, wait_terminal: bool = True,
 ) -> Dict[str, Any]:
     """Run one ticket. Never raises for a failure inside the run (only for a
     refused status or a missing ticket): the outcome is recorded on the
     ticket. retry_on_error (watch mode) puts a ticket whose run raised back
     to status new until cfg.max_attempts; from_terminal is the Terminal.app
-    child of the TCC fallback (no fallback of its own, attempt not counted)."""
+    child of the TCC fallback (no fallback of its own, attempt not counted).
+    wait_terminal=False (watch mode) hands a TCC-blocked deck ticket to
+    Terminal.app and returns at once with it still "fixing" (delegated); the
+    watcher settles it on a later poll (settle_delegations) instead of holding
+    the ticket lock for the whole Terminal run.
+
+    fix.owner records who claimed the run ("watcher", "cli" or "terminal");
+    recover_stale only requeues a run the watcher itself claimed that never
+    finished, never a "fixing" status a human set with `ankibug set`."""
     ticket = load_ticket(cfg.tickets_dir, ticket_id)
     status = ticket.get("status")
     prev_fix = ticket.get("fix") if isinstance(ticket.get("fix"), dict) else {}
@@ -442,19 +561,30 @@ def run_ticket(
     if status in ("fixed", "needs-review", "wontfix", "fixing") and not force and not parked:
         raise AnkifixError(f"ticket {ticket_id} is {status}; pass --force to run anyway")
     tdir = ticket_dir(cfg.tickets_dir, ticket_id)
-    log_path = tdir / LOG_NAME
     started = now_iso()
     t0 = time.time()
+    pid = os.getpid()
+    manual0 = ticket.get("manual_set")
 
     ticket["status"] = "fixing"
     ticket["fix"] = new_fix(started, prev_fix)
-    ticket["fix"]["pid"] = os.getpid()
-    if not from_terminal:
+    ticket["fix"]["pid"] = pid
+    if from_terminal:
+        ticket["fix"]["owner"] = "terminal"
+        ticket["fix"]["delegated"] = "terminal"
+        if prev_fix.get("delegated_at"):
+            ticket["fix"]["delegated_at"] = prev_fix["delegated_at"]
+    else:
+        ticket["fix"]["owner"] = "watcher" if retry_on_error else "cli"
         ticket["fix"]["attempts"] = int(prev_fix.get("attempts") or 0) + 1
     attempts = int(ticket["fix"].get("attempts") or 1)
     summary_extra: List[str] = []
     kind = ticket.get("kind")
     deck_dir: Optional[Path] = None
+
+    def commit(t: Dict[str, Any]) -> Dict[str, Any]:
+        return commit_result(cfg, t, started, pid, manual0, echo=echo)
+
     try:
         save_ticket(cfg.tickets_dir, ticket)
         # plan() reads build_out.json for deck tickets, so it is inside the
@@ -468,7 +598,8 @@ def run_ticket(
             blocked = probe_files_access(deck_dir)
             if blocked:
                 if cfg.terminal_fallback and not from_terminal:
-                    return run_via_terminal(ticket, cfg, blocked, deck_dir, echo=echo)
+                    return run_via_terminal(ticket, cfg, blocked, deck_dir, echo=echo,
+                                            wait=wait_terminal, commit=commit)
                 raise blocked
         p = plan(ticket, cfg, kind_override)
         kind = p["kind"]
@@ -486,11 +617,17 @@ def run_ticket(
                 raise AnkifixError(f"no build_deck.py in {cwd}")
             _backup_deck(cwd, tdir / "deck_before")
             before = _snapshot(cwd)
-        echo(f"ankifix: running claude in {cwd} (max {cfg.max_turns} turns, {cfg.wall_clock_minutes} min)")
+        log_path = next_attempt_log(tdir)
+        ticket["fix"]["log_path"] = log_path.name
+        save_ticket(cfg.tickets_dir, ticket)
+        point_latest_log(log_path)
+        echo(f"ankifix: running claude in {cwd} (max {cfg.max_turns} turns, {cfg.wall_clock_minutes} min)"
+             f"; transcript {log_path}")
         rc, timed_out = run_claude(
             p["cmd"], p["prompt"], cwd, child_env(cfg, ticket_id, kind), log_path,
             cfg.wall_clock_minutes * 60,
-            {"ticket": ticket_id, "kind": kind, "cwd": str(cwd), "cmd": p["cmd"], "at": started},
+            {"ticket": ticket_id, "kind": kind, "cwd": str(cwd), "cmd": p["cmd"], "at": started,
+             "attempt_log": log_path.name, "owner": ticket["fix"]["owner"]},
         )
         parsed = parse_transcript(log_path)
         block = parsed["block"] or {}
@@ -502,6 +639,7 @@ def run_ticket(
         # failures the fixer could not clear) - that lands as needs-review,
         # not failed, so a human looks at it instead of it silently vanishing.
         reported_fixed = block.get("status") == "fixed"
+        wrong_kind = block.get("status") == "wrong-kind"
         tests_green = bool(block.get("tests_green"))
         all_tests = parsed["tests"] or list(block.get("tests") or [])
         # known-failing pre-existing tests (cfg.known_failing_tests, e.g. the
@@ -555,6 +693,7 @@ def run_ticket(
             summary_extra.append(f"cost ${rev['total_cost_usd']:.2f}, {rev.get('num_turns')} turns")
         if parsed["session_id"]:
             summary_extra.append(f"session {parsed['session_id']}")
+        summary_extra.append(f"transcript {log_path.name}")
 
         claude_summary = block.get("summary") or (parsed["result_text"] or "").strip()[-600:]
         ticket["fix"].update(
@@ -562,6 +701,28 @@ def run_ticket(
             finished=now_iso(),
             summary=" | ".join([s for s in [claude_summary] + summary_extra if s]),
         )
+        if wrong_kind:
+            wk_reason = block.get("reason") or block.get("summary") or "(no reason given)"
+            if kind == "deck" and not ticket["fix"].get("kind_flip") and not timed_out:
+                # the deck fixer says this is an add-on/app bug, not course
+                # card content: flip it to app and requeue, ONCE (kind_flip is
+                # carried by new_fix, so a second wrong-kind can never flip
+                # back; the app prompt has no wrong-kind status at all)
+                ticket["kind"] = "app"
+                ticket["status"] = "new"
+                ticket["fix"]["kind_flip"] = {"from": "deck", "to": "app", "reason": wk_reason,
+                                              "at": now_iso()}
+                ticket["fix"]["attempts"] = 0  # the app fixer gets its own full retry budget
+                ticket["fix"]["summary"] = " | ".join(
+                    [f"deck fixer: wrong kind, this is an app bug ({wk_reason}); flipped to "
+                     "kind=app and requeued as new for the app fixer"] + summary_extra)
+                out = commit(ticket)
+                echo(f"ankifix: {ticket_id} -> {out['status']} (kind {out.get('kind')}): {out['fix']['summary']}")
+                return out
+            ticket["fix"]["summary"] = " | ".join(
+                [f"fixer returned wrong-kind for kind={kind} ({wk_reason}) but "
+                 + ("the ticket was already flipped once; not flipping again" if ticket["fix"].get("kind_flip")
+                    else "only a deck run may flip a ticket")] + summary_extra)
         if has_fix and tests_green and not missing_live:
             ticket["status"] = "fixed"
         elif has_fix:
@@ -595,14 +756,14 @@ def run_ticket(
         if err_log:
             ticket["fix"]["error_log"] = ERROR_LOG_NAME
         try:
-            save_ticket(cfg.tickets_dir, ticket)
+            ticket = commit(ticket)
         except Exception as save_err:  # noqa: BLE001
             echo(f"ankifix: {ticket_id}: could not save ticket.json: {save_err}")
         if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
-        echo(f"ankifix: {ticket_id} {ticket['status']}: {summary}")
+        echo(f"ankifix: {ticket_id} {ticket['status']}: {ticket['fix'].get('summary')}")
         return ticket
-    save_ticket(cfg.tickets_dir, ticket)
+    ticket = commit(ticket)
     echo(f"ankifix: {ticket_id} -> {ticket['status']}: {ticket['fix']['summary']}")
     return ticket
 
@@ -613,41 +774,135 @@ def _applescript_str(s: str) -> str:
 
 def terminal_command(cfg: Config, ticket_id: str) -> List[str]:
     """osascript argv that runs `<ankifix_bin> <id> --once-from-terminal` in
-    a new Terminal.app window (Terminal has Files access; launchd agents do not)."""
+    a new Terminal.app window (Terminal has Files access; launchd agents do
+    not). The child's stdout and stderr are tee'd (unbuffered) into
+    <ticket>/terminal.log so a failed Terminal run leaves evidence; the
+    window still shows it live."""
     import shlex
 
-    shell = f"{shlex.quote(cfg.ankifix_bin)} {shlex.quote(ticket_id)} --once-from-terminal; exit"
+    tlog = ticket_dir(cfg.tickets_dir, ticket_id) / TERMINAL_LOG_NAME
+    shell = (
+        f"PYTHONUNBUFFERED=1 {shlex.quote(cfg.ankifix_bin)} {shlex.quote(ticket_id)} "
+        f"--once-from-terminal 2>&1 | tee -a {shlex.quote(str(tlog))}; exit"
+    )
     script = f'tell application "Terminal" to do script {_applescript_str(shell)}'
     return [cfg.osascript_bin, "-e", script]
 
 
+def delegation_in_flight(t: Dict[str, Any]) -> bool:
+    """A ticket handed to Terminal.app whose run has not finished yet."""
+    fix = t.get("fix") if isinstance(t.get("fix"), dict) else {}
+    return (
+        t.get("status") == "fixing"
+        and fix.get("delegated") == "terminal"
+        and fix.get("finished") is None
+    )
+
+
+def terminal_result_line(cfg: Config, t: Dict[str, Any]) -> str:
+    """The watch-log line for a finished Terminal run: status, kind flip and
+    the child's own summary/reason, plus the tail of terminal.log when the
+    child left no summary of its own."""
+    fix = t.get("fix") if isinstance(t.get("fix"), dict) else {}
+    summary = (fix.get("summary") or "").strip()
+    line = f"ankifix: {t['id']} -> {t.get('status')} (Terminal run, kind {t.get('kind')})"
+    if summary:
+        line += f": {summary[:500]}"
+    if not summary or "without a result" in summary:
+        tail = tail_file(ticket_dir(cfg.tickets_dir, t["id"]) / TERMINAL_LOG_NAME)
+        if tail and tail not in summary:
+            line += f" | terminal.log: {tail}"
+    return line
+
+
+def settle_delegation(cfg: Config, cur: Dict[str, Any], echo=print,
+                      now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """One check of a Terminal delegation. Returns None while the Terminal
+    child is (or may still be) working, else the settled ticket (which is
+    logged). Settled means: the ticket left "fixing" (the child's result, a
+    wrong-kind flip to new, or a human's `ankibug set`, which is never
+    overwritten), the child's recorded pid died without a result (-> failed),
+    or no child ever started (-> needs-review, files-access)."""
+    now = time.time() if now is None else now
+    tid = cur["id"]
+    fix = cur.get("fix") if isinstance(cur.get("fix"), dict) else {}
+    if not delegation_in_flight(cur) or _human_touched_since(cur, fix.get("started")):
+        echo(terminal_result_line(cfg, cur))
+        return cur
+    pid = fix.get("pid")
+    if fix.get("owner") == "terminal":
+        if pid is not None and not _pid_alive(pid):
+            cur["status"] = "failed"
+            fix["finished"] = now_iso()
+            fix["summary"] = "terminal run ended without a result"
+            tail = tail_file(ticket_dir(cfg.tickets_dir, tid) / TERMINAL_LOG_NAME)
+            if tail:
+                fix["summary"] += f" | terminal.log: {tail}"
+            cur["fix"] = fix
+            save_ticket(cfg.tickets_dir, cur)
+            echo(f"ankifix: {tid}: terminal child (pid {pid}) is gone but status was 'fixing'; "
+                 "treating as an abnormal end")
+            echo(terminal_result_line(cfg, cur))
+            return cur
+        return None
+    # the child has not claimed the ticket yet (fix.owner still "watcher")
+    try:
+        import datetime as _dt
+
+        at = _dt.datetime.fromisoformat(fix.get("delegated_at") or fix.get("started")).timestamp()
+    except (TypeError, ValueError):
+        at = now
+    if now - at > cfg.osascript_timeout_s + cfg.terminal_start_grace_s:
+        cur["status"] = "needs-review"
+        fix["blocked"] = FILES_ACCESS
+        fix["finished"] = now_iso()
+        fix["summary"] = (
+            files_access_summary(tid) + " | Terminal fallback failed: the Terminal child never "
+            f"started within {cfg.osascript_timeout_s + cfg.terminal_start_grace_s:g}s"
+        )
+        cur["fix"] = fix
+        save_ticket(cfg.tickets_dir, cur)
+        echo(terminal_result_line(cfg, cur))
+        return cur
+    return None
+
+
 def run_via_terminal(
     ticket: Dict[str, Any], cfg: Config, blocked: BaseException, deck_dir: Optional[Path],
-    echo=print,
+    echo=print, wait: bool = True, commit=None,
 ) -> Dict[str, Any]:
-    """TCC fallback for a deck ticket: hand it to Terminal.app and wait for
-    the child to finish ticket.json. If osascript is refused (Automation
-    permission) or never finishes, park the ticket as needs-review with the
-    Full Disk Access instructions.
+    """TCC fallback for a deck ticket: hand it to Terminal.app. If osascript is
+    refused (Automation permission) the ticket is parked as needs-review with
+    the Full Disk Access instructions.
 
-    The status-only poll used to wait out the full terminal_fallback_timeout_min
-    even when the Terminal child (the `ankifix <id> --once-from-terminal`
-    python process; run_ticket records its own pid in fix.pid as soon as it
-    starts) had been killed: a `status` still "fixing", or reset to "new" by
-    hand (`ankibug set`) while nothing was running, both looked the same as
-    "still working" to a check that only asked "did status leave
-    {fixing, new}?". Now every poll also checks whether the pid on record is
-    still alive; once it (or a manual status reset away from "fixing") shows
-    nothing is actually running any more, this returns within one poll
-    interval instead of sitting out the rest of the deadline."""
+    wait=False (the --watch loop): return right away with the ticket
+    "fixing", fix.delegated="terminal"; the watcher releases the global ticket
+    lock and settles the delegation on later polls (settle_delegations), so
+    other tickets are not blocked for the up-to-40-minute Terminal run. The
+    child (`--once-from-terminal`) never takes the lock and claims the ticket
+    by writing its own pid and fix.owner="terminal".
+
+    wait=True (a manual `ankifix <id>`): poll ticket.json every
+    terminal_poll_s with settle_delegation until it settles or
+    terminal_fallback_timeout_min passes. A dead child pid ends the wait
+    within one poll; a status a human set is kept, never overwritten."""
     ticket_id = ticket["id"]
+    commit = commit or (lambda t: (save_ticket(cfg.tickets_dir, t), t)[1])
     ticket["kind"] = "deck"
     ticket["fix"]["delegated"] = "terminal"
+    ticket["fix"]["delegated_at"] = now_iso()
     ticket["fix"]["summary"] = "no Files access under launchd; handed to Terminal.app"
     save_ticket(cfg.tickets_dir, ticket)
-    our_attempts = (ticket.get("fix") or {}).get("attempts")
+    tdir = ticket_dir(cfg.tickets_dir, ticket_id)
+    try:
+        with open(tdir / TERMINAL_LOG_NAME, "a") as fh:
+            fh.write(f"=== {now_iso()} ankifix {ticket_id} --once-from-terminal "
+                     f"(delegated by pid {os.getpid()}, attempt {ticket['fix'].get('attempts')})\n")
+    except OSError:
+        pass
     cmd = terminal_command(cfg, ticket_id)
-    echo(f"ankifix: {ticket_id}: no Files access ({blocked}); running it in Terminal.app")
+    echo(f"ankifix: {ticket_id}: no Files access ({blocked}); running it in Terminal.app "
+         f"(output in {tdir / TERMINAL_LOG_NAME})")
     err = None
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=cfg.osascript_timeout_s,
@@ -659,42 +914,27 @@ def run_via_terminal(
     except OSError as e:
         err = f"{type(e).__name__}: {e}"
 
+    if err is None and not wait:
+        echo(f"ankifix: {ticket_id}: delegated to Terminal.app; not holding the ticket lock, "
+             "the result is picked up on a later poll")
+        return ticket
+
     if err is None:
         deadline = time.time() + cfg.terminal_fallback_timeout_min * 60
-        # the child rewrites ticket.json when it starts (new fix.pid) and ends
         while time.time() < deadline:
             time.sleep(cfg.terminal_poll_s)
             try:
                 cur = load_ticket(cfg.tickets_dir, ticket_id)
             except (OSError, ValueError):
                 continue
-            status = cur.get("status")
-            fix = cur.get("fix") if isinstance(cur.get("fix"), dict) else {}
-            # "fixing" is always ours to wait on; "new" is only ours if it's
-            # still our own attempt (the terminal child never sets "new"
-            # itself - retry_on_error is off for --once-from-terminal - so a
-            # "new" with our attempt count can only be a manual status reset,
-            # e.g. after someone killed the child by hand)
-            ours = status == "fixing" or (status == "new" and fix.get("attempts") == our_attempts)
-            if not ours:
-                echo(f"ankifix: {ticket_id} -> {status} (Terminal run)")
-                return cur
-            pid = fix.get("pid")
-            if pid is not None and not _pid_alive(pid):
-                echo(
-                    f"ankifix: {ticket_id}: terminal child (pid {pid}) is gone but status "
-                    f"is {status!r}; treating as an abnormal end"
-                )
-                cur["status"] = "failed"
-                cur.setdefault("fix", {})
-                cur["fix"]["finished"] = now_iso()
-                cur["fix"]["summary"] = "terminal run ended without a result"
-                save_ticket(cfg.tickets_dir, cur)
-                return cur
+            settled = settle_delegation(cfg, cur, echo=echo)
+            if settled is not None:
+                return settled
         err = f"Terminal run did not finish within {cfg.terminal_fallback_timeout_min:g} min"
         try:
             cur = load_ticket(cfg.tickets_dir, ticket_id)
-            if cur.get("fix", {}).get("pid") not in (None, os.getpid()) and _pid_alive(cur["fix"]["pid"]):
+            fix = cur.get("fix") or {}
+            if fix.get("owner") == "terminal" and _pid_alive(fix.get("pid")):
                 # still running in Terminal; leave it to finish on its own
                 echo(f"ankifix: {ticket_id}: {err}; left running in Terminal")
                 return cur
@@ -708,8 +948,8 @@ def run_via_terminal(
         files_access_summary(ticket_id, getattr(blocked, "filename", None) or deck_dir)
         + f" | Terminal fallback failed: {err}"
     )
-    save_ticket(cfg.tickets_dir, ticket)
-    echo(f"ankifix: {ticket_id} needs-review: {ticket['fix']['summary']}")
+    ticket = commit(ticket)
+    echo(f"ankifix: {ticket_id} {ticket['status']}: {ticket['fix']['summary']}")
     return ticket
 
 
@@ -726,9 +966,17 @@ def _pid_alive(pid: Any) -> bool:
 
 
 def recover_stale(cfg: Config, echo=print) -> List[str]:
-    """Call with the ticket lock held. A ticket still "fixing" whose fix.pid
-    is gone was orphaned by a watcher that died mid-run (Mac slept, killed):
-    requeue it as new, or give up at cfg.max_attempts."""
+    """Call with the ticket lock held. Requeues ONLY a run the watcher itself
+    claimed that never finished: status "fixing", fix.finished None,
+    fix.owner "watcher" (or no owner but a fix.pid: a run recorded before
+    owners existed), and fix.pid dead (the watcher died mid-run: Mac slept,
+    killed). It gives up at cfg.max_attempts.
+
+    Never touched: a "fixing" status a human set with `ankibug set` (the fix
+    on disk is a finished run's, or has no pid at all, or manual_set is newer
+    than fix.started); a Terminal delegation (settle_delegations owns those).
+    A dead manual `ankifix <id>` run (owner "cli") is marked failed, not
+    requeued, since the watcher did not start it."""
     from .tickets import list_tickets
 
     touched = []
@@ -736,13 +984,24 @@ def recover_stale(cfg: Config, echo=print) -> List[str]:
         if t.get("status") != "fixing":
             continue
         fix = t.get("fix") if isinstance(t.get("fix"), dict) else {}
+        if fix.get("finished") is not None or fix.get("delegated") == "terminal":
+            continue
+        if _human_touched_since(t, fix.get("started")):
+            continue
+        owner = fix.get("owner")
         pid = fix.get("pid")
+        if owner not in (None, "watcher", "cli") or (owner is None and not pid):
+            continue
         if pid and _pid_alive(pid):
             continue
         attempts = int(fix.get("attempts") or 1)
         fix = {**new_fix(fix.get("started"), fix), **fix}
         fix["finished"] = now_iso()
-        if attempts >= cfg.max_attempts:
+        if owner == "cli":
+            t["status"] = "failed"
+            fix["summary"] = (f"manual `ankifix {t['id']}` run (pid {pid}) ended without a result; "
+                              "not requeued (the watcher did not start it)")
+        elif attempts >= cfg.max_attempts:
             t["status"] = "failed"
             fix["summary"] = (f"gave up after {attempts} attempts: the run was interrupted "
                               "(watcher died mid-run)")
@@ -759,11 +1018,69 @@ def recover_stale(cfg: Config, echo=print) -> List[str]:
     return touched
 
 
-def next_new(cfg: Config, skip: Optional[set] = None) -> Optional[str]:
+def load_pending(cfg: Config) -> set:
+    try:
+        return set(json.loads((Path(cfg.tickets_dir) / DELEGATIONS_NAME).read_text()))
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
+def save_pending(cfg: Config, pending: set) -> None:
+    path = Path(cfg.tickets_dir) / DELEGATIONS_NAME
+    try:
+        if pending:
+            path.write_text(json.dumps(sorted(pending)) + "\n")
+        elif path.exists():
+            path.unlink()
+    except OSError:
+        pass
+
+
+def settle_delegations(cfg: Config, pending: Optional[set] = None, echo=print) -> List[Dict[str, Any]]:
+    """Call with the ticket lock held (watch). Settles every in-flight
+    Terminal delegation that has ended, and logs the result of any the
+    watcher delegated (pending, persisted in DELEGATIONS_NAME) that the
+    child already finished."""
+    from .tickets import list_tickets
+
+    persisted = pending is None
+    if persisted:
+        pending = load_pending(cfg)
+    done = []
+    for t in list_tickets(cfg.tickets_dir):
+        if delegation_in_flight(t) or t.get("id") in pending:
+            try:
+                settled = settle_delegation(cfg, t, echo=echo)
+            except Exception as e:  # noqa: BLE001
+                echo(f"ankifix: {t.get('id')}: could not settle Terminal run: {type(e).__name__}: {e}")
+                continue
+            if settled is not None:
+                pending.discard(t["id"])
+                done.append(settled)
+    if persisted:
+        save_pending(cfg, pending)
+    return done
+
+
+def _planned_kind(t: Dict[str, Any], cfg: Config) -> str:
+    if t.get("kind") in ("app", "deck"):
+        return t["kind"]
+    try:
+        return classify(t, cfg)[0]
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def next_new(cfg: Config, skip: Optional[set] = None, avoid_deck: bool = False) -> Optional[str]:
+    """Oldest status=new ticket. avoid_deck: skip deck tickets (a Terminal
+    child is already editing the course build dir; two deck fixers must not
+    edit it at once)."""
     from .tickets import list_tickets
 
     for t in list_tickets(cfg.tickets_dir):
         if t.get("status") == "new" and t["id"] not in (skip or ()):
+            if avoid_deck and _planned_kind(t, cfg) == "deck":
+                continue
             return t["id"]
     return None
 
@@ -796,6 +1113,12 @@ def record_crash(cfg: Config, ticket_id: str, e: BaseException, echo=print) -> N
         echo(f"ankifix: {ticket_id}: could not record the crash on ticket.json: {e2}")
 
 
+def _any_delegation_in_flight(cfg: Config) -> bool:
+    from .tickets import list_tickets
+
+    return any(delegation_in_flight(t) for t in list_tickets(cfg.tickets_dir))
+
+
 def watch(cfg: Config, interval: float, once: bool = False, echo=print) -> int:
     """Process status=new tickets one at a time, oldest first.
 
@@ -805,7 +1128,13 @@ def watch(cfg: Config, interval: float, once: bool = False, echo=print) -> int:
     cfg.max_attempts. Tickets that crashed in this process are also skipped
     for the rest of its life, so a ticket.json that cannot even be rewritten
     does not spin. Every cfg.doctor_interval_s a light `ankifix doctor` runs
-    and a check that flips to FAIL posts a notification."""
+    and a check that flips to FAIL posts a notification.
+
+    A TCC-blocked deck ticket is handed to Terminal.app without waiting
+    (run_ticket wait_terminal=False): the lock is released at the end of the
+    pass and settle_delegations picks the result up on a later poll, so
+    other (app) tickets keep flowing. While a delegation is in flight, deck
+    tickets wait (one deck fixer in the build dir at a time)."""
     from . import apply as apply_mod  # local: apply imports this module
     from . import doctor as doctor_mod
 
@@ -831,14 +1160,17 @@ def watch(cfg: Config, interval: float, once: bool = False, echo=print) -> int:
         try:
             with ticket_lock(cfg.tickets_dir):
                 recover_stale(cfg, echo=echo)
+                for settled in settle_delegations(cfg, echo=echo):
+                    notify(cfg, f"ankifix: {settled['id']} {settled.get('status')} (Terminal run)")
                 this_pass: set = set()
                 while True:
-                    tid = next_new(cfg, skip | this_pass)
+                    tid = next_new(cfg, skip | this_pass, avoid_deck=_any_delegation_in_flight(cfg))
                     if not tid:
                         break
                     this_pass.add(tid)  # a retried ticket waits for the next poll
                     try:
-                        result = run_ticket(tid, cfg, echo=echo, retry_on_error=True)
+                        result = run_ticket(tid, cfg, echo=echo, retry_on_error=True,
+                                            wait_terminal=False)
                     except Exception as e:  # noqa: BLE001
                         skip.add(tid)
                         handled += 1
@@ -847,6 +1179,10 @@ def watch(cfg: Config, interval: float, once: bool = False, echo=print) -> int:
                         notify(cfg, f"ankifix: {tid} failed")
                         continue
                     handled += 1
+                    if delegation_in_flight(result):
+                        save_pending(cfg, load_pending(cfg) | {tid})
+                        notify(cfg, f"ankifix: {tid} handed to Terminal.app")
+                        continue
                     try:
                         on_disk = load_ticket(cfg.tickets_dir, tid).get("status")
                     except Exception:  # noqa: BLE001
@@ -854,8 +1190,10 @@ def watch(cfg: Config, interval: float, once: bool = False, echo=print) -> int:
                     if on_disk is None or (on_disk == "new" and result.get("status") != "new"):
                         skip.add(tid)  # result could not be saved; do not spin on it
                     notify(cfg, f"ankifix: {tid} {result.get('status')}")
+                    ignored = (result.get("fix") or {}).get("result_ignored")
                     if (
                         cfg.auto_apply
+                        and not ignored
                         and result.get("kind") == "app"
                         and result.get("status") in ("fixed", "needs-review")
                     ):

@@ -40,6 +40,34 @@ from `docs/prompt_app.md` and `docs/prompt_deck.md` in this repo).
    `answer` (not captured on a card) gets `no_card_app_bias` (0.5) extra app
    points: enough to break a tie, never enough to beat one clear deck word
    ("the answer on card C2-Q05 is wrong" is still deck).
+5. **Off-card rule** (ticket `20260924-131713`). A ticket with no course
+   notetype that was not captured on a card (no `reviewer.card_id`, or a
+   state other than `question`/`answer`) is `app` outright, unless the note
+   itself names card content: a `card_content_signals` phrase ("card says",
+   "this card", "on the card", "wrong answer", "the answer", "typo",
+   "cloze", "wording", ...; matched after the app phrases above are
+   stripped, so "answer button" does not count), a card id
+   (`card_id_pattern`, e.g. `C2-Q05`), or a course name (`course_names`:
+   courseb, course a, ...) with no app hint next to it. Only then
+   does rule 4's scoring decide. Why: a deck fix edits a course card's
+   content in the build dir, and with no card on screen and no card named
+   there is nothing to point it at. "the restudy deck should have a title
+   denoting what the restudy deck contains, for example: restudy: courseb
+   hi-yield" (filed from the deck list, `state: answer`, `card_id: null`)
+   went to deck on the bare word "deck" and failed; it is now app (app hints
+   `restudy`, `title`; the course name is a deck-list label here, since app
+   hints are present). New app hints: restudy, filtered deck, title,
+   rename (plus the existing button, menu, sidebar).
+6. **Safety net: `wrong-kind`.** The deck prompt tells the deck fixer to
+   check first and, when the bug is in the add-on/app rather than course
+   card content, change nothing and return `"status": "wrong-kind"` with a
+   `reason`. The runner then flips the ticket to `kind: app`, `status: new`
+   (not `failed`), records `fix.kind_flip` `{from, to, reason, at}`, resets
+   `fix.attempts` so the app fixer gets its own retry budget, and logs it;
+   the watcher runs the app fixer on its next poll. At most one flip:
+   `fix.kind_flip` is carried across reruns and a second `wrong-kind` is
+   `failed` ("not flipping again"); the app prompt never offers
+   `wrong-kind`, and an app run that returns it anyway is `failed`.
 
 All lists live in `ankifix/config.py` and can be overridden in
 `~/.config/ankifix/config.json` (any `Config` field, e.g.
@@ -101,13 +129,29 @@ picks back up on its own - it is the manual hold. Use it (or just leave a
 ticket that landed there) when you want to look at something before it runs
 again.
 
-Do **not** use `status: fixing` as a manual hold. `fixing` means "a live
-process is working on this right now"; a `fixing` ticket with no live
-`fix.pid` (the watcher died mid-run, was killed, the Mac slept) is treated as
-abandoned and requeued as `new` by `recover_stale()` (or, for a Terminal
-fallback delegation, resolved to `failed` by `run_via_terminal` - see below)
-on the very next poll, not held. Setting a ticket to `fixing` by hand just
-gets it silently picked back up.
+`status: fixing` set by hand (`ankibug set <id> status=fixing`, e.g. while
+you work on it yourself) is left alone. `recover_stale()` only requeues a run
+the watcher itself claimed that never finished: `fix.owner` `"watcher"` (or
+no owner but a `fix.pid`, a run recorded before owners existed),
+`fix.finished` null, and `fix.pid` dead. A hand-set `fixing` sits on a
+finished run's `fix` (or no `fix`, or `manual_set.at` newer than
+`fix.started`), so it is never requeued. Before 20260924-131713 it was: the
+watcher re-ran that ticket concurrently with the human and then overwrote
+the human's `status=fixed` with its own result. A dead manual `ankifix <id>`
+run (`fix.owner: "cli"`) is marked `failed`, not requeued.
+
+**A human change always wins over a run that finishes later.** `ankibug
+set` stamps `ticket.manual_set` `{at, fields}`. Before a run writes its
+result it re-reads `ticket.json`; if the status left `fixing`,
+`fix.started`/`fix.pid` are no longer that run's, or `manual_set` changed,
+the on-disk ticket is kept and the run's result goes to
+`fix.result_ignored` `{status, kind, summary, commits, log_path, ...}`, and
+the watcher does not auto-apply it.
+
+**`ankibug set` is atomic.** Every `key=value` pair is applied to an
+in-memory copy and validated before anything is written; one bad pair
+(`kind=app status=in_progress`) writes nothing and prints `...; nothing
+written`. It used to write `kind=app` and then fail on the status.
 
 ## App tickets
 
@@ -204,6 +248,14 @@ claude -p --output-format stream-json --verbose --max-turns 60 \
 
 `fix.log` is JSONL: an `{"type":"ankifix","event":"start",...}` line with the
 exact command, Claude's stream-json events, then an `"event":"end"` line.
+
+**Every attempt keeps its own transcript**: `<ticket>/fix.<n>.log` (n = 1,
+2, ...), with `fix.log_path` naming the latest and `fix.log` a symlink to
+it. A pre-existing regular `fix.log` from older runs is kept as
+`fix.0.log`. (`fix.log` used to be reopened with `"w"`, so attempt 2 erased
+attempt 1's evidence.) The Terminal child's stdout/stderr go to
+`<ticket>/terminal.log` (below). `ankifix --watch` prefixes every log line
+with an ISO timestamp.
 
 ## Permission matching for compound commands
 
@@ -461,17 +513,42 @@ open `build_out.json`). On `EPERM`:
 1. **Terminal fallback** (`terminal_fallback`, default on). The ticket is
    handed to Terminal.app, which has Files access:
    `osascript -e 'tell application "Terminal" to do script "~/.venvs/ankibug/bin/ankifix <id> --once-from-terminal; exit"'`.
-   `--once-from-terminal` runs that one ticket without taking the lock (the
-   watcher holds it while it waits) and without a fallback of its own; it
-   records its own pid in `fix.pid` the moment it starts (same as any other
-   run). The watcher polls `ticket.json` every `terminal_poll_s` (5) until
-   either the status leaves `fixing` (a real result, or someone changed it
-   by hand - see below), or `fix.pid` is no longer alive while the ticket is
-   still `fixing` (or `new` with the same `fix.attempts` the delegation
-   started with, i.e. reset by hand rather than by a later, different
-   attempt) - that pid-gone case is treated as an abnormal end within one
-   poll interval: the ticket is marked `failed`, `"terminal run ended
-   without a result"`, and control returns to the watcher's loop. Either way
+   The child's output is tee'd (unbuffered) into `<ticket>/terminal.log`,
+   which also gets a header line per delegation; the watcher's `(Terminal
+   run)` log line carries the child's summary (and the tail of
+   terminal.log when it left none), so a failed Terminal run says why.
+
+   **`--watch` does not wait** (`run_ticket(wait_terminal=False)`): it marks
+   the ticket `fixing` with `fix.delegated: "terminal"`, `fix.delegated_at`,
+   `fix.owner: "watcher"`, records the id in
+   `~/AnkiTickets/.ankifix-delegations.json`, and moves on. The global lock
+   is released at the end of that poll, so other tickets are no longer
+   blocked for up to 40 minutes. Each later poll (under the lock) runs
+   `settle_delegations()`: a ticket that left `fixing` (the child's result, a
+   `wrong-kind` flip, or a human's `ankibug set`) is logged and dropped from
+   the file; a child whose pid died with the ticket still `fixing` is marked
+   `failed` ("terminal run ended without a result" + terminal.log tail); a
+   child that never claimed the ticket within `osascript_timeout_s +
+   terminal_start_grace_s` becomes `needs-review` (files-access). While a
+   delegation is in flight the watcher skips *deck* tickets (one deck fixer
+   in the build dir at a time); app tickets keep flowing. `recover_stale()`
+   never touches a delegation. This is safe because the child already ran
+   without the lock, the child and the watcher never write the same ticket
+   at the same time (the watcher only writes a delegated ticket once its
+   child is dead or never started), and deck work is serialized by the
+   deck-skip rule.
+
+   A manual `ankifix <id>` (not `--watch`) still waits, as described next.
+   `--once-from-terminal` runs that one ticket without taking the lock and
+   without a fallback of its own; it records its own pid in `fix.pid` and
+   `fix.owner: "terminal"` the moment it starts. The waiting run polls
+   `ticket.json` every `terminal_poll_s` (5) until
+   the same `settle_delegation()` check the watcher uses says it settled:
+   the status left `fixing` (a real result, or someone changed it by hand,
+   which is kept as is: a hand-set `new` is no longer overwritten with
+   `failed`), or `fix.pid` is no longer alive while the ticket is still
+   `fixing`, which is an abnormal end caught within one poll interval: the
+   ticket is marked `failed`, `"terminal run ended without a result"`. Either way
    the wait is capped at `terminal_fallback_timeout_min` (40). The first
    time, macOS asks whether Python may control Terminal (Automation); allow
    it once.
@@ -528,4 +605,6 @@ subset (no agent, no notification) hourly.
 ## Locking
 
 `~/AnkiTickets/.ankifix.lock` (flock). `ankifix <id>` exits 3 if another run
-holds it; `--watch` waits and retries on its next poll.
+holds it; `--watch` waits and retries on its next poll. The watcher holds
+it for one poll pass (recover_stale, settle_delegations, the queue); it is
+no longer held while a Terminal child runs (see the TCC section).

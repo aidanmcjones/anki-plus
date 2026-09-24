@@ -185,16 +185,21 @@ def cmd_set(args: argparse.Namespace) -> int:
         print("ankibug: could not read ticket {!r}: {}".format(args.id, exc), file=sys.stderr)
         return 1
 
+    # parse and validate EVERY pair before writing anything: one bad pair
+    # must not leave the good ones half-applied
+    pairs = []
     for assignment in args.assignments:
-        if "=" not in assignment:
-            print("ankibug: bad assignment {!r}, expected key=value".format(assignment), file=sys.stderr)
+        key, sep, value = assignment.partition("=")
+        if not sep or not key.strip():
+            print("ankibug: bad assignment {!r}, expected key=value; nothing written".format(
+                assignment), file=sys.stderr)
             return 1
-        key, _, value = assignment.partition("=")
-        try:
-            store_mod.set_field(args.id, key.strip(), value)
-        except schema_mod.SchemaError as exc:
-            print("ankibug: {}".format(exc), file=sys.stderr)
-            return 1
+        pairs.append((key.strip(), value))
+    try:
+        store_mod.set_fields(args.id, pairs)
+    except schema_mod.SchemaError as exc:
+        print("ankibug: {}; nothing written".format(exc), file=sys.stderr)
+        return 1
 
     print("ankibug: updated {}".format(args.id))
     return 0

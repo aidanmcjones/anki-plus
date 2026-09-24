@@ -73,6 +73,26 @@ def classify(ticket: Dict[str, Any], cfg: Config, override: Optional[str] = None
     )
     lean = "" if on_card else "; not captured on a card, leaning app"
     if not on_card:
+        # Off-card rule. A deck fix edits a course card's content in the
+        # course build dir; with no course notetype and no card on screen
+        # there is no card to point at, and the add-on code a deck fixer
+        # cannot touch is the likelier target (ticket 20260924-131713, "the
+        # restudy deck should have a title ...", filed from the deck list,
+        # went to deck on the bare word "deck" and the deck fixer correctly
+        # refused it as an app bug). So off-card is app unless the note
+        # itself names card content: a card_content_signals phrase, a card
+        # id, or a course name with no app hint beside it (a course name
+        # next to "restudy"/"title" is a deck-list label, not card content).
+        # Only then does the keyword scoring below decide.
+        content_hits = _count(stripped, cfg.card_content_signals)
+        content_hits += sorted(set(re.findall(cfg.card_id_pattern, text)))
+        course_hits = [] if app_hits else _count(text, cfg.course_names)
+        if not content_hits and not course_hits:
+            return "app", (
+                "not captured on a card, leaning app: no course notetype and no card-content "
+                f"signal (a deck fix needs a card to point at); app hints {app_hits}, "
+                f"deck words {deck_hits}"
+            )
         app_score += cfg.no_card_app_bias
 
     if deck_score > app_score:

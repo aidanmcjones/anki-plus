@@ -295,7 +295,9 @@ def test_app_run_end_to_end(env):
     assert len(fix["commits"]) == 1
     assert "node tests/reviewer_click.cjs" in fix["tests"]
     assert "python3 tests/test_fake_bug.py" in fix["tests"]
-    assert fix["log_path"] == "fix.log" and fix["started"] and fix["finished"]
+    # every attempt keeps its own transcript; fix.log links to the latest
+    assert fix["log_path"] == "fix.1.log" and fix["started"] and fix["finished"]
+    assert (cfg.tickets_dir / t["id"] / "fix.log").resolve().name == "fix.1.log"
     assert "Root cause X" in fix["summary"] and "pushed to origin" in fix["summary"]
     assert "$0.42" in fix["summary"]
     # claude ran inside the worktree, on the fix branch, main checkout untouched
@@ -1014,17 +1016,19 @@ def test_tcc_deck_terminal_child_killed_is_marked_failed_within_one_poll(env, mo
 
     assert killed.get("pid"), "killer thread never saw the terminal child's pid"
     assert out["status"] == "failed"
-    assert out["fix"]["summary"] == "terminal run ended without a result"
+    assert out["fix"]["summary"].startswith("terminal run ended without a result")
     # caught within about one poll interval (0.2s), nowhere near the timeout cap
     assert elapsed < 5
 
 
-def test_tcc_deck_terminal_child_killed_and_manually_requeued_is_marked_failed(env, monkeypatch):
+def test_tcc_deck_terminal_child_killed_and_manually_requeued_keeps_human_status(env, monkeypatch):
     """Same incident, but someone also ran `ankibug set <id> status=new` by
     hand right after killing the child (to try to requeue it) before the
-    watcher's poll caught up. A dead pid still ends the wait quickly instead
-    of sitting out the timeout waiting on a "new" that will never move -
-    that hang is what needed a watcher restart in the field."""
+    watcher's poll caught up. The wait still ends quickly instead of sitting
+    out the timeout (that hang needed a watcher restart in the field), and
+    since 20260924-131713 the human's "new" is kept, not overwritten with
+    "failed": the Terminal child never sets "new" itself, so a "new" is
+    always someone's decision to requeue."""
     import threading
     import time as _time
 
@@ -1061,8 +1065,8 @@ def test_tcc_deck_terminal_child_killed_and_manually_requeued_is_marked_failed(e
     th.join(timeout=2)
 
     assert killed.get("pid"), "killer thread never saw the terminal child's pid"
-    assert out["status"] == "failed"
-    assert out["fix"]["summary"] == "terminal run ended without a result"
+    assert out["status"] == "new"
+    assert load_ticket(cfg.tickets_dir, t["id"])["status"] == "new"
     assert elapsed < 5
 
 
