@@ -122,7 +122,10 @@ in this file are the raw form the settings page writes.
   Anki itself only sorts decks by name, so this lives here rather than in
   the collection. Decks not in a list (new ones, or ones moved in from
   another parent) follow the ranked ones in name order; ids that no longer
-  sit under that parent are ignored. Not meant to be hand-edited.
+  sit under that parent are ignored. The Browse sidebar's Decks section
+  shows and writes the same order (see **browse_sidebar_multiselect**),
+  so a deck moved there moves on the home list too. Not meant to be
+  hand-edited.
 - **deck_subsections** — **New subsection…** on a deck's menu, both on the
   deck list (the gear) and in the Browse sidebar (right-click). Name a
   heading — "Exam 1 Content" — and tick the sub-decks that belong under
@@ -285,7 +288,8 @@ in this file are the raw form the settings page writes.
   is always in the Select tool's mode. A plain click still searches the
   deck you clicked. ⌘-click (Ctrl-click) adds a deck to the selection and
   ⇧-click extends a run, without searching. Dragging any selected deck
-  onto another moves the whole selection in one undoable step, and
+  onto the middle of another moves the whole selection in one undoable
+  step, and
   dragging from the empty space under the last deck lassos a rubber-band
   across rows. Right-click acts on everything selected: **Move to…**
   lists every deck the selection could go into (plus *Top level*), and
@@ -304,6 +308,18 @@ in this file are the raw form the settings page writes.
   **Tags** heading moves them to the top level. Right-clicking a tag
   offers **Restudy N tags**: a filtered deck named Restudy with every card
   that carries any selected tag, child tags included.
+  Decks follow the same rules: sweep from an unselected deck to select a
+  run, press on a selected deck to drag the selection, pull an unselected
+  deck sideways to drag just that one. The top or bottom quarter of a deck
+  shows the accent line and makes the dragged decks its siblings, just
+  above or below it, in the order they were shown (reparented if they
+  came from another parent; a subdeck dragged along with its parent stays
+  inside it). The middle nests them, the **Decks** heading moves them to
+  the top level, and a deck never goes into its own subdecks. The order
+  is the home list's own `deck_order`, not a second one. Right-clicking a
+  deck offers **Restudy N decks**: every card in the selected decks,
+  subdecks included; filtered decks (Restudy itself among them) are left
+  out, since their cards can't go into another filtered deck.
 - **tag_order**: the sort order those tag line drops produce, keyed by
   the parent tag's full name (`""` for the top level) with the children's
   full names in order, e.g. `{"": ["gamma", "alpha"], "alpha": ["alpha::z",

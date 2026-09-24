@@ -21,8 +21,10 @@ What that leaves:
 
   - plain click        — search this deck (as before)
   - ⌘-click / ⇧-click  — add to / extend the selection, no search
-  - drag from a row    — move every selected deck (Anki's own drop handler
-                         already reparents `_selected_items()` in one op)
+  - drag from a row    : sidebar_tags.py / sidebar_decks.py take tag and
+                         deck rows over: a sweep from an unselected row
+                         selects a run, a press on a selected row drags
+                         the selection, drops sort or nest
   - drag from empty    — rubber-band lasso across rows
   - right-click        — the menu acts on the whole selection
 

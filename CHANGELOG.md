@@ -5,6 +5,18 @@ All notable changes to Anki Design are documented here. Format loosely follows
 
 ## [Unreleased]
 ### Added
+- **Decks in the Browse sidebar work like tags.** Right-click a deck, or
+  one of several selected decks, and **Restudy N decks** at the top of the
+  menu studies every card in them (subdecks included) in the Restudy
+  filtered deck; filtered decks are left out and the tooltip says why.
+  Press on an unselected deck and sweep up or down to select a run of
+  decks (a sweep no longer starts a drag); press on a selected deck to
+  drag the whole selection. The top or bottom edge of a deck shows the
+  accent line: dropped there the decks become its siblings, just above or
+  below it, in the order they were shown, moved under its parent if they
+  came from elsewhere. The middle still nests, the Decks heading moves
+  them to the top level. The order is the home deck list's own
+  `deck_order`, so the sidebar and the home list always agree.
 - **Tags in the Browse sidebar work like cards.** Right-click a tag, or
   one of several selected tags, and **Restudy N tags** at the top of the
   menu studies every card that carries any of them (child tags included)

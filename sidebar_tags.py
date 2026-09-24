@@ -40,8 +40,12 @@ the tree through `browser_will_build_tree` at the TAGS stage: Anki's own
 `_tag_tree` builds the section (collapse state and all), then each
 sibling group is sorted.
 
-Deck rows are untouched: a press on anything that is not a tag is left to
-the tree and to sidebar_select.py, exactly as before.
+Deck rows get the same gestures and drop zones (sidebar_decks.py holds
+what differs: deck ids, Anki's `reparent_decks`, and the order living in
+the add-on's shared `deck_order`, the one the home deck list uses). The
+mouse filter and the drop target below serve both kinds of row; a sweep
+only selects rows of the kind it started on. Anything else is left to the
+tree and to sidebar_select.py.
 """
 
 from __future__ import annotations
@@ -373,12 +377,6 @@ def _item_at(sidebar: Any, pos: QPoint) -> tuple:
         return QModelIndex(), None
 
 
-def _is_tag(item: Any) -> bool:
-    from aqt.browser.sidebar.item import SidebarItemType
-
-    return item is not None and item.item_type is SidebarItemType.TAG
-
-
 # --------------------------------------------------------------------------- #
 # Moves
 # --------------------------------------------------------------------------- #
@@ -474,33 +472,114 @@ def place(sidebar: Any, tags: List[str], target: str, after: bool) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# Drag source + sweep: the tag rows
+# Drag source + sweep: tag and deck rows
 # --------------------------------------------------------------------------- #
-def encode_tags(tags: List[str]) -> QMimeData:
+def encode_payload(mime_type: str, items: List[Any]) -> QMimeData:
     mime = QMimeData()
-    mime.setData(MIME, QByteArray(json.dumps(list(tags)).encode("utf-8")))
+    mime.setData(mime_type, QByteArray(json.dumps(list(items)).encode("utf-8")))
     return mime
 
 
-def decode_tags(mime: Any) -> List[str]:
+def decode_payload(mime: Any, mime_type: str) -> List[Any]:
     try:
-        if mime is None or not mime.hasFormat(MIME):
+        if mime is None or not mime.hasFormat(mime_type):
             return []
-        raw = mime.data(MIME)
+        raw = mime.data(mime_type)
         data = raw.data() if hasattr(raw, "data") else bytes(raw)
         if isinstance(data, memoryview):
             data = data.tobytes()
-        return [str(t) for t in json.loads(bytes(data).decode("utf-8")) if t]
+        return [t for t in json.loads(bytes(data).decode("utf-8")) if t]
     except Exception:
         return []
 
 
-class _TagMouse(QObject):
-    """The card table's gesture rules, on tag rows only (see module doc)."""
+def encode_tags(tags: List[str]) -> QMimeData:
+    return encode_payload(MIME, tags)
+
+
+def decode_tags(mime: Any) -> List[str]:
+    return [str(t) for t in decode_payload(mime, MIME)]
+
+
+class _TagKind:
+    """What the shared row gestures need to know about tag rows. The deck
+    rows' counterpart is sidebar_decks.DeckKind; both answer the same
+    questions, so one mouse filter and one drop target serve both."""
+
+    ITEM = "TAG"
+    ROOT = "TAG_ROOT"
+    MIME = MIME
+
+    def decode(self, mime: Any) -> List[Any]:
+        return decode_tags(mime)
+
+    def encode(self, items: List[Any]) -> QMimeData:
+        return encode_tags(items)
+
+    def selected(self, sidebar: Any) -> List[Any]:
+        return selected_tags(sidebar)
+
+    def count(self, n: int) -> str:
+        return _count(n)
+
+    def root_target(self, dragged: List[Any]) -> Optional[tuple]:
+        if all(_key(parent_of(t)) == "" for t in prune(dragged)):
+            return None
+        return ("into", "")
+
+    def edge_target(self, dragged: List[Any], item: Any, zone: str) -> Optional[tuple]:
+        name = item.full_name
+        parent = parent_of(name)
+        if not [t for t in prune(dragged) if not is_within(parent, t)]:
+            return None
+        return (zone, name)
+
+    def middle_target(self, dragged: List[Any], item: Any) -> Optional[tuple]:
+        name = item.full_name
+        # not into itself or its own subtree
+        if any(is_within(name, t) for t in dragged):
+            return None
+        return ("into", name)
+
+    def perform(self, sidebar: Any, items: List[Any], target: Any) -> bool:
+        zone, name = target
+        if zone == "into":
+            return nest(sidebar, items, name)
+        return place(sidebar, items, name, zone == "below")
+
+
+TAGS = _TagKind()
+
+
+def _kinds() -> List[Any]:
+    kinds: List[Any] = [TAGS]
+    try:
+        from . import sidebar_decks as _decks
+
+        kinds.append(_decks.DECKS)
+    except Exception as exc:
+        _log(f"deck rows unavailable: {exc!r}")
+    return kinds
+
+
+def _kind_of(item: Any) -> Any:
+    if item is None:
+        return None
+    name = getattr(getattr(item, "item_type", None), "name", "")
+    for k in _kinds():
+        if k.ITEM == name:
+            return k
+    return None
+
+
+class _RowMouse(QObject):
+    """The card table's gesture rules, on tag and deck rows (see module
+    doc). A sweep only ever selects rows of the kind it started on."""
 
     def __init__(self, sidebar: Any) -> None:
         super().__init__(sidebar)
         self.sidebar = sidebar
+        self.kind: Any = None
         self.press_pos: Optional[QPoint] = None
         self.press_index: Optional[QPersistentModelIndex] = None
         self.press_selected = False
@@ -535,7 +614,8 @@ class _TagMouse(QObject):
             return False
         pos = _bcd._pos(ev)
         index, item = _item_at(self.sidebar, pos)
-        if not _is_tag(item):
+        kind = _kind_of(item)
+        if kind is None:
             return False
         sel = self.sidebar.selectionModel()
         if sel is None:
@@ -543,6 +623,7 @@ class _TagMouse(QObject):
         # Qt still handles the press: an unselected row is selected now,
         # a selected one keeps the selection until release (so the whole
         # selection can be dragged, and a click still collapses it).
+        self.kind = kind
         self.press_selected = bool(sel.isSelected(index))
         self.press_pos = QPoint(pos)
         self.press_index = QPersistentModelIndex(index)
@@ -569,7 +650,7 @@ class _TagMouse(QObject):
             # start of its own drag.
             return True
         if not self.press_selected and dy >= dx:
-            # A sweep along the list from an unselected tag: select the run.
+            # A sweep along the list from an unselected row: select the run.
             self.sweeping = True
             self.sweeps += 1
             self._sweep_to(pos)
@@ -600,7 +681,7 @@ class _TagMouse(QObject):
         model = view.model()
         sel = QItemSelection()
         for i in rows:
-            if _is_tag(model.item_for_index(i)):
+            if _kind_of(model.item_for_index(i)) is self.kind:
                 sel.select(i, i)
         view.selectionModel().select(
             sel,
@@ -609,12 +690,15 @@ class _TagMouse(QObject):
         )
 
     def _start_drag(self) -> None:
-        tags = selected_tags(self.sidebar)
-        if not tags:
+        kind = self.kind
+        if kind is None:
+            return
+        items = kind.selected(self.sidebar)
+        if not items:
             return
         drag = QDrag(self.sidebar)
-        drag.setMimeData(encode_tags(tags))
-        pm = _bcd._drag_pixmap(len(tags), _count(len(tags)))
+        drag.setMimeData(kind.encode(items))
+        pm = _bcd._drag_pixmap(len(items), kind.count(len(items)))
         if pm is not None:
             try:
                 drag.setPixmap(pm)
@@ -628,22 +712,27 @@ class _TagMouse(QObject):
             self.dragging = False
 
 
+_TagMouse = _RowMouse
+
+
 # --------------------------------------------------------------------------- #
 # Drop target: insertion line / nest box
 # --------------------------------------------------------------------------- #
-class _TagDrop(_bcd._DropTarget):
-    """Drops of our tag drags on the sidebar tree. `resolve` gives
-    (zone, target full name) with zone "above", "below" or "into";
-    the marker is a 2px accent line on the row's top or bottom edge for
-    the first two (the Browse table's card insertion line) and a box
-    around the row for "into"."""
+class _RowDrop(_bcd._DropTarget):
+    """Drops of our tag or deck drags on the sidebar tree. `resolve` gives
+    (zone, target) with zone "above", "below" or "into" (target: a tag's
+    full name, or a deck id; "" / 0 for the section header); the marker is
+    a 2px accent line on the row's top or bottom edge for the first two
+    (the Browse table's card insertion line) and a box around the row for
+    "into"."""
 
     MARKER_NAME = "ba-tag-drop-marker"
     LINE_H = 2
 
     def __init__(self, browser: Any, sidebar: Any) -> None:
         super().__init__(browser, sidebar)
-        self.dragged: List[str] = []
+        self.dragged: List[Any] = []
+        self.kind: Any = None
         self.zone: Optional[str] = None
         self._style_zone: Optional[str] = None
         self.expand_index: Any = None
@@ -658,37 +747,29 @@ class _TagDrop(_bcd._DropTarget):
             self.expand_timer = None
 
     def decode(self, mime: Any) -> List[Any]:
-        tags = decode_tags(mime)
-        if tags:
-            self.dragged = tags
-        return tags
+        for kind in _kinds():
+            items = kind.decode(mime)
+            if items:
+                self.kind = kind
+                self.dragged = items
+                return items
+        return []
 
     def resolve(self, pos: QPoint) -> Optional[tuple]:
-        from aqt.browser.sidebar.item import SidebarItemType
-
         index, item = _item_at(self.view, pos)
-        if item is None:
+        kind = self.kind
+        if item is None or kind is None:
             return None
-        dragged = self.dragged
-        if item.item_type is SidebarItemType.TAG_ROOT:
-            if all(_key(parent_of(t)) == "" for t in prune(dragged)):
-                return None
-            return ("into", "")
-        if item.item_type is not SidebarItemType.TAG:
+        tname = getattr(item.item_type, "name", "")
+        if tname == kind.ROOT:
+            return kind.root_target(self.dragged)
+        if tname != kind.ITEM:
             return None
-        name = item.full_name
         vr = self.view.visualRect(index)
         frac = (pos.y() - vr.top()) / max(1, vr.height())
         if frac < EDGE or frac >= 1 - EDGE:
-            zone = "above" if frac < EDGE else "below"
-            parent = parent_of(name)
-            if not [t for t in prune(dragged) if not is_within(parent, t)]:
-                return None
-            return (zone, name)
-        # into: not into itself or its own subtree
-        if any(is_within(name, t) for t in dragged):
-            return None
-        return ("into", name)
+            return kind.edge_target(self.dragged, item, "above" if frac < EDGE else "below")
+        return kind.middle_target(self.dragged, item)
 
     def marker_rect(self, pos: QPoint, target: Any) -> Optional[QRect]:
         row = self._row_rect(pos)
@@ -799,18 +880,20 @@ class _TagDrop(_bcd._DropTarget):
             except Exception:
                 pass
 
-    def perform(self, tags: List[str], target: Any) -> bool:
-        zone, name = target
-        if zone == "into":
-            return nest(self.view, tags, name)
-        return place(self.view, tags, name, zone == "below")
+    def perform(self, items: List[Any], target: Any) -> bool:
+        if self.kind is None:
+            return False
+        return self.kind.perform(self.view, items, target)
+
+
+_TagDrop = _RowDrop
 
 
 # --------------------------------------------------------------------------- #
 # Install
 # --------------------------------------------------------------------------- #
 def install(browser: Any) -> Optional[Dict[str, Any]]:
-    """Tag gestures on this Browser's sidebar. Returns the watchers."""
+    """Tag and deck gestures on this Browser's sidebar. Returns the watchers."""
     if not enabled():
         return None
     sidebar = getattr(browser, "sidebar", None)
@@ -820,7 +903,7 @@ def install(browser: Any) -> Optional[Dict[str, Any]]:
         return sidebar._ba_tag_drag
     watchers: Dict[str, Any] = {}
     try:
-        mouse = _TagMouse(sidebar)
+        mouse = _RowMouse(sidebar)
         sidebar.viewport().installEventFilter(mouse)
         watchers["mouse"] = mouse
     except Exception as exc:
@@ -828,7 +911,7 @@ def install(browser: Any) -> Optional[Dict[str, Any]]:
         return None
     try:
         _bcd._accept_drops(sidebar)
-        drop = _TagDrop(browser, sidebar)
+        drop = _RowDrop(browser, sidebar)
         _bcd._watch(sidebar, drop)
         watchers["drop"] = drop
     except Exception as exc:

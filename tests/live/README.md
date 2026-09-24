@@ -220,12 +220,34 @@ Rules for a good live test:
   into the middle of another (nests). Between move and drop it reads the
   add-on's marker over the viewport and the viewport's pixels: a 2px
   accent line on the hovered edge, a box for the middle. After each drop
-  it reads the refreshed sidebar and `tag_order`. Deck rows: a pull from a
-  deck still starts the tree's own drag, and a deck drop passes the
-  add-on's filters to Anki's `dropEvent` and reparents (delivered straight
-  to the tree, since a synthetic drag has no QDrag source and an
-  InternalMove view refuses it otherwise). On 9b5aa17 the sweep drags
+  it reads the refreshed sidebar and `tag_order`. Deck rows: since the
+  deck change, a sweep from a deck selects decks and starts no drag, and a
+  deck pulled onto another's middle is the add-on's own drag and nests
+  (test_sidebar_deck_drag.py covers decks in full). On 9b5aa17 the sweep drags
   `delta` into `gamma` and 11 of its checks fail before it stops.
+- `test_sidebar_deck_restudy.py`: adds decks `Star*Deck` and `StarXDeck`
+  (one card each), selects decks in the real Browse sidebar with the real
+  mouse and right-clicks through `onContextMenu`. Parent alone: "Restudy 1
+  deck" first with a separator under it, the Restudy filtered deck holds
+  Parent's six cards (all in its subdecks), the reviewer shows one, the
+  tooltip counts them. Parent::A + Star*Deck: exactly A's two and
+  Star*Deck's one (StarXDeck stays out, so the `*` is escaped). Restudy +
+  Solo: Solo's cards, the tooltip says the filtered deck was left out and
+  why; Restudy alone: refused, no reviewer. On 7c36688 the deck menu has
+  no Restudy item.
+- `test_sidebar_deck_drag.py`: adds Alpha, Mid, Zulu, Other::{X,Y} and
+  drives the real sidebar with the real mouse (the same stand-in OS drag
+  session as the tag test; the tree's own `startDrag` is a tripwire).
+  Sweep from an unselected deck selects the run and starts no drag; a
+  group dropped on Zulu's top line (the painted 2px accent line is read
+  from the marker and the viewport's pixels), one deck on Mid's bottom
+  line, a Cmd-click pair on the line above Parent::B (reparented, ids
+  kept), a parent with its own child (moves as one), refusals into its own
+  subtree, a middle drop (boxed, nests) and the Decks heading (to top
+  level). After each drop it reads the refreshed sidebar, `deck_order`
+  (new and old parent entries) and the home list's payload; after a last
+  order-only drop it closes Browse and reads the real home deck list
+  (no refresh by hand). On 7c36688 29 of 44 checks fail.
 - `test_sidebar_resize.py`: hover the left rail's right border with the
   real mouse (a resize handle with a col-resize cursor must be there), then
   drag it 80px right. Checks what the user sees: the rail widens with every

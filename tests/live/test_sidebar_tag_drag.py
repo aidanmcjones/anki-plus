@@ -21,16 +21,19 @@ real mouse (QTest's QWindow overloads, the entry OS events take):
      another parent: the tags are reparented (full names change on the
      notes) and land in order before it
   5. the middle of a row: the row is boxed, not lined, and the drop nests
-  6. deck rows: a sweep from a deck is not taken over, and dragging a
-     deck onto another still reparents it through Anki's own drop
+  6. deck rows follow the same rules (sidebar_decks.py): a sweep from an
+     unselected deck selects the decks crossed, and a deck dragged onto
+     the middle of another nests there (test_sidebar_deck_drag.py covers
+     decks in full)
 
 Offscreen, Qt ends every QDrag at once, so the drag is run by a stand-in
 that does what the OS drag session does (as test_browse_sweep_select.py):
 from the moment a drag starts it owns the pointer, sends the rest of the
 gesture to the widget under it as DragEnter / DragMove / Drop, and eats
-the release. The add-on's tag drag uses `sidebar_tags.QDrag`; the deck
-drag is Qt's own `startDrag`, which is replaced on the instance with one
-that carries the model's own MIME data through the same stand-in.
+the release. The add-on's tag and deck drags use `sidebar_tags.QDrag`.
+The tree's own `startDrag` is replaced on the instance with one that
+records it ran (it must not, on tag or deck rows) and carries the model's
+own MIME data through the same stand-in if it does.
 
 Fixture: Parent::{A,B,C} with two new Basic cards each, and Solo.
 """
@@ -240,6 +243,9 @@ def run(t):
         class LiveDrag(real_qdrag):
             def exec(self, *a, **k):
                 session["carried"] = st.decode_tags(self.mimeData())
+                sd = _module(".sidebar_decks")
+                if sd is not None:
+                    session["carried_decks"] = sd.decode_decks(self.mimeData())
                 return run_session(self.mimeData())
 
         st.QDrag = LiveDrag
@@ -406,31 +412,32 @@ def run(t):
         t.check("the sidebar shows it under alpha", ok, shown("alpha"))
         t.check("the top level is alpha, beta", settle(lambda: shown("") == ["alpha", "beta"]), shown(""))
 
-        # 6. deck rows keep working ------------------------------------------------
+        # 6. deck rows: the same rules now (sidebar_decks.py) --------------------
         sweeps = getattr(watchers.get("mouse"), "sweeps", None)
         solo = int(col.decks.id_for_name("Solo"))
         sb.clearSelection()
         t.pump(30)
-        session_opts["deck_no_drop"] = True
         s = gesture(at("Parent", kind="DECK"), [at("Solo", kind="DECK")])
-        session_opts["deck_no_drop"] = False
         picked = [int(i) for i in sb._selected_decks()]
-        t.note(f"deck sweep: deck_drag={s.get('deck_drag')} picked={picked}")
-        t.check("a pull down from an unselected deck row is left to the tree: its own drag starts",
-                s.get("deck_drag") and getattr(watchers.get("mouse"), "sweeps", None) == sweeps,
-                (s.get("deck_drag"), sweeps))
-        t.check("and the tree selected just the pressed deck, as before",
-                picked == [int(col.decks.id_for_name("Parent"))], picked)
+        t.note(f"deck sweep: started={s.get('started')} deck_drag={s.get('deck_drag')} picked={picked}")
+        t.check("a sweep down from an unselected deck row is a sweep too: no drag starts",
+                not s.get("started") and not s.get("deck_drag")
+                and getattr(watchers.get("mouse"), "sweeps", None) == (sweeps or 0) + 1,
+                (s.get("started"), s.get("deck_drag"), sweeps))
+        t.check("and it selects decks only, Parent through Solo",
+                picked and picked[0] == int(col.decks.id_for_name("Parent")) and picked[-1] == solo,
+                picked)
         click("Solo", kind="DECK")
         t.check("Solo deck selected", [int(i) for i in sb._selected_decks()] == [solo],
                 sb._selected_decks())
         src = at("Solo", kind="DECK")
         s = gesture(src, [src + QPoint(step, 0), at("Parent", kind="DECK"), at("Parent", kind="DECK")])
-        t.note(f"deck drag: {s.get('deck_drag')} claimed={s.get('claimed')} dropped={s.get('dropped')}")
-        t.check("the deck drag carries Qt's own item MIME, and no add-on drop filter claims it",
-                s.get("deck_drag") and s.get("claimed") == [], s.get("claimed"))
+        t.note(f"deck drag: carried={s.get('carried_decks')} tree={s.get('deck_drag')} dropped={s.get('dropped')}")
+        t.check("the deck drag is the add-on's own (deck ids), not the tree's",
+                s.get("carried_decks") == [solo] and not s.get("deck_drag"),
+                (s.get("carried_decks"), s.get("deck_drag")))
         ok = settle(lambda: col.decks.name(solo) == "Parent::Solo")
-        t.check("dragging a deck onto another still reparents it", ok, col.decks.name(solo))
+        t.check("dragging a deck onto the middle of another still nests it", ok, col.decks.name(solo))
     finally:
         if st is not None:
             st.QDrag = real_qdrag

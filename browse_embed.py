@@ -622,6 +622,21 @@ class _EmbedFilter(QObject):
 
 _state: dict = {"browser": None, "overlay": None, "filter": None}
 
+# One-shot callbacks run once the inline Browse has closed (see
+# `after_close`), e.g. a deck list re-render that was held back while
+# Browse covered it.
+_after_close: list = []
+
+
+def after_close(fn: Any) -> None:
+    """Run `fn()` once, after the inline Browse closes; now if it is not
+    open."""
+    if _state.get("browser") is None and _state.get("overlay") is None:
+        fn()
+        return
+    if fn not in _after_close:
+        _after_close.append(fn)
+
 
 def _on_op_executed_embedded(changes: Any, handler: object | None) -> None:
     """Force the table repaint that stock Browser skips for an embedded
@@ -1048,6 +1063,13 @@ def close_inline() -> None:
             w.eval("window.__baSetActive && window.__baSetActive('decks');")
     except Exception:
         pass
+    pending = list(_after_close)
+    del _after_close[:]
+    for fn in pending:
+        try:
+            fn()
+        except Exception:
+            pass
 
 
 def _set_tree_collapsed(collapsed: bool, *, persist: bool = True) -> None:

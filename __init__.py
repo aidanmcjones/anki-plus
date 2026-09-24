@@ -4809,13 +4809,25 @@ except Exception as _e:
 
 # Browse sidebar tags: sweep-select a run of tags, drag a selection onto
 # the line above/below a tag to sort it (custom order in `tag_order`), or
-# into a tag to nest. Deck rows keep sidebar_select.py's behaviour.
+# into a tag to nest. Deck rows get the same (sidebar_decks.py).
 try:
     from . import sidebar_tags as _sidebar_tags
     _sidebar_tags.register()
 except Exception as _e:
     try:
         print(f"[anki-design] sidebar_tags register failed: {_e}", flush=True)
+    except Exception:
+        pass
+
+# Browse sidebar decks: the same gestures (sidebar_tags.py serves both),
+# with the sidebar's deck tree sorted by the home list's own `deck_order`,
+# which a line drop in the sidebar writes.
+try:
+    from . import sidebar_decks as _sidebar_decks
+    _sidebar_decks.register()
+except Exception as _e:
+    try:
+        print(f"[anki-design] sidebar_decks register failed: {_e}", flush=True)
     except Exception:
         pass
 

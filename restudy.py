@@ -1,5 +1,6 @@
 """Browse: right-click a selection -> "Restudy N selected cards", and
-right-click a tag (or several) in the sidebar -> "Restudy N tags".
+right-click a tag or a deck (or several) in the sidebar -> "Restudy N
+tags" / "Restudy N decks".
 
 Builds (or rebuilds) one filtered deck, "Restudy", from exactly the
 selected card ids and starts studying it. Answers count toward the cards'
@@ -93,10 +94,11 @@ def build_restudy_deck(cids: List[int]) -> tuple[int, int]:
     )
 
 
-def restudy_search(search: str, total: int, nothing: str) -> None:
+def restudy_search(search: str, total: int, nothing: str, extra: str = "") -> None:
     """Build the Restudy deck from `search` (`total` cards match it), say
     how many made it in and how many were left out, and open the reviewer.
-    `nothing` is the tooltip when none of them can be studied."""
+    `nothing` is the tooltip when none of them can be studied; `extra` is
+    added to either message."""
     if not search or total <= 0 or getattr(mw, "col", None) is None:
         return
     try:
@@ -107,12 +109,14 @@ def restudy_search(search: str, total: int, nothing: str) -> None:
         return
     left_out = total - got
     if got == 0:
-        _tooltip(nothing)
+        _tooltip((nothing + " " + extra).strip())
         return
     mw.col.decks.select(did)
     msg = f"Restudying {got} card{'s' if got != 1 else ''}."
     if left_out:
         msg += f" {left_out} left out ({LEFT_OUT})."
+    if extra:
+        msg += " " + extra
     _tooltip(msg)
     # leaving Browse for the reviewer: the inline Browse tears itself down
     # on the state change
@@ -164,6 +168,74 @@ def restudy_tags(tags: List[str]) -> None:
     )
 
 
+def deck_search(col: Any, names: List[str]) -> str:
+    """One search for every card in any of the decks `names`. `deck:"a"`
+    already takes in `a::*`, so subdecks come along; SearchNode escapes the
+    name (quotes, and `*` / `_`, which a deck search reads as wildcards)."""
+    from anki.collection import SearchNode
+
+    nodes = [SearchNode(deck=n) for n in names if n]
+    if not nodes:
+        return ""
+    return col.build_search_string(*nodes, joiner="OR")
+
+
+FILTERED_WHY = "a filtered deck's cards can't go into another filtered deck"
+
+
+def restudy_decks(dids: List[int]) -> None:
+    """Restudy every card in the decks `dids`, subdecks included. Filtered
+    decks (the Restudy deck itself among them) are left out and the tooltip
+    says so."""
+    col = getattr(mw, "col", None)
+    if not dids or col is None:
+        return
+    names: List[str] = []
+    filtered = 0
+    for did in dids:
+        try:
+            deck = col.decks.get(int(did), default=False)
+        except Exception:
+            deck = None
+        if not deck:
+            continue
+        if deck.get("dyn"):
+            filtered += 1
+        elif deck["name"] not in names:
+            names.append(str(deck["name"]))
+    skipped = ""
+    if filtered:
+        skipped = (
+            f"{filtered} filtered deck{'s' if filtered != 1 else ''} left out "
+            f"({FILTERED_WHY})."
+        )
+    if not names:
+        _tooltip(
+            f"That is a filtered deck, so it can't be restudied: {FILTERED_WHY}."
+            if filtered == 1
+            else f"Those are filtered decks, so they can't be restudied: {FILTERED_WHY}."
+        )
+        return
+    try:
+        search = deck_search(col, names)
+        total = len(col.find_cards(search)) if search else 0
+    except Exception as exc:
+        _log(f"deck search failed: {exc!r}")
+        _tooltip(f"Couldn't search those decks: {exc}")
+        return
+    one = len(names) == 1
+    if total == 0:
+        _tooltip((("That deck has" if one else "Those decks have") + " no cards. " + skipped).strip())
+        return
+    restudy_search(
+        search,
+        total,
+        f"None of the cards in {'that deck' if one else 'those decks'} "
+        f"can be restudied ({LEFT_OUT}).",
+        skipped,
+    )
+
+
 def _insert_top(menu: QMenu, label: str) -> Any:
     """A new action at the top of `menu`, followed by a separator."""
     first = menu.actions()[0] if menu.actions() else None
@@ -173,7 +245,8 @@ def _insert_top(menu: QMenu, label: str) -> Any:
 
         act = QAction(label, menu)
         menu.insertAction(first, act)
-        menu.insertSeparator(first)
+        if not first.isSeparator():
+            menu.insertSeparator(first)
     else:
         act = menu.addAction(label)
     return act
@@ -197,10 +270,14 @@ def on_browser_will_show_context_menu(browser: Any, menu: QMenu) -> None:
 
 def on_sidebar_context_menu(sidebar: Any, menu: QMenu, item: Any, index: Any) -> None:
     """Browse sidebar: right-click a tag (or one of several selected tags)
-    -> "Restudy N tags", every card carrying any of them, children too."""
+    -> "Restudy N tags", every card carrying any of them, children too.
+    The same on a deck -> "Restudy N decks", subdecks included."""
     try:
         from aqt.browser.sidebar.item import SidebarItemType
 
+        if item is not None and item.item_type is SidebarItemType.DECK:
+            _deck_menu(sidebar, menu, item)
+            return
         if item is None or item.item_type is not SidebarItemType.TAG:
             return
         tags: List[str] = []
@@ -219,6 +296,31 @@ def on_sidebar_context_menu(sidebar: Any, menu: QMenu, item: Any, index: Any) ->
         "filtered deck named Restudy. Answers count toward their normal schedules."
     )
     act.triggered.connect(lambda _checked=False, _t=tags: restudy_tags(_t))
+
+
+def _deck_menu(sidebar: Any, menu: QMenu, item: Any) -> None:
+    from aqt.browser.sidebar.item import SidebarItemType
+
+    dids: List[int] = []
+    try:
+        for it in sidebar._selected_items():
+            if it is not None and it.item_type is SidebarItemType.DECK and it.id:
+                if int(it.id) not in dids:
+                    dids.append(int(it.id))
+    except Exception:
+        pass
+    if item.id and int(item.id) not in dids:
+        dids.append(int(item.id))
+    if not dids:
+        return
+    n = len(dids)
+    act = _insert_top(menu, f"Restudy {n} deck{'s' if n != 1 else ''}")
+    act.setToolTip(
+        "Study every card in these decks (subdecks included) now, in a "
+        "filtered deck named Restudy. Answers count toward their normal "
+        "schedules. Filtered decks are left out."
+    )
+    act.triggered.connect(lambda _checked=False, _d=dids: restudy_decks(_d))
 
 
 def register() -> None:
