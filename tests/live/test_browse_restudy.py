@@ -25,6 +25,16 @@ def _module(suffix):
     return None
 
 
+def _restudy_did(col):
+    """The Restudy filtered deck; its name is "Restudy: <what it holds>"."""
+    for d in col.decks.all_names_and_ids():
+        if d.name == "Restudy" or d.name.startswith("Restudy: "):
+            deck = col.decks.get(d.id)
+            if deck and deck.get("dyn"):
+                return int(d.id)
+    return 0
+
+
 def run(t):
     from aqt.qt import QMenu, QPoint
 
@@ -84,9 +94,9 @@ def run(t):
         act.trigger()
         t.pump(300)
 
-        did = col.decks.id_for_name("Restudy")
+        did = _restudy_did(col)
         deck = col.decks.get(did) if did else None
-        t.check("a filtered deck named Restudy exists", bool(deck and deck.get("dyn")), deck and deck.get("name"))
+        t.check("a Restudy filtered deck exists", bool(deck and deck.get("dyn")), deck and deck.get("name"))
         in_deck = sorted(col.find_cards(f"did:{did}")) if did else []
         t.check("it holds exactly the selected cards", in_deck == sorted(pick), in_deck)
         t.check("it is the current deck", col.decks.current()["id"] == did, col.decks.current()["name"])
@@ -113,7 +123,7 @@ def run(t):
         act.trigger()
         t.pump(300)
 
-        did2 = col.decks.id_for_name("Restudy")
+        did2 = _restudy_did(col)
         t.check("the same Restudy deck is reused", did2 == did, (did, did2))
         in_deck = sorted(col.find_cards(f"did:{did2}"))
         t.check("it now holds only the unsuspended Solo card", in_deck == [solo[0]], in_deck)

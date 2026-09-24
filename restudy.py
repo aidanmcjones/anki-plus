@@ -2,7 +2,8 @@
 right-click a tag or a deck (or several) in the sidebar -> "Restudy N
 tags" / "Restudy N decks".
 
-Builds (or rebuilds) one filtered deck, "Restudy", from exactly the
+Builds (or rebuilds) one filtered deck, titled after what it holds
+("Restudy: hi-yield", "Restudy: Exam 1, Exam 2"), from exactly the
 selected card ids and starts studying it. Answers count toward the cards'
 real schedules (reschedule on), the same as studying them in their own
 decks. Reusing one deck keeps the deck list clean: every restudy empties
@@ -15,13 +16,15 @@ how many.
 
 from __future__ import annotations
 
+import re
 from typing import Any, List
 
 from aqt import mw
 from aqt.qt import QMenu
 
 DECK_NAME = "Restudy"
-# used only when the user already has a NORMAL deck called "Restudy"
+# what older versions named the deck when a NORMAL "Restudy" existed; still
+# recognised so that deck is reused rather than left behind
 FALLBACK_NAME = "Restudy (selected cards)"
 
 
@@ -38,16 +41,68 @@ def _tooltip(msg: str) -> None:
         _log(msg)
 
 
-def _target_deck_id(col: Any) -> tuple[int, str]:
-    """(existing filtered deck id or 0, name to use)."""
-    for name in (DECK_NAME, FALLBACK_NAME):
-        did = col.decks.id_for_name(name)
-        if not did:
-            return 0, name
-        deck = col.decks.get(did)
+# the deck is titled "Restudy: <what it holds>", e.g. "Restudy: hi-yield"
+TITLE_SEP = ": "
+TITLE_MAX = 60
+
+
+def _is_restudy_name(name: str) -> bool:
+    name = re.sub(r" \(\d+\)$", "", name)
+    return (
+        name in (DECK_NAME, FALLBACK_NAME)
+        or name.startswith(DECK_NAME + TITLE_SEP)
+    ) and "::" not in name
+
+
+def _existing_restudy_deck(col: Any) -> int:
+    """Id of the filtered deck a previous restudy built, or 0. Its title
+    changes with every restudy, so it is found by the "Restudy" prefix."""
+    try:
+        entries = list(col.decks.all_names_and_ids())
+    except Exception:
+        return 0
+    for e in entries:
+        if not _is_restudy_name(e.name):
+            continue
+        deck = col.decks.get(e.id, default=False)
         if deck and deck.get("dyn"):
-            return int(did), name
-    return 0, FALLBACK_NAME
+            return int(e.id)
+    return 0
+
+
+def _label(names: List[str]) -> str:
+    """"A", "A, B", or "A, B + 3 more", kept short enough for the deck list."""
+    names = [n for n in names if n]
+    if not names:
+        return ""
+    label = ", ".join(names[:2])
+    if len(names) > 2:
+        label += f" + {len(names) - 2} more"
+    if len(label) > TITLE_MAX:
+        label = label[: TITLE_MAX - 1].rstrip() + "…"
+    return label
+
+
+def deck_title(label: str) -> str:
+    """The Restudy deck's name for `label`. "::" would make it a subdeck,
+    so a tag or deck path reads "a / b" instead."""
+    label = " ".join(label.replace("::", " / ").split())
+    return f"{DECK_NAME}{TITLE_SEP}{label}" if label else DECK_NAME
+
+
+def _free_name(col: Any, name: str, did: int) -> str:
+    """`name`, or `name (2)`, ... if another deck already has it."""
+    candidate, n = name, 2
+    while True:
+        other = col.decks.id_for_name(candidate)
+        if not other or int(other) == did:
+            return candidate
+        candidate = f"{name} ({n})"
+        n += 1
+
+
+def _leaf(deck_name: str) -> str:
+    return deck_name.split("::")[-1]
 
 
 # Anki refuses a filtered deck search term with a larger limit.
@@ -56,15 +111,17 @@ MAX_LIMIT = 99999
 LEFT_OUT = "suspended, buried, or already in another filtered deck"
 
 
-def build_deck_from_search(search: str, limit: int) -> tuple[int, int]:
+def build_deck_from_search(search: str, limit: int, label: str = "") -> tuple[int, int]:
     """Create or rebuild the Restudy filtered deck from `search`, taking at
-    most `limit` cards (capped at Anki's 99999).
+    most `limit` cards (capped at Anki's 99999). `label` says what the deck
+    holds; the deck is renamed "Restudy: <label>" every time.
 
     Returns (deck id, number of cards that made it in)."""
     from anki.decks import FilteredDeckConfig
 
     col = mw.col
-    did, name = _target_deck_id(col)
+    did = _existing_restudy_deck(col)
+    name = _free_name(col, deck_title(label), did)
     if did:
         # put the previous selection back first, so cards that are only in
         # "Restudy" because of the last restudy are free to be chosen again
@@ -90,19 +147,36 @@ def build_restudy_deck(cids: List[int]) -> tuple[int, int]:
 
     Returns (deck id, number of cards that made it in)."""
     return build_deck_from_search(
-        "cid:" + ",".join(str(int(c)) for c in cids), len(cids)
+        "cid:" + ",".join(str(int(c)) for c in cids), len(cids), cards_label(cids)
     )
 
 
-def restudy_search(search: str, total: int, nothing: str, extra: str = "") -> None:
+def cards_label(cids: List[int]) -> str:
+    """The home decks of `cids` (their leaf names), for the deck title."""
+    col = mw.col
+    names: List[str] = []
+    try:
+        for cid in cids:
+            card = col.get_card(int(cid))
+            name = col.decks.name(card.odid or card.did)
+            if name not in names:
+                names.append(name)
+    except Exception:
+        return ""
+    return _label([_leaf(n) for n in names])
+
+
+def restudy_search(
+    search: str, total: int, nothing: str, extra: str = "", label: str = ""
+) -> None:
     """Build the Restudy deck from `search` (`total` cards match it), say
     how many made it in and how many were left out, and open the reviewer.
     `nothing` is the tooltip when none of them can be studied; `extra` is
-    added to either message."""
+    added to either message; `label` titles the deck."""
     if not search or total <= 0 or getattr(mw, "col", None) is None:
         return
     try:
-        did, got = build_deck_from_search(search, total)
+        did, got = build_deck_from_search(search, total, label)
     except Exception as exc:
         _log(f"build failed: {exc!r}")
         _tooltip(f"Couldn't build the Restudy deck: {exc}")
@@ -131,6 +205,7 @@ def restudy(cids: List[int]) -> None:
         "cid:" + ",".join(str(int(c)) for c in ids),
         len(ids),
         f"None of the selected cards can be restudied ({LEFT_OUT}).",
+        label=cards_label(ids),
     )
 
 
@@ -165,6 +240,7 @@ def restudy_tags(tags: List[str]) -> None:
         total,
         f"None of the cards with {'that tag' if len(tags) == 1 else 'those tags'} "
         f"can be restudied ({LEFT_OUT}).",
+        label=_label(list(tags)),
     )
 
 
@@ -233,6 +309,7 @@ def restudy_decks(dids: List[int]) -> None:
         f"None of the cards in {'that deck' if one else 'those decks'} "
         f"can be restudied ({LEFT_OUT}).",
         skipped,
+        label=_label([_leaf(n) for n in names]),
     )
 
 

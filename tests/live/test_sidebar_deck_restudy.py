@@ -37,6 +37,16 @@ def _module(suffix):
     return None
 
 
+def _restudy_did(col):
+    """The Restudy filtered deck; its name is "Restudy: <what it holds>"."""
+    for d in col.decks.all_names_and_ids():
+        if d.name == "Restudy" or d.name.startswith("Restudy: "):
+            deck = col.decks.get(d.id)
+            if deck and deck.get("dyn"):
+                return int(d.id)
+    return 0
+
+
 def run(t):
     import aqt.utils
     from aqt.qt import QMenu, QModelIndex, Qt
@@ -139,7 +149,7 @@ def run(t):
         return next((a for a in menu.actions() if a.text().startswith("Restudy")), None) if menu else None
 
     def restudy_did():
-        return col.decks.id_for_name("Restudy")
+        return _restudy_did(col)
 
     def in_restudy():
         did = restudy_did()
@@ -174,7 +184,7 @@ def run(t):
         t.pump(300)
         did = restudy_did()
         deck = col.decks.get(did) if did else None
-        t.check("a filtered deck named Restudy exists", bool(deck and deck.get("dyn")),
+        t.check("a Restudy filtered deck exists", bool(deck and deck.get("dyn")),
                 deck and deck.get("name"))
         t.check("it holds Parent's six cards, all from its subdecks",
                 in_restudy() == parent6 and len(parent6) == 6, (in_restudy(), parent6))
@@ -221,10 +231,11 @@ def run(t):
             t.check("Browse reopens", False, "")
             return
         sb = br.sidebar
-        t.wait_until(lambda: find(sb, "Restudy") is not None, timeout=10)
-        click(sb, "Restudy")
+        rname = col.decks.name(restudy_did())
+        t.wait_until(lambda: find(sb, rname) is not None, timeout=10)
+        click(sb, rname)
         click(sb, "Solo", CMD)
-        t.check("Restudy and Solo are selected", picked(sb) == ["Restudy", "Solo"], picked(sb))
+        t.check("Restudy and Solo are selected", picked(sb) == sorted([rname, "Solo"]), picked(sb))
         menu = right_click(sb, "Solo")
         texts = captured[0] if captured else []
         t.check("Restudy 2 decks on top", bool(texts) and texts[0] == "Restudy 2 decks", texts[:3])
@@ -246,9 +257,10 @@ def run(t):
             t.check("Browse reopens", False, "")
             return
         sb = br.sidebar
-        t.wait_until(lambda: find(sb, "Restudy") is not None, timeout=10)
-        click(sb, "Restudy")
-        menu = right_click(sb, "Restudy")
+        rname = col.decks.name(restudy_did())
+        t.wait_until(lambda: find(sb, rname) is not None, timeout=10)
+        click(sb, rname)
+        menu = right_click(sb, rname)
         texts = captured[0] if captured else []
         t.check("Restudy 1 deck on the filtered deck's menu too",
                 bool(texts) and texts[0] == "Restudy 1 deck", texts[:3])

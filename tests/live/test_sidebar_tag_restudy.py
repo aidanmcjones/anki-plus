@@ -28,6 +28,16 @@ def _module(suffix):
     return None
 
 
+def _restudy_did(col):
+    """The Restudy filtered deck; its name is "Restudy: <what it holds>"."""
+    for d in col.decks.all_names_and_ids():
+        if d.name == "Restudy" or d.name.startswith("Restudy: "):
+            deck = col.decks.get(d.id)
+            if deck and deck.get("dyn"):
+                return int(d.id)
+    return 0
+
+
 def run(t):
     import aqt.utils
     from aqt.qt import QMenu, QModelIndex, Qt
@@ -148,9 +158,9 @@ def run(t):
         act.trigger()
         t.pump(300)
 
-        did = col.decks.id_for_name("Restudy")
+        did = _restudy_did(col)
         deck = col.decks.get(did) if did else None
-        t.check("a filtered deck named Restudy exists", bool(deck and deck.get("dyn")),
+        t.check("a Restudy filtered deck exists", bool(deck and deck.get("dyn")),
                 deck and deck.get("name"))
         in_deck = sorted(col.find_cards(f"did:{did}")) if did else []
         t.check("it holds every card tagged alpha, beta or beta::kid (6)",
@@ -183,7 +193,7 @@ def run(t):
         tips.clear()
         act.trigger()
         t.pump(300)
-        did2 = col.decks.id_for_name("Restudy")
+        did2 = _restudy_did(col)
         t.check("the same Restudy deck is reused", did2 == did, (did, did2))
         in_deck = sorted(col.find_cards(f"did:{did2}"))
         t.check("it holds only gamma's unsuspended card", in_deck == [solo[0]], in_deck)
