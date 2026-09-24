@@ -4796,6 +4796,17 @@ except Exception as _e:
     except Exception:
         pass
 
+# Browse context menu: "Restudy N selected cards" (filtered deck of the
+# selection, then straight into the reviewer).
+try:
+    from . import restudy as _restudy
+    _restudy.register()
+except Exception as _e:
+    try:
+        print(f"[anki-design] restudy register failed: {_e}", flush=True)
+    except Exception:
+        pass
+
 
 # Inline reviewer editing — replaces the EditCurrent dialog.
 try:
