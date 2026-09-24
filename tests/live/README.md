@@ -254,3 +254,16 @@ Rules for a good live test:
   dead for good, the bug-report capture files a ticket within 5 s with
   "webview unresponsive". On 81ed6d5 six of its checks fail: the window
   stays a dead page and the bug report waits on it.
+- `test_tag_organizer.py`: with `tag_roots` {"Parent": "Parent"}, adds a
+  note through the real Add panel with the flat tag `hi_yield`, tags
+  Parent::B's notes through Browse's own Add Tags, and tags notes through
+  Anki's tag op for the rest. Checks the collection: `Parent::hi_yield`
+  and `Parent::browse_tag` (tooltip, one "Organize Tags" undo step), a tag
+  on Parent and Solo notes stays, `marked`/`leech`/`Type::X`/
+  `AnkiHub_Subdeck::X`/`AnkiHub_*` stay, Solo gets the derived root
+  (`Solo::solo_tag`), cards in a filtered deck count for their home deck,
+  `Kaplan::Ch1` becomes `Parent::Kaplan::Ch1`, a hand rename to the top
+  level stays, `auto_organize_tags` off stops it, Tools > Organize Tags
+  Now files the rest and reports, and no field or scheduling value
+  changed. On 7c36688 eleven of its checks fail. The two sidebar tag tests
+  turn the organizer off so their flat fixture tags stay flat.

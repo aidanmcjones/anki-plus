@@ -311,6 +311,28 @@ in this file are the raw form the settings page writes.
   follow the ranked ones in name order; names that no longer sit under
   that parent are ignored, and a drop that renames tags renames them here
   too. Not meant to be hand-edited.
+- **auto_organize_tags** (default `true`): file every tag under its
+  course's tag root. A tag whose root (the part before the first `::`) is
+  not a course root is renamed to `Root::tag` when every note carrying it
+  (or one of its child tags) lives under one top-level deck, so
+  `hi_yield` on Fundamentals of Biochemistry notes becomes
+  `FunBiochem::hi_yield` and `Kaplan::Ch1` on MCAT notes becomes
+  `MCAT::Kaplan::Ch1`. Tags on notes from several courses stay where they
+  are. A card in a filtered deck (such as Restudy) counts for its home
+  deck; the Default deck and filtered decks are not courses. Runs half a
+  second after cards are added, edited, tagged in Browse or imported,
+  once when the profile opens, and on demand from **Tools > Organize Tags
+  Now** (or right-click the **Tags** heading in the Browse sidebar). Each
+  pass is one undoable step and a tooltip names what moved. A tag you
+  rename or drag by hand stays where you put it until the next full pass
+  (profile open or Organize Tags Now).
+- **tag_roots**: top-level deck name to tag root, e.g.
+  `{"Fundamentals of Biochemistry": "FunBiochem"}`. A top-level deck not
+  listed uses its name with anything that is not a letter or digit turned
+  into `_` ("Organic Chemistry" files under `Organic_Chemistry::`).
+- **tag_organize_ignore** (default `["Type", "AnkiHub_Subdeck", "marked",
+  "leech"]`): tag roots (or whole tags) that are never moved. Tags whose
+  root starts with `AnkiHub` are never moved either.
 - **browse_card_drag** — drag cards out of the Browse table. Press on a
   selected row and pull: every selected card comes along (in Notes mode,
   every card of every selected note). Press on an unselected row and pull

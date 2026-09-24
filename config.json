@@ -51,6 +51,13 @@
   "browse_sidebar_multiselect": true,
   "browse_card_drag": true,
   "tag_order": {},
+  "auto_organize_tags": true,
+  "tag_roots": {
+    "Microbiology": "Microbiology",
+    "Fundamentals of Biochemistry": "FunBiochem",
+    "MCAT": "MCAT"
+  },
+  "tag_organize_ignore": ["Type", "AnkiHub_Subdeck", "marked", "leech"],
   "clean_deck_names": true,
   "browse_render_preview": true,
   "restyle_browse_editor": true,

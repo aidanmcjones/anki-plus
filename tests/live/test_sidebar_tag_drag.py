@@ -52,6 +52,10 @@ def run(t):
 
     mw, Q = t.mw, t.QTest
     col = mw.col
+    # these flat fixture tags must stay flat: keep the tag organizer off
+    _cfg = mw.addonManager.getConfig("anki-design") or {}
+    _cfg["auto_organize_tags"] = False
+    mw.addonManager.writeConfig("anki-design", _cfg)
     embed = _module(".browse_embed")
     st = _module(".sidebar_tags")
     t.check("sidebar_tags is loaded", st is not None,
