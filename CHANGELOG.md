@@ -17,6 +17,16 @@ All notable changes to Anki Design are documented here. Format loosely follows
   came from elsewhere. The middle still nests, the Decks heading moves
   them to the top level. The order is the home deck list's own
   `deck_order`, so the sidebar and the home list always agree.
+- **Tags file themselves under their course.** A tag added by hand in
+  the editor or Browse, or arriving with an imported deck, is renamed
+  under its course's root when all of its notes belong to that course:
+  `hi_yield` on Fundamentals of Biochemistry cards becomes
+  `FunBiochem::hi_yield`. Course roots come from `tag_roots` (top-level
+  deck to root); any other top-level deck gets a root from its own name,
+  so future classes are covered too. Tags shared by several courses, and
+  `marked`, `leech`, `Type::`, `AnkiHub_Subdeck::` and other AnkiHub
+  tags, stay put. **Tools > Organize Tags Now** files every tag at once;
+  `auto_organize_tags` turns it off.
 - **Tags in the Browse sidebar work like cards.** Right-click a tag, or
   one of several selected tags, and **Restudy N tags** at the top of the
   menu studies every card that carries any of them (child tags included)

@@ -4832,6 +4832,18 @@ except Exception as _e:
         pass
 
 
+# Tag auto-organizer: file every tag under its course's root
+# (`tag_roots`), after adds, edits and imports, plus Tools > Organize Tags Now.
+try:
+    from . import tag_organizer as _tag_organizer
+    _tag_organizer.register()
+except Exception as _e:
+    try:
+        print(f"[anki-design] tag_organizer register failed: {_e}", flush=True)
+    except Exception:
+        pass
+
+
 # Inline reviewer editing — replaces the EditCurrent dialog.
 try:
     from . import editreviewer as _editreviewer
