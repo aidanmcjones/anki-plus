@@ -204,6 +204,28 @@ Rules for a good live test:
   becomes drag events and the release is eaten, as Qt's drag loop does),
   which is what makes the bug visible: on dfaefaa the sweep started a
   drag and selected nothing.
+- `test_sidebar_tag_restudy.py`: tags the fixture notes (alpha, beta,
+  beta::kid, gamma), selects alpha and beta in the real Browse sidebar with
+  the real mouse (click, Cmd-click) and right-clicks through
+  `onContextMenu`. Checks "Restudy 2 tags" is the first item with a
+  separator under it, the Restudy filtered deck holds every card with
+  either tag including the child tag, the reviewer shows one of them and
+  the tooltip counts them; then one tag with a suspended card says "1 left
+  out". On 9b5aa17 the menu has no Restudy item.
+- `test_sidebar_tag_drag.py`: with seven tags in the real sidebar, sweeps
+  down from an unselected tag with the real mouse (the run is selected,
+  no drag starts), drags the selected group onto the top edge of a tag,
+  one tag onto a bottom edge, a Cmd-click pair onto the line above a
+  child of another parent (reparented, full names change) and one tag
+  into the middle of another (nests). Between move and drop it reads the
+  add-on's marker over the viewport and the viewport's pixels: a 2px
+  accent line on the hovered edge, a box for the middle. After each drop
+  it reads the refreshed sidebar and `tag_order`. Deck rows: a pull from a
+  deck still starts the tree's own drag, and a deck drop passes the
+  add-on's filters to Anki's `dropEvent` and reparents (delivered straight
+  to the tree, since a synthetic drag has no QDrag source and an
+  InternalMove view refuses it otherwise). On 9b5aa17 the sweep drags
+  `delta` into `gamma` and 11 of its checks fail before it stops.
 - `test_sidebar_resize.py`: hover the left rail's right border with the
   real mouse (a resize handle with a col-resize cursor must be there), then
   drag it 80px right. Checks what the user sees: the rail widens with every

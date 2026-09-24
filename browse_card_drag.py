@@ -157,15 +157,16 @@ def _drag_distance() -> int:
         return 10
 
 
-def _drag_pixmap(count: int) -> Any:
-    """A small badge that travels under the cursor: "3 cards"."""
+def _drag_pixmap(count: int, text: Optional[str] = None) -> Any:
+    """A small badge that travels under the cursor: "3 cards" (or `text`)."""
     try:
         from aqt.qt import QColor, QFont, QPainter, QPixmap
 
         from . import addcard as _addcard
 
         palette, _dark = _addcard._resolve_palette()
-        text = "1 card" if count == 1 else f"{count} cards"
+        if text is None:
+            text = "1 card" if count == 1 else f"{count} cards"
         font = QFont()
         font.setPointSizeF(10.5)
         font.setWeight(QFont.Weight.Medium)
@@ -725,6 +726,11 @@ class _DropTarget(QObject):
         self.drops: List[tuple] = []
 
     # -- what's under the cursor -------------------------------------------
+    def decode(self, mime: Any) -> List[Any]:
+        """The dragged payload, or [] when the drag is not ours. Cards here;
+        the sidebar's tag drop (sidebar_tags.py) carries tag names."""
+        return decode_cards(mime)
+
     def resolve(self, pos: QPoint) -> Any:
         raise NotImplementedError
 
@@ -810,13 +816,13 @@ class _DropTarget(QObject):
         try:
             etype = ev.type()
             if etype == QEvent.Type.DragEnter:
-                if not decode_cards(ev.mimeData()):
+                if not self.decode(ev.mimeData()):
                     return False
                 ev.acceptProposedAction()
                 self._on_move(obj, ev)
                 return True
             if etype == QEvent.Type.DragMove:
-                if not decode_cards(ev.mimeData()):
+                if not self.decode(ev.mimeData()):
                     return False
                 self._on_move(obj, ev)
                 return True
@@ -826,7 +832,7 @@ class _DropTarget(QObject):
                 self._leave()
                 return False
             if etype == QEvent.Type.Drop:
-                ids = decode_cards(ev.mimeData())
+                ids = self.decode(ev.mimeData())
                 if not ids:
                     return False
                 return self._on_drop(obj, ev, ids)

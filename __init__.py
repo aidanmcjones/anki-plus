@@ -4807,6 +4807,18 @@ except Exception as _e:
     except Exception:
         pass
 
+# Browse sidebar tags: sweep-select a run of tags, drag a selection onto
+# the line above/below a tag to sort it (custom order in `tag_order`), or
+# into a tag to nest. Deck rows keep sidebar_select.py's behaviour.
+try:
+    from . import sidebar_tags as _sidebar_tags
+    _sidebar_tags.register()
+except Exception as _e:
+    try:
+        print(f"[anki-design] sidebar_tags register failed: {_e}", flush=True)
+    except Exception:
+        pass
+
 
 # Inline reviewer editing — replaces the EditCurrent dialog.
 try:

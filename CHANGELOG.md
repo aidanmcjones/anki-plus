@@ -5,6 +5,20 @@ All notable changes to Anki Design are documented here. Format loosely follows
 
 ## [Unreleased]
 ### Added
+- **Tags in the Browse sidebar work like cards.** Right-click a tag, or
+  one of several selected tags, and **Restudy N tags** at the top of the
+  menu studies every card that carries any of them (child tags included)
+  in the Restudy filtered deck, the same as **Restudy N selected cards**
+  in the card table; the tooltip counts the cards and any left out.
+  Press on an unselected tag and sweep up or down to select a run of
+  tags; press on a selected tag to drag the whole selection. Hovering the
+  top or bottom edge of a tag shows an accent line where they will land:
+  dropped there they sit just above or below it, under that tag's parent
+  (renamed into it if they came from elsewhere), in the order they were
+  shown. The middle of a tag still nests them inside it. Anki sorts tags
+  by name, so the order is the add-on's own (`tag_order` in the config,
+  per parent tag); tags you never moved keep their name order after the
+  ones you did.
 - **Drag a deck to resort the list.** Anki only ever sorts decks by name,
   so "put this one at the top" meant renaming it. Now a deck dropped on
   the top or bottom edge of a sibling lands just above or below it: the

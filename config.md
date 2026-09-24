@@ -292,6 +292,25 @@ in this file are the raw form the settings page writes.
   **New subsection…** arrives with those decks already ticked, filed
   under the deepest deck they share. `false` restores Anki's tool row and
   its single-selection default.
+  Tags follow the Browse table's card rules: press on an unselected tag
+  and sweep up or down to select the tags you cross, press on a selected
+  tag and pull to drag the whole selection, pull an unselected tag
+  sideways to drag just that one. Hover the top or bottom quarter of a tag
+  and an accent line shows where the dragged tags will land: dropped
+  there they sit just above or below it, under the same parent, in the
+  order they were shown (moving to another parent renames them, so
+  `beta` dropped among `alpha`'s children becomes `alpha::beta`). The
+  middle of a tag is boxed instead and nests them inside it, and the
+  **Tags** heading moves them to the top level. Right-clicking a tag
+  offers **Restudy N tags**: a filtered deck named Restudy with every card
+  that carries any selected tag, child tags included.
+- **tag_order**: the sort order those tag line drops produce, keyed by
+  the parent tag's full name (`""` for the top level) with the children's
+  full names in order, e.g. `{"": ["gamma", "alpha"], "alpha": ["alpha::z",
+  "alpha::a"]}`. Anki itself only sorts tags by name. Tags not in a list
+  follow the ranked ones in name order; names that no longer sit under
+  that parent are ignored, and a drop that renames tags renames them here
+  too. Not meant to be hand-edited.
 - **browse_card_drag** — drag cards out of the Browse table. Press on a
   selected row and pull: every selected card comes along (in Notes mode,
   every card of every selected note). Press on an unselected row and pull
