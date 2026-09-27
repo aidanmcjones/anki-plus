@@ -462,6 +462,25 @@ def _teardown_preview() -> None:
             _close_add_panel()
         except Exception:
             pass
+    # The PreviewPane owns its own AnkiWebView (a second, independent
+    # QWebEngineView, not `mw.web`). Its parent-chain eventually gets
+    # destroyed when `close_inline()` calls `overlay.deleteLater()`, but
+    # that's deferred to the next event-loop tick — and until then the
+    # preview's webview is still a fully live, painted widget. When the
+    # right pane is in Card (preview) mode, this is what the user actually
+    # sees sitting on top of the deck browser after switching states: not
+    # `mw.web` being slow to repaint (that's the separate, bounded paint-lag
+    # nudge below), but this second webview never having been told to stop.
+    # `PreviewPane.cleanup()` (mirrors `Previewer._on_close`) tears it down
+    # synchronously — same fix as the crash class upstream fixed in
+    # FindDuplicates, just for "stays visible" instead of "crashes on
+    # theme change". Must run before the deferred `overlay.deleteLater()`.
+    pane = _state.pop("preview", None)
+    if pane is not None:
+        try:
+            pane.cleanup()
+        except Exception:
+            pass
     hook = _state.pop("preview_hook", None)
     if hook is not None:
         try:
@@ -602,6 +621,21 @@ class _EmbedFilter(QObject):
 
 
 _state: dict = {"browser": None, "overlay": None, "filter": None}
+
+# One-shot callbacks run once the inline Browse has closed (see
+# `after_close`), e.g. a deck list re-render that was held back while
+# Browse covered it.
+_after_close: list = []
+
+
+def after_close(fn: Any) -> None:
+    """Run `fn()` once, after the inline Browse closes; now if it is not
+    open."""
+    if _state.get("browser") is None and _state.get("overlay") is None:
+        fn()
+        return
+    if fn not in _after_close:
+        _after_close.append(fn)
 
 
 def _on_op_executed_embedded(changes: Any, handler: object | None) -> None:
@@ -896,6 +930,43 @@ def _open_add_in_browse(parent_mw: Any) -> None:
             pass
 
 
+def navigate_card(direction: str) -> dict:
+    """Move the Cards-view table's current row and load the note under it
+    into the editor — the arrow-key/‹›-button path for the full-screen
+    editor (web/editor-tools.js's hotbar nav buttons + keydown listener).
+
+    Deliberately NOT reimplemented: `Table.to_previous_row()`/
+    `to_next_row()` (stock aqt) move the same QItemSelectionModel a
+    manual row click moves, which fires the same selection-changed
+    signal Browser wires its own note-switch handling to — including
+    whatever it does with unsaved edits on the card being left. Using
+    them here means "arrow through cards" has *exactly* the save
+    semantics clicking another row already has, not a second
+    implementation of them that could drift out of sync.
+    """
+    br = _state.get("browser")
+    table = getattr(br, "table", None) if br is not None else None
+    if table is None:
+        return {"error": "Browse is not open."}
+    if direction == "prev":
+        if not table.has_previous():
+            return {"atEnd": True, "edge": "start", "hasPrevious": False, "hasNext": table.has_next()}
+        table.to_previous_row()
+    elif direction == "next":
+        if not table.has_next():
+            return {"atEnd": True, "edge": "end", "hasPrevious": table.has_previous(), "hasNext": False}
+        table.to_next_row()
+    else:
+        return {"error": "Unknown direction."}
+    card = table.get_current_card()
+    return {
+        "atEnd": False,
+        "cardId": card.id if card else None,
+        "hasPrevious": table.has_previous(),
+        "hasNext": table.has_next(),
+    }
+
+
 def drop_curtain() -> None:
     """Tear down the anti-flash curtain. Safe to call multiple times."""
     c = _state.pop("curtain", None)
@@ -992,6 +1063,13 @@ def close_inline() -> None:
             w.eval("window.__baSetActive && window.__baSetActive('decks');")
     except Exception:
         pass
+    pending = list(_after_close)
+    del _after_close[:]
+    for fn in pending:
+        try:
+            fn()
+        except Exception:
+            pass
 
 
 def _set_tree_collapsed(collapsed: bool, *, persist: bool = True) -> None:

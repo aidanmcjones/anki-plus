@@ -36,6 +36,8 @@ No network calls, no bundled binaries — keeps AnkiWeb review trivial.
 | `browse_preview.py` / `web/browse-preview.*` | the rendered-card pane in the Browse tab |
 | `web/addcard.css` / `.js` | shared note-editor restyle (Add + Browse) |
 | `web/browse-editor.css` | Browse-pane deltas on top of `addcard.css` |
+| `web/editor-tools.*` / `editor_tools.py` | Shared image crop/resize and text formatting for Add, Browse, Edit Current and inline review |
+| `card_styling.py` | simple styling panel ("Card styling..." in the consolidated editor menu) — edits note type CSS only, never front/back template HTML |
 | `config.json` / `config.md` | user-facing settings + their help text (every feature has a switch) |
 | `colors.py` | hex helpers shared by the web injection and the Qt palettes |
 | `manifest.json` | name, version, `conflicts` with rival add-ons |

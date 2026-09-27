@@ -4,7 +4,136 @@ All notable changes to Anki Design are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is semver-ish.
 
 ## [Unreleased]
+### Added
+- **Decks in the Browse sidebar work like tags.** Right-click a deck, or
+  one of several selected decks, and **Restudy N decks** at the top of the
+  menu studies every card in them (subdecks included) in the Restudy
+  filtered deck; filtered decks are left out and the tooltip says why.
+  Press on an unselected deck and sweep up or down to select a run of
+  decks (a sweep no longer starts a drag); press on a selected deck to
+  drag the whole selection. The top or bottom edge of a deck shows the
+  accent line: dropped there the decks become its siblings, just above or
+  below it, in the order they were shown, moved under its parent if they
+  came from elsewhere. The middle still nests, the Decks heading moves
+  them to the top level. The order is the home deck list's own
+  `deck_order`, so the sidebar and the home list always agree.
+- **Tags file themselves under their course.** A tag added by hand in
+  the editor or Browse, or arriving with an imported deck, is renamed
+  under its course's root when all of its notes belong to that course:
+  `hi_yield` on Fundamentals of Biochemistry cards becomes
+  `FunBiochem::hi_yield`. Course roots come from `tag_roots` (top-level
+  deck to root); any other top-level deck gets a root from its own name,
+  so future classes are covered too. Tags shared by several courses, and
+  `marked`, `leech`, `Type::`, `AnkiHub_Subdeck::` and other AnkiHub
+  tags, stay put. **Tools > Organize Tags Now** files every tag at once;
+  `auto_organize_tags` turns it off.
+- **Tags in the Browse sidebar work like cards.** Right-click a tag, or
+  one of several selected tags, and **Restudy N tags** at the top of the
+  menu studies every card that carries any of them (child tags included)
+  in the Restudy filtered deck, the same as **Restudy N selected cards**
+  in the card table; the tooltip counts the cards and any left out.
+  Press on an unselected tag and sweep up or down to select a run of
+  tags; press on a selected tag to drag the whole selection. Hovering the
+  top or bottom edge of a tag shows an accent line where they will land:
+  dropped there they sit just above or below it, under that tag's parent
+  (renamed into it if they came from elsewhere), in the order they were
+  shown. The middle of a tag still nests them inside it. Anki sorts tags
+  by name, so the order is the add-on's own (`tag_order` in the config,
+  per parent tag); tags you never moved keep their name order after the
+  ones you did.
+- **Drag a deck to resort the list.** Anki only ever sorts decks by name,
+  so "put this one at the top" meant renaming it. Now a deck dropped on
+  the top or bottom edge of a sibling lands just above or below it: the
+  top edge of the first sibling puts it first, the bottom edge of the
+  last puts it last, and an accent line shows where it will go. The
+  middle of a row still nests, as it did. The order is the add-on's own
+  (`deck_order` in the config, per parent); decks you never moved keep
+  their name order after the ones you did, and the congrats "Keep going"
+  list follows the same order.
+
+### Fixed
+- **The window comes back when its web page crashes.** After about 2.5
+  hours of reviewing, the page process behind the main window died of an
+  out-of-memory and the whole window stayed grey until Anki+ was quit
+  (Anki never reloads a crashed page, and after a crash Qt drops the JS
+  bridge the page needs to talk to Anki). Now a crash re-shows the screen
+  you were on, the reviewer on the same unanswered card, with the bridge
+  restored; a page that keeps crashing falls back to the deck list once
+  and then stops retrying.
+- **Report a bug never hangs.** Cmd+Shift+B used to wait forever on a
+  crashed or frozen page. It takes the window screenshot first, gives the
+  page 3 seconds, and files the ticket with what it got plus the note
+  "webview unresponsive".
+- **Card font scaling does its work once per card.** The reviewer's
+  font-size rewrite skips sizes it already scaled, marks each card
+  stylesheet it has done, ignores page changes that bring no stylesheet,
+  installs only once, and caps the rules one card may cost. (Measured over
+  300 cards: it was not growing the page before either; see the ticket.)
+- **Full screen title bar reveals like Safari's.** In macOS full screen the
+  "Anki+" bar used to slide over the sidebar wordmark; the first fix made
+  it flicker, the second reserved a dark strip across the top of the
+  scene. Now, while full screen, the window carries an empty auto-hiding
+  toolbar, so AppKit itself slides the content down with the bar and back
+  up again, in the bar's own animation. No strip, no timer, no cursor
+  polling (`fullscreen_inset.py`).
+- **Deck drag-to-reorder now works in the app.** Two things stopped it
+  that the synthetic-event tests could not see: Chromium (so QtWebEngine)
+  cancels a drag whose `dragstart` inserts the "top level" drop zone, so
+  every nested deck's drag ended the instant it began; and Anki's
+  webview drops every `drop` event on the deck browser (`allow_drops` is
+  reset by each render), so even a top-level drag never reached the page.
+  The zone now appears a tick later, and `webview_drops.py` lets drags
+  that start inside the page through (files from Finder stay blocked).
+- **Dragging cards in Browse visibly moves them.** Cards dropped on a
+  sidebar deck now leave the list you are browsing (the table re-runs its
+  search), a press-and-pull on an unselected row drags that card, and a
+  drop on a review card's row says that only new cards have a queue
+  position instead of showing a silent "no entry" cursor.
+- **Dragging cards between rows in Browse shows a line, and moves the
+  whole selection there.** The drop target was a box drawn around the
+  hovered row, which read as "onto this card", and the drop always put
+  the cards before it. Now an accent line sits on the row's top edge
+  while the cursor is in its upper half and on its bottom edge in the
+  lower half, and on release every selected new card lands at that line
+  in its queue order: before or after the row, including a hovered row
+  that is itself part of the selection (it used to be left out, so the
+  others landed in front of it and the group came out reordered). The
+  confirmation counts every card moved. A drop on the group's own rows
+  changes nothing and says nothing.
+- **Dropping cards between two rows that share a position now lands
+  between them.** In a deck where most cards sit at one position (a
+  whole import at New #25, say), the drop numbered the dragged cards at
+  the hovered row's position or the next one, and neither is between two
+  cards that share it: they took the front of the tied run, which is the
+  rows they already had, or fell in behind all of it. Now the run of
+  cards at that position is numbered out in the order shown, with the
+  dragged cards put in at the line, so every card ends up with a
+  position of its own and the rows show the order you asked for. Still
+  one undo step, and the message still counts the cards you dragged.
+- **Sweep-selecting cards in Browse works again.** Pressing on a card and
+  pulling down (or up) the list is how the table selects a run of rows,
+  and the card drag had taken that gesture for itself: it started a drag
+  of the one pressed card, so nothing was selected. A sweep along the
+  list from an unselected row now goes to the table, which selects the
+  rows it crosses; the group is then dragged by pressing on any of its
+  rows. A sideways pull on an unselected row still drags that one card.
+
 ### Changed
+- **A deadline that has passed now pauses its deck by default.** Setting
+  "Memorize by…" and then being handed 385 reviews in those decks the
+  evening the date passed is the feature contradicting itself — a deadline
+  that keeps presenting cards afterwards is a label, not a deadline. The
+  post-deadline default moves from *Maintain long-term* to *Pause
+  reviews*, as the new `deadline_passed_mode` config key (`"pause"` |
+  `"maintain"`); set it to `"maintain"` for the old behaviour. A deck you
+  answered for yourself in the dialog keeps its own answer — the key only
+  fills in the blank, and it fills it in live, so every deck that never
+  chose follows it without any state being rewritten. The dialog now
+  pre-selects it too. Pausing is what it always was: that deck's own
+  per-day limits set to 0, reversible, nothing suspended. Deadlines that
+  had already passed under the old default are moved across once, on the
+  first launch after this change, so decks that went quiet before it
+  shipped are covered too.
 - **The Browse sidebar picks several decks without a mode.** Anki put
   multi-select behind a two-button tool row above the tree — Search, or
   Select — which is a mode you have to know exists, switch into and
@@ -22,8 +151,30 @@ All notable changes to Anki Design are documented here. Format loosely follows
   share. Deck ids and card counts are untouched by any of it — these are
   Anki's own reparent operations. `browse_sidebar_multiselect: false`
   restores the tool row.
+- **Decks go by their title.** Clicking a deck in the Browse sidebar
+  filled the search box with `"deck:Fundamentals of Biochemistry::Amino
+  Acids"`, quotes and all, and the Deck column repeated that full path on
+  every row: a deck's name is its title, "Amino Acids", the way the
+  sidebar and the deck list already show it. Now the box reads the title
+  and the column shows it, with the path as the tooltip. The real query
+  is untouched underneath: it is what runs, what Enter re-runs, what
+  ⌘-click and ⇧-click combine with, and what **Create Filtered Deck** and
+  **Save Current Search** are handed; type anything in the box and what
+  you typed is the search again. The reviewer header, the Stats title and
+  the Add screen's deck picker use the title too. `clean_deck_names:
+  false` puts the paths back.
 
 ### Fixed
+- **A deck stranded on a "— deadline" preset parked at 0/day shows its
+  cards again.** An older build paused a deck by zeroing its *preset's*
+  per-day limits; the resume path for that only fires for a deck that
+  still has deadline bookkeeping to resume from, so a deck whose deadline
+  was cleared while it was paused that way sat on a clone preset offering
+  0 new and 0 reviews a day, permanently, with nothing left in the
+  codebase that would ever look at it again. A one-time pass restores any
+  such clone's per-day limits from the preset it was cloned from (or the
+  remembered originals, when there are any) and leaves anything it has no
+  evidence for alone.
 - **Images can be added to a field again, and resized there.** Two separate
   faults made the embedded editors — the Browse pane's pencil mode and the
   Add tab — unable to take a picture. In the Browse pane the attach button

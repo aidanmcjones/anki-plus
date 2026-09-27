@@ -624,6 +624,10 @@ html:not([data-rf-cardstyle="native"]) #qa {
   line-height: 1.5;
   letter-spacing: -0.005em;
 }
+/* card-scale.js multiplies the note type's own px/pt/rem font sizes by
+   --rf-deck-scale so they grow with the reviewer size above. Native mode
+   keeps the note type's sizes exactly. */
+html[data-rf-cardstyle="native"] { --rf-deck-scale: 1 !important; }
 
 /* ---------- Nothing may exceed the content area ----------
  * The container is now as wide as the window, and these rules are what
@@ -955,3 +959,12 @@ body.ba-editing .ba-rv-field ins {
    still useful context (deck name, position) but shouldn't compete. */
 body.ba-editing .ba-rv-head { opacity: 0.55; }
 body.ba-editing .ba-rv-head .ba-rv-icon-btn { pointer-events: none; }
+
+/* Images inside an editable field get a pointer cursor as a selectability
+   hint, and native browser image-drag is switched off so it can't fight
+   our own handle-drag gesture. */
+body.ba-editing .ba-rv-field img {
+  cursor: pointer;
+  -webkit-user-drag: none;
+  user-select: none;
+}

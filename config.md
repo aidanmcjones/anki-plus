@@ -12,6 +12,77 @@ in this file are the raw form the settings page writes.
   theme. `""` keeps the default paper (light) / ink (dark); a hex such as
   `"#ffffff"` replaces it.
 - **density** — `"compact"`, `"cozy"`, or `"comfortable"`.
+- **backdrop** — what sits behind the deck list and the deck overview.
+  `"scene"` (default) draws a layered landscape: sky, stars, moon, drifting
+  cloud bank and three mountain ranges, each on its own slow drift. Its
+  palette follows the clock, shifting between dawn, day, dusk and night.
+  `"aurora"` keeps just the older abstract wash of drifting colour.
+  `"video"` plays a looping nature clip from your `user_files/nature/`
+  library instead (see **video_selection** below); with no library present
+  it quietly falls back to the aurora wash rather than a blank page.
+  `"black"` is a flat `#000` background and nothing else — no glow, no
+  motion. `"off"` leaves the flat page glow and nothing else. The reviewer
+  is never given a backdrop in any mode, deliberately: motion behind a card
+  you are trying to recall is a distraction. Nothing is downloaded or
+  bundled for the scene backdrop — it's gradients and clip paths in
+  `web/scene.css`; the video backdrop plays whatever video files you (or
+  a curation tool) put in `user_files/nature/` — whatever format the
+  embedded webview can decode, WebM/VP9 on current Anki builds — and
+  ships none itself.
+- **backdrop_intensity** — `"cinematic"` (default) or `"subtle"`, which
+  halves the backdrop's strength without changing what it draws. Ignored
+  when **backdrop** is `"off"`. Light themes are damped again on top of
+  this, since the scene has to sit under dark text rather than glow out of
+  a near-black page.
+- **scene**: which landscape the **backdrop** draws when it is `"scene"`.
+  `"shuffle"` (default) rotates through all ten, starting on a scene picked
+  from the date so the page you open first is not the same one every
+  morning, then cycling while the screen stays open. Naming one instead
+  (`"peaks"`, `"dunes"`, `"forest"`, `"canyon"`, `"lake"`, `"volcano"`,
+  `"isles"`, `"tundra"`, `"spires"`, `"ruins"`) pins it and stops the
+  cycling entirely. Anything else falls back to `"shuffle"`. The hour still
+  sets the palette on top of whichever scene is up, so each of these looks
+  different at dawn, day, dusk and night.
+- **scene_shuffle_seconds**: how long each scene holds before the next one,
+  `10` by default. Clamped to 2..3600, so a hand-edited `0` cannot spin.
+  Ignored when **scene** pins a single scene, when **backdrop** is not
+  `"scene"`, and when the system asks for reduced motion, in which case the
+  first scene simply stays up.
+- **video_selection**: which clip(s) the **backdrop** plays when it is
+  `"video"`. `"shuffle"` (default) rotates through the whole
+  `user_files/nature/` library. `"biome:<name>"` (e.g. `"biome:ocean"`)
+  restricts the rotation to one biome. A bare value naming one of the
+  `"file"` entries in `user_files/nature/index.json` (e.g.
+  `"ocean/humpback-whale.webm"`) pins that single clip, which then just
+  loops on its own — **video_rotate_seconds** has nothing to rotate to.
+  An object of the form `{"mode": "custom", "files": ["ocean/x.webm",
+  "arctic/y.webm"]}` — what Settings' checkbox list writes — rotates
+  among exactly those clips, in library order, regardless of the order
+  they're listed here. A biome no longer curated, a file that's been
+  deleted, or a custom list whose files are all gone, falls back to
+  `"shuffle"` rather than rendering nothing; a custom list with some
+  files missing just drops those and keeps the rest.
+- **video_rotate_seconds**: how long each clip plays before crossfading to
+  the next, `300` (5 minutes) by default. Any positive integer of seconds
+  is accepted — Settings' duration field lets you type a value in
+  seconds, minutes or hours and stores the total in seconds — but it's
+  clamped to 5..86400 (a day) on use; `0` is the one exception — it means
+  "never rotate," and plays the first clip's own loop indefinitely. A
+  typed value below 5 is not rejected, just rounded up to 5 when the
+  backdrop reads it, so a `2` in this file behaves like a `5`. Ignored
+  when **video_selection** pins a single file, when **backdrop** is not
+  `"video"`, or when only one clip matches the current selection
+  (nothing to rotate to either way).
+- **backdrop_motion**: which "reduce motion" settings the backdrop obeys.
+  `"always"` (the default) obeys your operating system's reduced-motion
+  setting only, which is what every other animation in this add-on does.
+  `"auto"` additionally obeys Anki's own Preferences > Reduce motion, which
+  stops both the animation and the scene cycling and leaves one still
+  landscape up. It is opt-in rather than the default because Anki turns that
+  preference on unless you have explicitly turned it off, so obeying it by
+  default would switch the backdrop off for nearly everybody. Your operating
+  system's setting is obeyed either way and is not configurable here: that
+  one you chose, where Anki's you probably inherited.
 - **font_serif** / **font_sans** — optional display fonts prepended to the
   built-in stacks (e.g. `"Iowan Old Style"`). `""` uses the defaults.
 
@@ -22,6 +93,9 @@ in this file are the raw form the settings page writes.
   by the chevron next to the anki+ wordmark (collapsed = icons-only, 64px
   wide; expanded = 264px), not meant to be hand-edited — this just
   remembers what you last left it as, including across restarts.
+- **sidebar_width**: the expanded rail's width in px (200 to 480, default
+  264). Set by dragging the rail's right edge (double-click the edge to go
+  back to 264); like `sidebar_collapsed`, it just remembers what you did.
 - **show_today** — the today panel (cards · minutes + per-hour bars).
 - **show_streak** — the streak counter above the heatmap.
 - **show_heatmap**, **heatmap_weeks**, **heatmap_palette** — the review
@@ -37,7 +111,21 @@ in this file are the raw form the settings page writes.
   state (Anki's synced flag), `"expanded"` opens everything on launch,
   `"collapsed"` closes every parent on launch.
 - **deck_drag_move** — drag a deck onto another to nest it (or onto the
-  top-level zone). "Move to…" in the deck menu is always available.
+  top-level zone). "Move to…" in the deck menu is always available. Drop
+  a deck on the top or bottom **edge** of a sibling instead to resort the
+  group: it lands just above or below that deck, so the top edge of the
+  first sibling puts it first and the bottom edge of the last puts it
+  last. An accent line shows where it will land; the middle of a row still
+  nests.
+- **deck_order** — the sort order those edge drops produce, keyed by
+  parent deck id (`"0"` for the top level) with the child ids in order.
+  Anki itself only sorts decks by name, so this lives here rather than in
+  the collection. Decks not in a list (new ones, or ones moved in from
+  another parent) follow the ranked ones in name order; ids that no longer
+  sit under that parent are ignored. The Browse sidebar's Decks section
+  shows and writes the same order (see **browse_sidebar_multiselect**),
+  so a deck moved there moves on the home list too. Not meant to be
+  hand-edited.
 - **deck_subsections** — **New subsection…** on a deck's menu, both on the
   deck list (the gear) and in the Browse sidebar (right-click). Name a
   heading — "Exam 1 Content" — and tick the sub-decks that belong under
@@ -64,6 +152,11 @@ in this file are the raw form the settings page writes.
   answer) or `"native"` (Anki's Again / Hard / Good / Easy bar).
 - **show_progress** — progress strip across the top of the reviewer.
 - **click_to_reveal** — clicking the card shows the answer.
+- **arrow_key_grading**: grade with the arrow keys. Up = Easy, Right =
+  Good, Left = Hard, Down = Again. On the question side any arrow shows the
+  answer (like Space) without grading. Ignored while you type in a field or
+  the quick editor, or while the command palette is open. `false` gives the
+  arrows back to scrolling.
 - **press_feedback** — the bloom animation when grading.
 - **reviewer_hide_answer** — a quiet "Hide Answer" button in the bottom-right
   corner while the answer is showing (also `H`). Returns to the question
@@ -121,19 +214,47 @@ in this file are the raw form the settings page writes.
   learned on time — the gear row then reads "Memorized by Sep 8 —
   passed ✓". The interval cap comes off, and the dialog asks what the deck
   should do from there; the choice is remembered per deck:
-  - **Maintain long-term** (default) — reviews carry on as normal. Cards
+  - **Maintain long-term** — reviews carry on as normal. Cards
     coming due after the deadline are memory upkeep, not a missed target;
     that is how spaced repetition holds something you already know.
-  - **Pause reviews** — the deck stops presenting anything, by setting
+  - **Pause reviews** (default, see `deadline_passed_mode`) — the deck
+    stops presenting anything, by setting
     *that deck's own* per-day review and new limits to 0 (not its
     preset's, which other decks share). Reversible, and no card is
     suspended or otherwise altered: switch back to Maintain, or clear the
     deadline, to resume — and whatever limits the deck had before the
     pause, including one you raised to hit the deadline, come back with
     it.
+- **deadline_passed_mode** — what a deck does once its deadline is behind
+  it, for every deck that hasn't been asked. `"pause"` (the default) stops
+  the deck presenting anything; `"maintain"` keeps reviews coming. A deck
+  you *have* answered for in the dialog keeps its own answer either way —
+  this key only fills in the blank, and it fills it in live, so changing
+  it moves every un-answered deck at once without rewriting anything. It
+  is also what the dialog pre-selects when a deck has made no choice yet.
+
+  **This diverges from how the feature originally shipped**, where the
+  default was `"maintain"` and the dialog wrote that into every deck as
+  though it had been chosen. The reasoning for the change: a deadline that
+  keeps presenting cards after the date is not a deadline, it is a label.
+  Auto-pause is the point of setting one — six decks due "by today" still
+  offering 385 reviews the evening the date passed is the failure that
+  prompted it. Set this to `"maintain"` to get the old behavior back for
+  every deck that hasn't chosen otherwise.
+
+  Deadlines that had *already* passed under the old default are moved onto
+  the new one once, on the first launch after this change, so the fix
+  reaches decks that went quiet before it shipped. That one-time pass only
+  touches entries that never recorded a choice of their own; anything you
+  pick afterwards is yours and is never revisited.
 
 ## Windows
 - **cmdk** — the ⌘K / Ctrl+K command palette.
+- **bug_report_shortcut** — Qt key sequence for "Report a bug" (default
+  `"Ctrl+Shift+B"`, which Qt maps to ⌘⇧B on macOS). Always also reachable
+  from the command palette ("Report a bug") on every screen. Saves a
+  ticket — a one-line note, an optional "what did you expect", and a
+  screenshot by default — under `~/AnkiTickets/<id>/`.
 - **embed_add**, **embed_browse**, **embed_stats**, **embed_settings** — open
   those inside the main window (needs `sidebar_nav`); `false` uses Anki's
   separate windows.
@@ -141,6 +262,15 @@ in this file are the raw form the settings page writes.
   stock Add window.
 - **congrats_redesign** — the redesigned finished-deck page.
 - **silent_sync** — sync progress in the sidebar instead of a dialog.
+- **fullscreen_bar_inset**: in macOS full screen, the hidden "Anki+" title
+  bar reveals the way Safari's does: when the cursor touches the top of the
+  screen the bar slides down and the app slides down with it, in the same
+  animation, and both slide back when the cursor leaves. AppKit drives it:
+  while the window is full screen it carries an empty toolbar that hides
+  with the menu bar, which is what makes macOS move the content with the
+  bar. Nothing is reserved or painted, and the windowed title bar is
+  unchanged. `false` leaves stock behaviour, where the bar slides over the
+  top of the page.
 
 ## Browse
 - **browse_restyle** — paint the Browser's Qt chrome (card table, column
@@ -158,13 +288,91 @@ in this file are the raw form the settings page writes.
   is always in the Select tool's mode. A plain click still searches the
   deck you clicked. ⌘-click (Ctrl-click) adds a deck to the selection and
   ⇧-click extends a run, without searching. Dragging any selected deck
-  onto another moves the whole selection in one undoable step, and
+  onto the middle of another moves the whole selection in one undoable
+  step, and
   dragging from the empty space under the last deck lassos a rubber-band
   across rows. Right-click acts on everything selected: **Move to…**
   lists every deck the selection could go into (plus *Top level*), and
   **New subsection…** arrives with those decks already ticked, filed
   under the deepest deck they share. `false` restores Anki's tool row and
   its single-selection default.
+  Tags follow the Browse table's card rules: press on an unselected tag
+  and sweep up or down to select the tags you cross, press on a selected
+  tag and pull to drag the whole selection, pull an unselected tag
+  sideways to drag just that one. Hover the top or bottom quarter of a tag
+  and an accent line shows where the dragged tags will land: dropped
+  there they sit just above or below it, under the same parent, in the
+  order they were shown (moving to another parent renames them, so
+  `beta` dropped among `alpha`'s children becomes `alpha::beta`). The
+  middle of a tag is boxed instead and nests them inside it, and the
+  **Tags** heading moves them to the top level. Right-clicking a tag
+  offers **Restudy N tags**: a filtered deck named Restudy with every card
+  that carries any selected tag, child tags included.
+  Decks follow the same rules: sweep from an unselected deck to select a
+  run, press on a selected deck to drag the selection, pull an unselected
+  deck sideways to drag just that one. The top or bottom quarter of a deck
+  shows the accent line and makes the dragged decks its siblings, just
+  above or below it, in the order they were shown (reparented if they
+  came from another parent; a subdeck dragged along with its parent stays
+  inside it). The middle nests them, the **Decks** heading moves them to
+  the top level, and a deck never goes into its own subdecks. The order
+  is the home list's own `deck_order`, not a second one. Right-clicking a
+  deck offers **Restudy N decks**: every card in the selected decks,
+  subdecks included; filtered decks (Restudy itself among them) are left
+  out, since their cards can't go into another filtered deck.
+- **tag_order**: the sort order those tag line drops produce, keyed by
+  the parent tag's full name (`""` for the top level) with the children's
+  full names in order, e.g. `{"": ["gamma", "alpha"], "alpha": ["alpha::z",
+  "alpha::a"]}`. Anki itself only sorts tags by name. Tags not in a list
+  follow the ranked ones in name order; names that no longer sit under
+  that parent are ignored, and a drop that renames tags renames them here
+  too. Not meant to be hand-edited.
+- **auto_organize_tags** (default `true`): file every tag under its
+  course's tag root. A tag whose root (the part before the first `::`) is
+  not a course root is renamed to `Root::tag` when every note carrying it
+  (or one of its child tags) lives under one top-level deck, so
+  `hi_yield` on Fundamentals of Biochemistry notes becomes
+  `FunBiochem::hi_yield` and `Kaplan::Ch1` on MCAT notes becomes
+  `MCAT::Kaplan::Ch1`. Tags on notes from several courses stay where they
+  are. A card in a filtered deck (such as Restudy) counts for its home
+  deck; the Default deck and filtered decks are not courses. Runs half a
+  second after cards are added, edited, tagged in Browse or imported,
+  once when the profile opens, and on demand from **Tools > Organize Tags
+  Now** (or right-click the **Tags** heading in the Browse sidebar). Each
+  pass is one undoable step and a tooltip names what moved. A tag you
+  rename or drag by hand stays where you put it until the next full pass
+  (profile open or Organize Tags Now).
+- **tag_roots**: top-level deck name to tag root, e.g.
+  `{"Fundamentals of Biochemistry": "FunBiochem"}`. A top-level deck not
+  listed uses its name with anything that is not a letter or digit turned
+  into `_` ("Organic Chemistry" files under `Organic_Chemistry::`).
+- **tag_organize_ignore** (default `["Type", "AnkiHub_Subdeck", "marked",
+  "leech"]`): tag roots (or whole tags) that are never moved. Tags whose
+  root starts with `AnkiHub` are never moved either.
+- **browse_card_drag** — drag cards out of the Browse table. Press on a
+  selected row and pull: every selected card comes along (in Notes mode,
+  every card of every selected note). Press on an unselected row and pull
+  sideways to drag just that card; pull up or down the list instead and
+  the table selects the rows you sweep across, as it always has, so a
+  group can be gathered by hand and then dragged. Drop on a deck in the sidebar to
+  move them there, one undoable step, the same op as **Change Deck**;
+  the list re-runs its search so the moved cards leave it.
+  Drop on another row of the table to reposition new cards just before
+  that row's card in the new-card queue (the row has to be a new card
+  too, since only new cards have a position; a drop on a review card
+  says so and changes nothing). Filtered decks, tags and
+  headings refuse the drop. A plain click on a selected row still
+  collapses the selection to it. `false` leaves the table as Anki ships
+  it, with **Change Deck** (⌘D) and **Reposition** as the only routes.
+- **clean_deck_names** — decks go by their title. Click a deck in the
+  Browse sidebar and the search box reads *Amino Acids*, not
+  `"deck:Fundamentals of Biochemistry::Amino Acids"`; the Deck column
+  shows *Amino Acids* too, with the full path as the row's tooltip. The
+  real query is still what runs, and still what Enter, ⌘-click (AND),
+  ⇧-click (OR), **Create Filtered Deck** and **Save Current Search** see;
+  the moment you type in the box, what you typed is the search. The
+  reviewer header, the Stats title and the Add screen's deck picker use
+  the title as well. `false` shows Anki's paths and queries everywhere.
 - **browse_render_preview** — the Browse right-hand pane leads with the
   selected card, drawn exactly as the reviewer draws it (note type CSS,
   cloze, images, and your Reviewer settings), front *and* back in one

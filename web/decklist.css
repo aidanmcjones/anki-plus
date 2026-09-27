@@ -217,6 +217,23 @@
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--rf-accent, #6c8cff) 45%, transparent);
 }
 .ad-list-row--drop .ad-list-name { color: var(--rf-ink-strong); }
+/* Edge drop on a sibling: an insertion line above / below the row shows
+   the deck will land there in the order, not nest underneath. */
+.ad-list-row--before,
+.ad-list-row--after { position: relative; }
+.ad-list-row--before::before,
+.ad-list-row--after::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--rf-accent, #6c8cff);
+  pointer-events: none;
+}
+.ad-list-row--before::before { top: -1px; }
+.ad-list-row--after::after { bottom: -1px; }
 .ad-list-dropzone {
   display: none;
   margin: 0 6px 8px;

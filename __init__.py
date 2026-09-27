@@ -20,6 +20,7 @@ import os
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote as _quote
 
 from aqt import gui_hooks, mw
 from aqt.deckbrowser import DeckBrowser, DeckBrowserContent
@@ -65,13 +66,51 @@ except Exception:
 
 ADDON_DIR = os.path.basename(os.path.dirname(__file__))
 WEB = f"/_addons/{ADDON_DIR}/web"
+# user_files/ is Anki's conventional per-addon data dir: it survives add-on
+# updates (unlike the rest of the tree, which gets replaced wholesale), so
+# it's where the nature-video library lives — curated separately from this
+# checkout. It is kept out of the shipped .ankiaddon by build.py's
+# EXCLUDE_DIRS (the actual guard — see build.py), not by anything Anki does
+# on its own. See nature.py.
+USER_FILES = f"/_addons/{ADDON_DIR}/user_files"
 
-# Let Anki serve our static files to the embedded web views.
-mw.addonManager.setWebExports(__name__, r"web/.*")
+# Let Anki serve our static files to the embedded web views. `.*` in the
+# old pattern matched a literal `..` segment too, so
+# "user_files/../../<other-addon>/x" fullmatched it — a path-traversal
+# hole into every other add-on's user_files. This forbids `..` as a path
+# segment while still allowing normal filenames that merely contain dots.
+mw.addonManager.setWebExports(
+    __name__, r"(?:web|user_files/nature)(?:/(?!\.\.(?:/|$))[^/]+)+"
+)
 
 
 def _config() -> Dict[str, Any]:
     return mw.addonManager.getConfig(__name__) or {}
+
+
+def _addcard_mod():
+    """The addcard module, which owns the left rail's width arithmetic
+    (sidebar_w / sidebar_expanded_w / clamp_sidebar_w)."""
+    from . import addcard as _addcard
+    return _addcard
+
+
+def _reflow_embeds() -> None:
+    """Move any open inline overlay (Add/Browse/Settings/Stats) to the
+    rail's current width. Called right after the collapse state or the
+    user-dragged width is persisted, so the overlay doesn't sit at the old
+    offset until the next window resize corrects the gap."""
+    for mod in (
+        "addcard_embed", "browse_embed", "settings_embed", "stats_embed",
+    ):
+        try:
+            from importlib import import_module
+            _m = import_module("." + mod, __name__)
+            _reflow = getattr(_m, "reflow", None)
+            if _reflow is not None:
+                _reflow()
+        except Exception:
+            pass
 
 
 def _hero_mode(cfg: Optional[Dict[str, Any]] = None) -> bool:
@@ -122,16 +161,266 @@ def _background_rules(cfg: Dict[str, Any]) -> str:
     return out
 
 
-def _js_opts(cfg: Dict[str, Any]) -> Dict[str, Any]:
+_BACKDROP_CHOICES = ("off", "black", "aurora", "scene", "video")
+_BACKDROP_INTENSITIES = ("subtle", "cinematic")
+
+
+def _backdrop_mode(cfg: Dict[str, Any]) -> str:
+    """Which backdrop the home and overview screens get: nothing, the
+    abstract aurora wash, or the full layered landscape. Unknown values
+    fall back to the default rather than blanking the page."""
+    choice = str(cfg.get("backdrop", "scene") or "scene")
+    return choice if choice in _BACKDROP_CHOICES else "scene"
+
+
+def _backdrop_intensity(cfg: Dict[str, Any]) -> str:
+    choice = str(cfg.get("backdrop_intensity", "cinematic") or "cinematic")
+    return choice if choice in _BACKDROP_INTENSITIES else "cinematic"
+
+
+_SCENES = (
+    "peaks", "dunes", "forest", "canyon", "lake",
+    "volcano", "isles", "tundra", "spires", "ruins",
+)
+# Below 2s the swap reads as a strobe rather than a change of scene; above an
+# hour it has stopped being a rotation at all. The floor is the load-bearing
+# half: a hand-edited 0 would otherwise hand the page a setInterval that never
+# yields.
+_SCENE_SECONDS_DEFAULT = 10
+_SCENE_SECONDS_MIN = 2
+_SCENE_SECONDS_MAX = 3600
+
+
+def _scene_choice(cfg: Dict[str, Any]) -> str:
+    """The raw `scene` setting, reduced to either a known scene name or
+    `"shuffle"`. Junk and missing values land on shuffle rather than on a
+    name no stylesheet answers to, which would render the default peaks
+    silhouettes under a `data-rf-scene` nobody matches."""
+    choice = str(cfg.get("scene", "shuffle") or "shuffle")
+    return choice if choice in _SCENES else "shuffle"
+
+
+def _scene_variant(cfg: Dict[str, Any], day_ordinal: int) -> str:
+    """Which landscape the server renders first.
+
+    Pinned to the configured scene if there is one. Otherwise the pick is a
+    function of the date, not of the render: the deck browser re-renders on
+    every state change, and a backdrop that reshuffled each time you hit
+    Escape would be a fidget toy. The page script takes over the shuffling
+    from here; this only has to be stable and non-blank.
+    """
+    choice = _scene_choice(cfg)
+    if choice != "shuffle":
+        return choice
+    return _SCENES[int(day_ordinal) % len(_SCENES)]
+
+
+def _scene_shuffle_seconds(cfg: Dict[str, Any]) -> int:
+    try:
+        secs = int(cfg.get("scene_shuffle_seconds", _SCENE_SECONDS_DEFAULT))
+    except (TypeError, ValueError):
+        secs = _SCENE_SECONDS_DEFAULT
+    return max(_SCENE_SECONDS_MIN, min(_SCENE_SECONDS_MAX, secs))
+
+
+def _backdrop_motion_mode(cfg: Dict[str, Any]) -> str:
+    """Which "reduce motion" signals the backdrop obeys.
+
+    "always" (the default) obeys the OS-level `prefers-reduced-motion` only,
+    which is what every other motion gate in this add-on does. "auto" also
+    obeys Anki's own Preferences > Reduce motion.
+
+    Default is "always" rather than "auto" because Anki's own flag defaults
+    to ON (`ProfileManager.reduce_motion` returns True when unset), so
+    honouring it by default would freeze the backdrop for essentially every
+    user who never opened that preference, including the people who install
+    this add-on precisely for the backdrop. Opting in keeps the accessible
+    behaviour available without silently switching the feature off. The
+    OS-level query is obeyed in both modes and is not configurable: that one
+    is a deliberate statement by the user, not a default they inherited.
+    """
+    choice = str(cfg.get("backdrop_motion", "always") or "always")
+    return choice if choice in ("always", "auto") else "always"
+
+
+def _scene_list(cfg: Dict[str, Any]) -> list:
+    """What the page is allowed to cycle through. A pinned scene collapses
+    this to a single entry, which is how scene-shuffle.js learns to stand
+    still: one list to keep in sync instead of a list plus a flag that can
+    disagree with it."""
+    choice = _scene_choice(cfg)
+    return list(_SCENES) if choice == "shuffle" else [choice]
+
+
+def _sky_phase(hour: int) -> str:
+    """Time of day as one of dawn/day/dusk/night, for the scene palette.
+
+    Computed here rather than in the page because the deck browser
+    re-renders on every state change, so the attribute is refreshed for
+    free — where JS would need a timer, and this add-on has no loop or
+    visibility-guard pattern to hang one off. Fixed hours rather than real
+    sunrise/sunset: no location data, and the point is a mood, not an
+    almanac. Hours outside 0-23 wrap, so a bad clock can't produce a
+    phase the stylesheet has no palette for.
+    """
+    h = int(hour) % 24
+    if 5 <= h < 9:
+        return "dawn"
+    if 9 <= h < 17:
+        return "day"
+    if 17 <= h < 21:
+        return "dusk"
+    return "night"
+
+
+# Layer order is paint order: sky glow and stars behind the ranges, the
+# scrim over all of them so deck rows and the heatmap keep their contrast.
+# Pure decoration with nothing to announce, so it leaves the a11y tree.
+# Contains no `<center>`, which the .ba-home / .ba-over tagging below finds
+# by string replacement.
+#
+# `aux` and `motes` are unpainted and belong to whichever scene wants them:
+# aux behind the ridges (a lava glow, a floating mass), motes in front of
+# them but under the scrim (snow, embers, fireflies). They are here rather
+# than added per scene because every scene shares this one markup string,
+# and an empty div costs nothing to the scenes that ignore it. Every scene
+# in `web/scene.css` is one stylesheet away from depth without new DOM.
+_SCENE_HTML = (
+    '<div class="ba-scene" aria-hidden="true">'
+    '<div class="ba-scene-stars"></div>'
+    '<div class="ba-scene-orb"></div>'
+    '<div class="ba-scene-clouds"></div>'
+    '<div class="ba-scene-aux"></div>'
+    '<div class="ba-scene-haze"></div>'
+    '<div class="ba-scene-range ba-scene-far"></div>'
+    '<div class="ba-scene-range ba-scene-mid"></div>'
+    '<div class="ba-scene-range ba-scene-near"></div>'
+    '<div class="ba-scene-motes"></div>'
+    '<div class="ba-scene-scrim"></div>'
+    '</div>'
+)
+
+_VIDEO_EMPTY_WARNED = False
+
+
+def _video_state(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolves the nature-video library plus the `video_selection` /
+    `video_rotate_seconds` config into what both `_js_opts` and the
+    injection branch need. Only meaningful (and only ever called) when
+    backdrop mode is "video" — callers are responsible for computing this
+    once per render and threading the same dict into both `_js_opts` and
+    the injection branch, so index.json is read once and the two agree
+    exactly on what's playable. Importing `nature` here (rather than at
+    module scope) also keeps every other backdrop mode — the common
+    case — from paying for this module or a filesystem read at all."""
+    from . import nature as _nature
+    videos_all = _nature.read_index()
+    selection = _nature.normalize_selection(
+        cfg.get("video_selection"), videos_all
+    )
+    filtered = _nature.filtered_for_selection(videos_all, selection)
+    return {
+        "videos_all": videos_all,
+        "selection": selection,
+        "filtered": filtered,
+        "rotate_seconds": _nature.rotate_seconds(cfg.get("video_rotate_seconds")),
+    }
+
+
+# Layer order mirrors `_SCENE_HTML`: a fixed aria-hidden container behind
+# the UI, two stacked <video> elements so video-backdrop.js can crossfade
+# between clips (swap the hidden one's source, fade it up, swap which is
+# "front") without a black flash, then a scrim mirroring `.ba-scene-scrim`
+# so deck text keeps its contrast over whatever the clip is doing.
+#
+# The first clip's URL is set server-side, same reasoning as
+# `_scene_variant`: the very first paint should already show something
+# playing rather than wait on the page script to pick one.
+def _video_html(initial_url: str) -> str:
+    src_attr = (
+        f' src="{html.escape(initial_url, quote=True)}"' if initial_url else ""
+    )
+    return (
+        # `ba-video--preinit` is what makes `.ba-video-a` visible before
+        # video-backdrop.js has run — see video-backdrop.css. The script's
+        # `init()` strips this class the moment it takes over; if it never
+        # runs at all, it just stays and the CSS fallback holds.
+        '<div class="ba-video ba-video--preinit" aria-hidden="true">'
+        f'<video class="ba-video-el ba-video-a" muted autoplay loop '
+        f'playsinline preload="auto"{src_attr}></video>'
+        '<video class="ba-video-el ba-video-b" muted autoplay loop '
+        'playsinline preload="auto"></video>'
+        '<div class="ba-video-scrim"></div>'
+        '</div>'
+    )
+
+
+def _js_opts(
+    cfg: Dict[str, Any], video_state: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Feature flags handed to the page scripts as `window.__baOpts`.
     Every key mirrors a Settings toggle; the JS treats a missing key as
-    "on" so older payloads keep working."""
+    "on" so older payloads keep working.
+
+    This runs on EVERY themed surface — deck browser, overview, reviewer,
+    editor, both toolbars, the sidebar webview — so it must stay cheap in
+    the common case. `video_state` is never computed here: only a caller
+    that already has it (the deck-browser/overview injection branch, the
+    one surface that actually renders `.ba-video` markup) can populate the
+    "video" payload at all. Every other surface — reviewer, editor,
+    toolbars, sidebar — calls this without `video_state` and gets the
+    empty payload, even when backdrop mode is "video", because none of
+    them show a video backdrop; there is nothing for the ~4.6KB clip list
+    to do there but bloat every render. This used to fall back to a fresh
+    `_video_state(cfg)` call whenever `video_state` was None, which meant
+    those surfaces were reading and re-embedding index.json on every
+    single render for no reason — see B5 in the fix history."""
     startup = str(cfg.get("deck_tree_startup", "remember") or "remember")
     if startup not in ("remember", "expanded", "collapsed"):
         startup = "remember"
+    if _backdrop_mode(cfg) == "video" and video_state is not None:
+        video_payload = [
+            {
+                "url": f"{USER_FILES}/nature/{_quote(v['file'])}",
+                "file": v["file"],
+                "biome": v["biome"],
+                "title": v["title"],
+            }
+            for v in video_state["filtered"]
+        ]
+        rotate_seconds = video_state["rotate_seconds"]
+    else:
+        video_payload = []
+        rotate_seconds = 0
     return {
         "cmdk": bool(cfg.get("cmdk", True)),
         "skipOverview": bool(cfg.get("skip_overview", True)),
+        # scene-shuffle.js reads both rather than carrying its own copy, so
+        # a scene added to `_SCENES` reaches the page without touching the
+        # JS. A pinned scene arrives as a one-entry list, which the script
+        # treats as nothing to cycle.
+        "scene": {
+            "list": _scene_list(cfg),
+            "motion": _backdrop_motion_mode(cfg),
+            "shuffleSeconds": _scene_shuffle_seconds(cfg),
+        },
+        # video-backdrop.js reads this the same way scene-shuffle.js reads
+        # "scene" above: the filtered, resolved list IS the rotation —
+        # Python already applied `video_selection`, so the page never has
+        # to know what a biome or a pinned file even is.
+        "video": {
+            "videos": video_payload,
+            "rotateSeconds": rotate_seconds,
+            "motion": _backdrop_motion_mode(cfg),
+            # Seeds init()'s `occluded` flag so a deck-browser/overview
+            # render that happens WHILE an embed overlay is already open
+            # (e.g. _refresh_views() firing from a Settings toggle) starts
+            # paused instead of decoding invisibly behind the overlay for
+            # however long the overlay stays up. `_push_video_occlusion()`
+            # covers every occlusion change AFTER the page has loaded; this
+            # covers the one it can't — the state as of this render.
+            "occluded": _any_embed_open(),
+        },
         "deckList": {
             "startup": startup,
             "dragMove": bool(cfg.get("deck_drag_move", True)),
@@ -140,6 +429,7 @@ def _js_opts(cfg: Dict[str, Any]) -> Dict[str, Any]:
         },
         "reviewer": {
             "clickToReveal": bool(cfg.get("click_to_reveal", True)),
+            "arrowKeyGrading": bool(cfg.get("arrow_key_grading", True)),
             "pressFeedback": bool(cfg.get("press_feedback", True)),
             "cardStyling": bool(cfg.get("reviewer_card_styling", True)),
             "answerButtons": str(cfg.get("reviewer_answer_buttons", "intervals")),
@@ -221,6 +511,34 @@ def _is(context: Any, cls: Any) -> bool:
     return bool(cls) and isinstance(context, cls)
 
 
+_system_fonts_cache: Optional[str] = None
+
+
+def _system_fonts_meta() -> str:
+    """A `<meta>` tag carrying every font Qt can see installed on this
+    machine, as a URL-encoded JSON array. web/editor-tools.js reads it to
+    populate the Font control's <datalist> with real system fonts instead
+    of a small hardcoded list — CSP blocks inline <script> on editor pages
+    (see the ba-editor-mode meta a few lines below for the established
+    pattern), so a meta tag is the only way to hand JS this data. Cheap to
+    recompute but QFontDatabase.families() still does real work, so cache
+    it for the process lifetime — the installed font set doesn't change
+    while Anki is running.
+    """
+    global _system_fonts_cache
+    if _system_fonts_cache is None:
+        import json as _json
+
+        try:
+            from aqt.qt import QFontDatabase
+
+            families = sorted(set(QFontDatabase.families()))
+        except Exception:
+            families = []
+        _system_fonts_cache = _quote(_json.dumps(families))
+    return f'<meta name="ba-system-fonts" content="{_system_fonts_cache}">'
+
+
 # --------------------------------------------------------------------------- #
 # Theme + asset injection
 # --------------------------------------------------------------------------- #
@@ -288,6 +606,21 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
     if theme_pref in ("light", "dark"):
         extras += f"d.dataset.rfTheme='{theme_pref}';"
     extras += f"d.dataset.rfDensity='{density}';"
+    # Backdrop palette knobs. `data-rf-sky` is the time of day at render
+    # time; scene.css swaps the whole palette off it, so no clock runs in
+    # the page. Emitted on every surface (not just the home page) so the
+    # attributes are already correct if a screen later grows a backdrop.
+    extras += f"d.dataset.rfBackdrop='{_backdrop_mode(cfg)}';"
+    extras += f"d.dataset.rfMotion='{_backdrop_motion_mode(cfg)}';"
+    extras += f"d.dataset.rfIntensity='{_backdrop_intensity(cfg)}';"
+    extras += f"d.dataset.rfSky='{_sky_phase(datetime.datetime.now().hour)}';"
+    # The landscape itself, rotated by date unless the user pinned one. Set
+    # server-side so the correct scene is up on the first paint; scene-
+    # shuffle.js only ever moves it on from here.
+    extras += (
+        "d.dataset.rfScene='"
+        f"{_scene_variant(cfg, datetime.date.today().toordinal())}';"
+    )
     if isinstance(context, Reviewer) or _is(context, _PreviewCtx):
         # "native" hands the card's typography/colours back to the note
         # type; reviewer.css gates every content-affecting rule on it.
@@ -300,10 +633,24 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             extras += "d.dataset.rfEase='native';"
     extras += "})();</script>"
     # Feature flags read by the page scripts (deck list, reviewer, sidebar).
+    # Computed once here (only when it can actually matter — video mode on
+    # a surface that gets a backdrop at all) and threaded into both
+    # `_js_opts` below and the video injection branch further down, so
+    # index.json is read at most once per render rather than twice.
     import json as _json
-    opts_js = (
-        "<script>window.__baOpts=" + _json.dumps(_js_opts(cfg)) + ";</script>"
-    )
+    video_state: Optional[Dict[str, Any]] = None
+    if _backdrop_mode(cfg) == "video" and isinstance(context, (DeckBrowser, Overview)):
+        try:
+            video_state = _video_state(cfg)
+        except Exception:
+            video_state = None
+    try:
+        opts_js = (
+            "<script>window.__baOpts="
+            + _json.dumps(_js_opts(cfg, video_state)) + ";</script>"
+        )
+    except Exception:
+        opts_js = "<script>window.__baOpts={};</script>"
 
     web_content.head += (
         f"<style>:root,.night-mode,body{{"
@@ -371,6 +718,71 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             )
         except Exception:
             pass
+    # Scene backdrop: deck browser and overview only, the same boundary the
+    # aurora draws. Motion behind a card you are trying to recall is a
+    # distraction, so the reviewer keeps its flat paper. The engine stylesheet
+    # is loaded in every mode because it also owns the "off" rules that put
+    # the aurora back to a plain static glow.
+    if isinstance(context, (DeckBrowser, Overview)):
+        web_content.css.append(f"{WEB}/scene.css")
+        if _backdrop_mode(cfg) == "scene":
+            # The ten scenes are only worth their bytes when one is actually
+            # going to be drawn, so they load a step later than the engine.
+            web_content.css.append(f"{WEB}/scenes.css")
+            # Prepended after the <center> tagging above, so the markup
+            # here can never intercept that replacement.
+            try:
+                web_content.body = _SCENE_HTML + web_content.body
+            except Exception:
+                pass
+            # The only script the backdrop has, and only on these two
+            # screens: the reviewer gets no backdrop and no motion at all.
+            web_content.js.append(f"{WEB}/scene-shuffle.js")
+        elif _backdrop_mode(cfg) == "video":
+            # Already computed once above (this is the branch that made
+            # that computation happen at all); only re-derive it if that
+            # earlier attempt failed, so a transient error here doesn't
+            # also take down the opts payload above.
+            if video_state is None:
+                try:
+                    video_state = _video_state(cfg)
+                except Exception:
+                    video_state = {"filtered": []}
+            filtered = video_state["filtered"]
+            if filtered:
+                web_content.css.append(f"{WEB}/video-backdrop.css")
+                try:
+                    day_idx = datetime.date.today().toordinal() % len(filtered)
+                    initial_url = (
+                        f"{USER_FILES}/nature/{_quote(filtered[day_idx]['file'])}"
+                    )
+                    web_content.body = (
+                        _video_html(initial_url) + web_content.body
+                    )
+                except Exception:
+                    pass
+                web_content.js.append(f"{WEB}/video-backdrop.js")
+            else:
+                # No library yet (or index.json is unreadable — already
+                # logged once by nature.read_index). Nothing is injected,
+                # so the page falls back to whatever scene.css draws for
+                # a mode it has no rule for: the plain aurora wash, same
+                # as before this feature existed. Logged once, separately
+                # from the read-failure case, so choosing "Nature video"
+                # with an empty library says so specifically.
+                global _VIDEO_EMPTY_WARNED
+                if not _VIDEO_EMPTY_WARNED:
+                    _VIDEO_EMPTY_WARNED = True
+                    try:
+                        import sys
+                        print(
+                            "[anki-design] backdrop is set to \"video\" but "
+                            "user_files/nature has no clips; showing the "
+                            "default backdrop instead.",
+                            file=sys.stderr,
+                        )
+                    except Exception:
+                        pass
     # Sidebar nav — deck browser + overview only. The reviewer gets full
     # focus (no sidebar) so the card area isn't competing with chrome.
     if cfg.get("sidebar_nav", True) and isinstance(
@@ -414,6 +826,8 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             web_content.head += (
                 "<script>window.__baSidebarCollapsed = "
                 + _json.dumps(bool(cfg.get("sidebar_collapsed", False)))
+                + ";window.__baSidebarWidth = "
+                + _json.dumps(_addcard_mod().sidebar_expanded_w(cfg))
                 + ";</script>"
             )
         except Exception:
@@ -483,6 +897,10 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
     # the progress bar element.
     if isinstance(context, Reviewer):
         web_content.css.append(f"{WEB}/reviewer.css")
+        web_content.js.append(f"{WEB}/card-scale.js")
+        web_content.css.append(f"{WEB}/editor-tools.css")
+        web_content.js.append(f"{WEB}/editor-tools.js")
+        web_content.head += _system_fonts_meta()
         if cfg.get("show_progress", True):
             web_content.js.append(f"{WEB}/reviewer.js")
     # Browse tab's rendered-card pane. Same stack as the reviewer — that's
@@ -492,6 +910,7 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
     if _is(context, _PreviewCtx):
         web_content.css.append(f"{WEB}/theme.css")
         web_content.css.append(f"{WEB}/reviewer.css")
+        web_content.js.append(f"{WEB}/card-scale.js")
         web_content.css.append(f"{WEB}/browse-preview.css")
         web_content.js.append(f"{WEB}/browse-preview.js")
         web_content.head += (
@@ -500,6 +919,10 @@ def on_webview_will_set_content(web_content: WebContent, context: Optional[Any])
             + '">'
         )
     if is_editor:
+        web_content.head += '<meta name="ba-editor-tools" content="1">'
+        web_content.head += _system_fonts_meta()
+        web_content.css.append(f"{WEB}/editor-tools.css")
+        web_content.js.append(f"{WEB}/editor-tools.js")
         # The same Editor class serves Add, Browse and Edit-Current. Add
         # and Browse both get the restyle (they're the two places you
         # actually live in); Edit-Current is left stock so the reviewer's
@@ -640,6 +1063,14 @@ def _counts_by_day() -> Dict[int, int]:
 _MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 _WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+# Gutter glyphs for the heatmap's seven rows, Sunday-first like _WEEKDAYS.
+# Spelled out instead of sliced off _WEEKDAYS because "Tue"[0] and "Thu"[0]
+# are both "T": running the whole Mon-Fri block makes that pair readable by
+# position, but only as long as the collision is a decision rather than a
+# side effect of slicing. Weekends stay blank so their rows keep full height
+# and weekend study still shows up in the grid.
+_WEEKDAY_GLYPHS = ["", "M", "T", "W", "T", "F", ""]
 
 
 def _heatmap_level_fn(counts: Dict[int, int]):
@@ -821,11 +1252,11 @@ def build_heatmap_html(weeks: int = 53) -> str:
         f'{label if (span >= 4 or i == last_span_idx) else ""}</span>'
         for i, (label, span) in enumerate(month_spans)
     )
-    # Single-letter weekday labels (M / W / F) on the usual every-other-row
-    # cadence — same rows as before, just shorter text.
+    # Every weekday gets its letter, not just the old Mon/Wed/Fri cadence.
+    # All seven spans are still emitted: the blank weekend ones are the
+    # spacers that keep letter rows lined up with cell rows.
     weekdays_html = "".join(
-        f'<span class="rf-hm-wd">{_WEEKDAYS[i][0] if i in (1, 3, 5) else ""}</span>'
-        for i in range(7)
+        f'<span class="rf-hm-wd">{g}</span>' for g in _WEEKDAY_GLYPHS
     )
 
     total = sum(counts.values())
@@ -1132,6 +1563,8 @@ def _open_settings() -> None:
             return
         except Exception:
             pass
+        finally:
+            _push_video_occlusion()
     # Standalone Preferences dialog with the Anki Design tab selected — the
     # fallback path, and the normal path when inline settings are off.
     try:
@@ -1143,6 +1576,7 @@ def _open_settings() -> None:
             showWarning(f"Anki Design settings: {e}")
         except Exception:
             pass
+    _push_video_occlusion()
 
 
 def _on_js_message(handled, message, context):
@@ -1150,6 +1584,28 @@ def _on_js_message(handled, message, context):
     return (True, None) when we handle it."""
     if not isinstance(message, str):
         return handled
+    # ba:image-crop: / ba:image-paste: / ba:image-copy: from web/editor-tools.js.
+    if message.startswith("ba:image-"):
+        from .editor_tools import on_message
+
+        return on_message(handled, message, context)
+    # The unified editor toolbar's Fields and Card styling popovers
+    # (web/editor-tools.js) — both inline, no windows of ours. Every
+    # ba:fields:*/ba:styling:* command returns JSON straight to the JS
+    # callback; see card_styling.py's on_message for the dispatch table.
+    if message.startswith("ba:fields:") or message.startswith("ba:styling:"):
+        from .card_styling import on_message as _card_styling_on_message
+
+        return _card_styling_on_message(handled, message, context)
+    # Arrow-key/‹›-button navigation through the Cards-view table while
+    # the full-screen editor is open (web/editor-tools.js). See
+    # browse_embed.navigate_card's own docstring for why it moves the
+    # table's row instead of loading a card directly.
+    if message.startswith("ba:cards:nav:"):
+        from . import browse_embed
+
+        direction = message[len("ba:cards:nav:"):]
+        return (True, browse_embed.navigate_card(direction))
     # Anki's deck browser emits `open:<did>` when a deck is clicked, which
     # normally lands on the intermediate Overview page. Skip that and go
     # straight into studying — same target as the single-deck hero.
@@ -1265,8 +1721,16 @@ def _on_js_message(handled, message, context):
                     import_module("." + mod, __name__).close_inline()
                 except Exception:
                     pass
+            _push_video_occlusion()
             if getattr(mw, "state", None) != "deckBrowser":
-                mw.moveToState("deckBrowser")
+                mw.moveToState("deckBrowser")  # also nudges, via the patch below
+            else:
+                # mw.state never left "deckBrowser" (embeds are overlays,
+                # not real states), so moveToState — and the compositor
+                # nudge it triggers — is never reached from this branch.
+                # This was the actual gap behind "Decks left a stale
+                # pane": call the same nudge directly.
+                _nudge_web_repaint()
         elif cmd == "browse":
             for mod in ("addcard_embed", "stats_embed", "settings_embed"):
                 try:
@@ -1301,17 +1765,20 @@ def _on_js_message(handled, message, context):
                 mw.addonManager.writeConfig(__name__, cfg2)
             except Exception:
                 pass
-            for mod in (
-                "addcard_embed", "browse_embed", "settings_embed", "stats_embed",
-            ):
-                try:
-                    from importlib import import_module
-                    _m = import_module("." + mod, __name__)
-                    _reflow = getattr(_m, "reflow", None)
-                    if _reflow is not None:
-                        _reflow()
-                except Exception:
-                    pass
+            _reflow_embeds()
+        elif cmd.startswith("sidebar-width:"):
+            # The user dragged the rail's right edge (sidebar.js sends one
+            # of these per gesture, on release). Persist the width the
+            # same way as the collapse state and move any open overlay to
+            # the new edge right away.
+            try:
+                width = _addcard_mod().clamp_sidebar_w(cmd[len("sidebar-width:"):])
+                cfg2 = mw.addonManager.getConfig(__name__) or {}
+                cfg2["sidebar_width"] = width
+                mw.addonManager.writeConfig(__name__, cfg2)
+            except Exception:
+                pass
+            _reflow_embeds()
         elif cmd == "website":
             try:
                 from aqt.utils import openLink
@@ -1418,6 +1885,8 @@ def _on_js_message(handled, message, context):
                     _set_deck_collapsed(did, extra)
                 elif action == "reparent" and extra is not None:
                     _reparent_deck(did, extra)
+                elif action == "reorder" and extra is not None:
+                    _reorder_deck(did, extra)
                 elif action == "options":
                     try:
                         from aqt.deckoptions import display_options_for_deck_id
@@ -2549,6 +3018,55 @@ def _install_silent_sync() -> None:
         pass
 
 
+def _quiet_ankihub_login_nag() -> bool:
+    """Stop the AnkiHub add-on from popping "Sign in to AnkiHub." on its own.
+
+    AnkiHub (add-on 1322529746) wraps `AnkiQt._sync_collection_and_media`
+    and, with its default `auto_sync: on_ankiweb_sync`, its after_sync
+    callback calls `AnkiHubLogin.display_login()` whenever the user is not
+    signed in to AnkiHub. `_install_silent_sync` bypasses that wrapper for
+    every later sync, but it runs on main_window_did_init, which fires after
+    the startup auto-sync. The native (wrapped) path therefore runs exactly
+    once per launch and the window appears on every restart.
+
+    The callback resolves `AnkiHubLogin` as a module global of
+    `<ankihub>.gui.auto_sync` at call time, so rebinding that one name to a
+    stand-in with a no-op `display_login` silences only the unsolicited
+    prompt. Every deliberate entry point (AnkiHub menu > Sign in,
+    Preferences > Syncing > AnkiHub Log In, AnkiHub features that need an
+    account) imports the class from `gui.menu` and keeps working, and the
+    AnkiHub sync itself is untouched for users who are signed in.
+
+    Returns True once a stand-in is in place. Idempotent, and a no-op when
+    AnkiHub is not installed or is not loaded yet, so it is safe to call
+    from every hook that might precede the prompt."""
+    import sys
+
+    class _QuietAnkiHubLogin:
+        _ba_quiet = True
+
+        @staticmethod
+        def display_login(*args: Any, **kwargs: Any) -> None:
+            return None
+
+    done = False
+    for name, module in list(sys.modules.items()):
+        if module is None or not name.endswith(".gui.auto_sync"):
+            continue
+        cls = getattr(module, "AnkiHubLogin", None)
+        if cls is None or not hasattr(cls, "display_login"):
+            continue
+        if getattr(cls, "_ba_quiet", False):
+            done = True
+            continue
+        try:
+            module.AnkiHubLogin = _QuietAnkiHubLogin
+            done = True
+        except Exception:
+            pass
+    return done
+
+
 # --------------------------------------------------------------------------- #
 # Congrats page (Overview's empty state) — redesigned.
 # Anki's "Congratulations! You have finished this deck for now." is a Svelte
@@ -2614,6 +3132,120 @@ def _finished_deck_stats(did: int) -> Dict[str, Any]:
     return out
 
 
+# ---- Custom deck order -----------------------------------------------------
+# Anki sorts sibling decks by name and has no sort field, so "put this deck
+# at the top" has nowhere to live in the collection. The add-on keeps its
+# own order in its config: `deck_order` maps a parent deck id ("0" for the
+# top level) to the list of child ids in the order the user dragged them
+# into. Ranked siblings come first, in that order; anything not in the list
+# (a new deck, one moved in from elsewhere) follows in Anki's alphabetical
+# order. Ids that no longer sit under that parent are ignored, so a deleted
+# or reparented deck never breaks the list.
+DECK_ORDER_KEY = "deck_order"
+
+
+def _deck_order_state(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, list]:
+    cfg = cfg if cfg is not None else _config()
+    raw = cfg.get(DECK_ORDER_KEY)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _apply_deck_order(kids: list, ranked: Any, did_of: Any = None) -> list:
+    """Sort one sibling group: `ranked` (a list of deck ids) first, in that
+    order, then the rest in their incoming order. Stable, so Anki's
+    alphabetical order survives among the unranked."""
+    if did_of is None:
+        did_of = lambda n: int(getattr(n, "deck_id", 0) or 0)
+    rank: Dict[int, int] = {}
+    for i, d in enumerate(ranked or []):
+        try:
+            rank.setdefault(int(d), i)
+        except (TypeError, ValueError):
+            continue
+    if not rank:
+        return list(kids)
+    tail = len(rank)
+    indexed = list(enumerate(kids))
+    indexed.sort(key=lambda p: (rank.get(did_of(p[1]), tail), p[0]))
+    return [k for _, k in indexed]
+
+
+def _ordered_children(node: Any, order: Dict[str, list]) -> list:
+    """A tree node's children in display order (see DECK_ORDER_KEY)."""
+    kids = list(getattr(node, "children", []) or [])
+    did = int(getattr(node, "deck_id", 0) or 0)
+    return _apply_deck_order(kids, order.get(str(did)))
+
+
+def _reordered_siblings(order: list, src: int, target: int, where: str):
+    """Move `src` to sit just before/after `target` in a sibling list.
+    Returns the new list, or None when the move makes no sense (either id
+    missing from the group, the deck dropped on itself, or an unknown
+    position)."""
+    if where not in ("before", "after") or src == target:
+        return None
+    if src not in order or target not in order:
+        return None
+    out = [d for d in order if d != src]
+    at = out.index(target) + (1 if where == "after" else 0)
+    out.insert(at, src)
+    return out
+
+
+def _sibling_group(did: int):
+    """(parent did, [sibling dids in display order]) for a deck, or None."""
+    order = _deck_order_state()
+
+    def walk(node):
+        kids = _ordered_children(node, order)
+        ids = [int(getattr(k, "deck_id", 0) or 0) for k in kids]
+        if did in ids:
+            return int(getattr(node, "deck_id", 0) or 0), ids
+        for k in kids:
+            found = walk(k)
+            if found:
+                return found
+        return None
+
+    try:
+        return walk(mw.col.sched.deck_due_tree())
+    except Exception:
+        return None
+
+
+def _reorder_deck(did: int, extra: Any) -> None:
+    """`ba:deck:reorder:<did>:<target>:<before|after>` from the deck list:
+    drop a deck on the top or bottom edge of a sibling to resort the group.
+    Writes the whole sibling order to the add-on config so the next render
+    (and every one after it) shows the new order."""
+    try:
+        target_raw, where = str(extra).split(":", 1)
+        target = int(target_raw.strip())
+        where = where.strip()
+    except Exception:
+        return
+    group = _sibling_group(did)
+    if not group or target not in group[1]:
+        return
+    parent, order = group
+    new_order = _reordered_siblings(order, did, target, where)
+    if new_order is None:
+        return
+    try:
+        cfg = _config()
+        state = _deck_order_state(cfg)
+        state[str(parent)] = new_order
+        cfg[DECK_ORDER_KEY] = state
+        mw.addonManager.writeConfig(__name__, cfg)
+    except Exception:
+        return
+    try:
+        if getattr(mw, "state", "") == "deckBrowser":
+            mw.deckBrowser.refresh()
+    except Exception:
+        pass
+
+
 def _full_deck_tree_payload() -> list:
     """Flat list of EVERY deck (top + descendants), tagged with depth and
     counts. Used to render the home-page deck list with the same JS render
@@ -2622,6 +3254,7 @@ def _full_deck_tree_payload() -> list:
     out: list = []
     try:
         tree = mw.col.sched.deck_due_tree()
+        order = _deck_order_state()
         try:
             current_did = int(mw.col.decks.get_current_id())
         except Exception:
@@ -2642,7 +3275,7 @@ def _full_deck_tree_payload() -> list:
             n = int(getattr(node, "new_count", 0) or 0)
             l = int(getattr(node, "learn_count", 0) or 0)
             r = int(getattr(node, "review_count", 0) or 0)
-            kids = list(getattr(node, "children", []) or [])
+            kids = _ordered_children(node, order)
             kid_rows: list = []
             for c in kids:
                 kid_rows.extend(visit(c, depth + 1))
@@ -2691,6 +3324,7 @@ def _filtered_deck_tree(exclude_did: int) -> list:
     try:
         exclude = set(int(x) for x in _deck_and_descendant_ids(int(exclude_did)))
         tree = mw.col.sched.deck_due_tree()
+        order = _deck_order_state()
 
         def visit(node, depth):
             did = int(getattr(node, "deck_id", 0) or 0)
@@ -2700,7 +3334,7 @@ def _filtered_deck_tree(exclude_did: int) -> list:
             # Sum descendant work so a parent with empty self but stocked kids
             # still surfaces as a row (we still show kids individually).
             sub_total = n + l + r
-            kids = list(getattr(node, "children", []) or [])
+            kids = _ordered_children(node, order)
             kid_rows: list = []
             for c in kids:
                 kid_rows.extend(visit(c, depth + 1))
@@ -2973,6 +3607,8 @@ def on_webview_did_inject_style_into_page(webview) -> None:
             f"window.__baOpts={_json.dumps(_js_opts(cfg))};"
             f"window.__baSidebarCollapsed="
             f"{_json.dumps(bool(cfg.get('sidebar_collapsed', False)))};"
+            f"window.__baSidebarWidth="
+            f"{_json.dumps(_addcard_mod().sidebar_expanded_w(cfg))};"
         )
         webview.eval(theme_attr + seed + accent_style + css_inject + js_inject)
     except Exception:
@@ -3003,6 +3639,111 @@ def _push_sidebar_standing() -> None:
             rv.web.eval(js)
         except Exception:
             pass
+
+
+def _any_embed_open() -> bool:
+    """True while any inline embed overlay (Add, Browse, Stats, Settings)
+    is painted over mw.web. Unlike `_active_embed_cmd()`, this checks all
+    four, including addcard_embed — that function deliberately omits it
+    for rail-highlight purposes only (an open Add overlay should still
+    highlight "browse", per its own docstring), but the video backdrop
+    underneath mw.web is occluded by ANY of the four, including Add's own
+    fallback stacked overlay."""
+    from importlib import import_module
+
+    for mod_name in (
+        "addcard_embed", "browse_embed", "stats_embed", "settings_embed",
+    ):
+        try:
+            mod = import_module("." + mod_name, __name__)
+            if mod._state.get("overlay") is not None:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _push_video_occlusion() -> None:
+    """Pause or resume the deck-browser/overview video backdrop
+    (video-backdrop.js) depending on whether an inline embed currently
+    occludes mw.web.
+
+    These embeds are Qt widgets painted *on top of* mw.web without ever
+    hiding, minimizing, or blurring it — so `document.hidden` never
+    fires for them, and without this a video backdrop underneath keeps
+    decoding, invisibly, behind an opaque panel for as long as the
+    overlay is up (see the long comment in video-backdrop.js's
+    __baVideoPause/__baVideoResume block). Call this after anything that
+    opens or closes an embed; it's cheap (one property read on each of
+    four already-imported modules, then a single `.eval()`) and a no-op
+    on every non-video-mode render, since the JS hooks it targets are
+    only ever defined when video-backdrop.js actually initialised."""
+    w = getattr(mw, "web", None)
+    if w is None:
+        return
+    hook = "__baVideoPause" if _any_embed_open() else "__baVideoResume"
+    try:
+        w.eval(f"window.{hook} && window.{hook}();")
+    except Exception:
+        pass
+
+
+def _nudge_web_repaint() -> None:
+    """Wake `mw.web`'s compositor after an inline embed (Add/Browse/Stats/
+    Settings) stops covering it.
+
+    Every one of those embeds covers mw.web with its own overlay widget for
+    as long as it's open — sometimes for a long session (Browse, in
+    particular). QtWebEngine throttles a covered page's compositor for
+    performance, and doesn't always resume painting immediately just
+    because the covering widget was deleteLater()'d and the incoming
+    state's HTML has already loaded underneath: confirmed live (Decks
+    after a table-collapsed/full-screen Browse editor) — a direct DOM
+    query right after teardown already shows the correct deck-browser
+    content, but the on-screen pixels stay stuck on the last frame the
+    (now-gone) overlay painted for another ~2s until WebEngine's own idle
+    recovery kicks in — a real user reads that as "Decks is just blank."
+
+    mw.web is a QWebEngineView, not a plain QWidget — its actual pixels
+    come from an out-of-process compositor. The repaint()/processEvents()
+    idiom this codebase uses elsewhere for the (plain-QWidget) curtain
+    overlays does NOT belong here: repaint() forces a synchronous wait on
+    that compositor, and an earlier version of this fix that tried it hung
+    the whole app outright (confirmed live — a real deadlock, not just a
+    slow frame). update() only *schedules* a repaint through Qt's normal,
+    async event queue — it never blocks — which is enough to make Qt
+    reissue a paint/expose event for mw.web and let WebEngine notice it
+    should resume compositing, without touching anything synchronous.
+
+    A single nudge measured ~0.7s to actually land on screen (down from
+    ~2s with no nudge at all — confirmed live, both timings) — better, but
+    still a visible gap. A single update() call apparently doesn't always
+    catch the compositor at a moment it's ready to listen right after
+    teardown; a few staggered calls (all still async, still non-blocking)
+    give it more chances to land, at negligible cost since each one is
+    just a cheap schedule-a-repaint request.
+
+    Callers: `_patched_move_to_state` (a real state change, e.g. D from
+    the reviewer) AND the sidebar's `ba:decks` handler below — the latter
+    is the common case (embeds never change `mw.state`, so clicking Decks
+    from an open Browse/Add/etc. never goes through moveToState at all;
+    skipping this nudge there was the actual gap behind the "still
+    bugged" Decks report — moveToState was never being called at all)."""
+    if QTimer is None:
+        return
+    try:
+        def _do_update() -> None:
+            try:
+                w = getattr(mw, "web", None)
+                if w is not None:
+                    w.update()
+            except Exception:
+                pass
+
+        for delay in (0, 60, 150, 300):
+            QTimer.singleShot(delay, _do_update)
+    except Exception:
+        pass
 
 
 def on_deck_browser_did_render(deck_browser: DeckBrowser) -> None:
@@ -3037,6 +3778,17 @@ def _current_deck_name() -> str:
             return mw.col.decks.current()["name"]
         except Exception:
             return ""
+
+
+def _deck_title(name: str) -> str:
+    """A deck's title: the last segment of its `::` path, unless
+    `clean_deck_names` is off (deck_names.py owns the rule)."""
+    try:
+        from .deck_names import title
+
+        return title(name)
+    except Exception:
+        return name or ""
 
 
 def _reviewer_ease_html() -> str:
@@ -3114,7 +3866,8 @@ def _reviewer_header_html() -> str:
     """Header above the card: back chevron + deck name on the left, the
     count breakdown on the right, and Edit + More icon buttons next to
     them (Anki's More menu already covers flag/mark/undo)."""
-    name = html.escape(_current_deck_name() or "Studying")
+    # By title, not by `::` path (see deck_names.py).
+    name = html.escape(_deck_title(_current_deck_name()) or "Studying")
     new_n = learn_n = rev_n = 0
     try:
         c = mw.col.sched.counts()
@@ -3540,6 +4293,27 @@ try:
 except Exception:
     pass
 
+# Browse table: drag the selected cards onto a deck in the sidebar to move
+# them there, or onto a new card's row to reposition them before it.
+# Installed per Browser, once its table and sidebar exist.
+try:
+    from . import browse_card_drag as _card_drag
+
+    gui_hooks.browser_will_show.append(_card_drag.install)
+except Exception:
+    pass
+
+# Browse: decks go by their title. The search box shows "Amino Acids" for
+# a sidebar click, not `"deck:Fundamentals of Biochemistry::Amino Acids"`
+# (the real query stays behind it), and the Deck column drops the `::`
+# path in favour of the leaf, with the path as the tooltip.
+try:
+    from . import deck_names as _deck_names
+
+    gui_hooks.browser_will_show.append(_deck_names.install)
+except Exception:
+    pass
+
 # Reviewer "More" menu: Randomize Set + the Cue… tag submenu.
 try:
     from . import reviewer_menu as _reviewer_menu
@@ -3577,6 +4351,17 @@ try:
         # docstring in deadlines.py) — must run before the two calls below,
         # since it's what makes their "orig_*" restore targets correct.
         _deadlines.repair_legacy_corruption()
+        # Un-park "— deadline" clone presets an older build left at 0/day
+        # (one-time, guarded by its own flag). Before the mode migration:
+        # that migration pauses decks by their *own* limits, and a preset
+        # still stuck at 0 underneath would make a later resume a no-op.
+        _deadlines.repair_zeroed_clone_presets()
+        # One-time: decks whose deadline already passed under the old
+        # implicit "maintain" default now follow `deadline_passed_mode`
+        # ("pause"). Guarded by its own dated flag, and it never touches a
+        # deck that explicitly chose maintain after this shipped — see the
+        # eligibility notes on `migrate_passed_mode_default`.
+        _deadlines.migrate_passed_mode_default()
         _deadlines.refresh_all()
         _deadlines.check_due_transitions()
 
@@ -3629,51 +4414,64 @@ def _open_add(*args: Any, **kwargs: Any) -> None:
     isn't), there's nothing to open a panel inside, so fall back to the
     old full-pane inline Add. If neither embed is enabled, fall back to
     Anki's own Add Cards window."""
-    if _embed_enabled("embed_add") and _config().get("restyle_addcard", True):
-        try:
-            from . import addcard_embed
-            if _embed_enabled("embed_browse"):
-                from . import browse_embed
-                browse_embed.open_inline(mw)
-                if browse_embed._state.get("overlay") is not None:
-                    browse_embed._open_add_in_panel(mw)
-                    return
-                # Browse's embed didn't come up for some reason — fall
-                # through to a plain full-pane Add rather than doing
-                # nothing.
-            addcard_embed.open_inline(mw)
+    try:
+        if _embed_enabled("embed_add") and _config().get("restyle_addcard", True):
+            try:
+                from . import addcard_embed
+                if _embed_enabled("embed_browse"):
+                    from . import browse_embed
+                    browse_embed.open_inline(mw)
+                    if browse_embed._state.get("overlay") is not None:
+                        browse_embed._open_add_in_panel(mw)
+                        return
+                    # Browse's embed didn't come up for some reason — fall
+                    # through to a plain full-pane Add rather than doing
+                    # nothing.
+                addcard_embed.open_inline(mw)
+                return
+            except Exception:
+                pass
+        orig = getattr(mw, "_ba_orig_on_add_card", None)
+        if orig is not None:
+            orig(*args, **kwargs)
             return
+        try:
+            from aqt import dialogs
+            dialogs.open("AddCards", mw)
         except Exception:
             pass
-    orig = getattr(mw, "_ba_orig_on_add_card", None)
-    if orig is not None:
-        orig(*args, **kwargs)
-        return
-    try:
-        from aqt import dialogs
-        dialogs.open("AddCards", mw)
-    except Exception:
-        pass
+    finally:
+        # Belt-and-braces for the embed paths above (open_inline/
+        # _open_add_in_panel push their own occlusion state on their own
+        # exit too, via _open_browse/_open_settings-style tails elsewhere)
+        # — cheap, idempotent, and covers the orig()/dialogs.open()
+        # fallbacks, which are real top-level windows this function
+        # itself never needs to occlude-push for but which may be
+        # closing an embed that was open a moment ago.
+        _push_video_occlusion()
 
 
 def _open_browse(*args: Any, **kwargs: Any) -> None:
     """Browse — inline embed when enabled, else Anki's own window."""
-    if _embed_enabled("embed_browse"):
-        try:
-            from . import browse_embed
-            browse_embed.open_inline(mw)
+    try:
+        if _embed_enabled("embed_browse"):
+            try:
+                from . import browse_embed
+                browse_embed.open_inline(mw)
+                return
+            except Exception:
+                pass
+        orig = getattr(mw, "_ba_orig_on_browse", None)
+        if orig is not None:
+            orig(*args, **kwargs)
             return
+        try:
+            from aqt import dialogs
+            dialogs.open("Browser", mw)
         except Exception:
             pass
-    orig = getattr(mw, "_ba_orig_on_browse", None)
-    if orig is not None:
-        orig(*args, **kwargs)
-        return
-    try:
-        from aqt import dialogs
-        dialogs.open("Browser", mw)
-    except Exception:
-        pass
+    finally:
+        _push_video_occlusion()
 
 
 def _open_stats(*args: Any, **kwargs: Any) -> None:
@@ -3681,27 +4479,30 @@ def _open_stats(*args: Any, **kwargs: Any) -> None:
     (legacy DeckStats) always falls through to Anki."""
     orig = getattr(mw, "_ba_orig_on_stats", None)
     try:
-        from aqt.utils import KeyboardModifiersPressed
-        if KeyboardModifiersPressed().shift and orig is not None:
-            orig(*args, **kwargs)
-            return
-    except Exception:
-        pass
-    if _embed_enabled("embed_stats"):
         try:
-            from . import stats_embed
-            stats_embed.open_inline(mw)
-            return
+            from aqt.utils import KeyboardModifiersPressed
+            if KeyboardModifiersPressed().shift and orig is not None:
+                orig(*args, **kwargs)
+                return
         except Exception:
             pass
-    if orig is not None:
-        orig(*args, **kwargs)
-        return
-    try:
-        from aqt import dialogs
-        dialogs.open("NewDeckStats", mw)
-    except Exception:
-        pass
+        if _embed_enabled("embed_stats"):
+            try:
+                from . import stats_embed
+                stats_embed.open_inline(mw)
+                return
+            except Exception:
+                pass
+        if orig is not None:
+            orig(*args, **kwargs)
+            return
+        try:
+            from aqt import dialogs
+            dialogs.open("NewDeckStats", mw)
+        except Exception:
+            pass
+    finally:
+        _push_video_occlusion()
 
 
 def _open_prefs(*args: Any, **kwargs: Any) -> None:
@@ -3788,7 +4589,12 @@ def _setup_sidebar_shortcuts() -> None:
                     import_module("." + mod, __name__).close_inline()
                 except Exception:
                     pass
-            return _orig_move_to_state(state, *args, **kwargs)
+            _push_video_occlusion()
+            result = _orig_move_to_state(state, *args, **kwargs)
+            # See `_nudge_web_repaint()` for why this is here and why it's
+            # update() and never repaint().
+            _nudge_web_repaint()
+            return result
 
         mw.moveToState = _patched_move_to_state  # type: ignore[assignment]
     except Exception:
@@ -3831,6 +4637,32 @@ def _setup_sidebar_shortcuts() -> None:
     except Exception:
         pass
 
+    # Cmd+Shift+B — Report a bug, from anywhere (deck list, reviewer, editor
+    # overlays). Base sequence is configurable via config.json's
+    # `bug_report_shortcut` (default "Ctrl+Shift+B", which Qt already maps
+    # to Cmd+Shift+B on macOS); we also bind the literal Meta+Shift+B form,
+    # belt-and-braces, same as the Ctrl+, / Meta+, settings shortcut below.
+    def _open_bug_report() -> None:
+        try:
+            from . import bugreport as _bugreport
+            _bugreport.open_dialog()
+        except Exception:
+            pass
+    try:
+        from aqt.qt import QShortcut, QKeySequence, Qt
+        base_seq = str(_config().get("bug_report_shortcut", "Ctrl+Shift+B") or "Ctrl+Shift+B")
+        seqs = {base_seq, "Ctrl+Shift+B", "Meta+Shift+B"}
+        for seq in seqs:
+            try:
+                sc = QShortcut(QKeySequence(seq), mw)
+                sc.setAutoRepeat(False)
+                sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+                sc.activated.connect(_open_bug_report)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
 
 gui_hooks.main_window_did_init.append(_setup_sidebar_shortcuts)
 
@@ -3847,6 +4679,36 @@ except Exception:
 # main_window_did_init.
 try:
     gui_hooks.main_window_did_init.append(lambda *a: _install_silent_sync())
+except Exception:
+    pass
+
+# AnkiHub's unsolicited "Sign in to AnkiHub." window: quiet it now (AnkiHub
+# sorts before us in addons21, so it is normally already imported), again
+# when the profile opens, and before every sync. sync_will_start fires inside
+# the native sync, ahead of the after_sync callback that shows the window, so
+# the last of these catches an AnkiHub that loaded after us.
+try:
+    _quiet_ankihub_login_nag()
+    gui_hooks.profile_did_open.append(lambda *a: _quiet_ankihub_login_nag())
+    gui_hooks.sync_will_start.append(lambda *a: _quiet_ankihub_login_nag())
+except Exception:
+    pass
+
+# Reload the main webview when its renderer process dies (crash, OOM)
+# instead of leaving the window grey until the app is quit. See
+# renderer_recovery.py; ticket 20260923-153047.
+def _install_renderer_recovery(*_a) -> None:
+    try:
+        from . import renderer_recovery as _rr
+
+        _rr.install(mw)
+    except Exception:
+        pass
+
+
+try:
+    gui_hooks.main_window_did_init.append(_install_renderer_recovery)
+    gui_hooks.profile_did_open.append(_install_renderer_recovery)
 except Exception:
     pass
 
@@ -3934,6 +4796,53 @@ except Exception as _e:
     except Exception:
         pass
 
+# Browse context menu: "Restudy N selected cards" (filtered deck of the
+# selection, then straight into the reviewer).
+try:
+    from . import restudy as _restudy
+    _restudy.register()
+except Exception as _e:
+    try:
+        print(f"[anki-design] restudy register failed: {_e}", flush=True)
+    except Exception:
+        pass
+
+# Browse sidebar tags: sweep-select a run of tags, drag a selection onto
+# the line above/below a tag to sort it (custom order in `tag_order`), or
+# into a tag to nest. Deck rows get the same (sidebar_decks.py).
+try:
+    from . import sidebar_tags as _sidebar_tags
+    _sidebar_tags.register()
+except Exception as _e:
+    try:
+        print(f"[anki-design] sidebar_tags register failed: {_e}", flush=True)
+    except Exception:
+        pass
+
+# Browse sidebar decks: the same gestures (sidebar_tags.py serves both),
+# with the sidebar's deck tree sorted by the home list's own `deck_order`,
+# which a line drop in the sidebar writes.
+try:
+    from . import sidebar_decks as _sidebar_decks
+    _sidebar_decks.register()
+except Exception as _e:
+    try:
+        print(f"[anki-design] sidebar_decks register failed: {_e}", flush=True)
+    except Exception:
+        pass
+
+
+# Tag auto-organizer: file every tag under its course's root
+# (`tag_roots`), after adds, edits and imports, plus Tools > Organize Tags Now.
+try:
+    from . import tag_organizer as _tag_organizer
+    _tag_organizer.register()
+except Exception as _e:
+    try:
+        print(f"[anki-design] tag_organizer register failed: {_e}", flush=True)
+    except Exception:
+        pass
+
 
 # Inline reviewer editing — replaces the EditCurrent dialog.
 try:
@@ -3942,6 +4851,41 @@ try:
 except Exception as _e:
     try:
         print(f"[anki-design] editreviewer register failed: {_e}", flush=True)
+    except Exception:
+        pass
+
+
+# macOS full screen: without a toolbar, AppKit slides the auto-hidden
+# "Anki+" title bar over the content. fullscreen_inset gives the window an
+# empty auto-hiding NSToolbar while it is full screen (attached on AppKit's
+# did-enter, removed on will-exit), so AppKit moves the content down with
+# the bar's reveal and back, as in Safari. Attaches on main_window_did_init.
+try:
+    from . import fullscreen_inset as _fullscreen_inset
+
+    gui_hooks.main_window_did_init.append(
+        lambda *a: _fullscreen_inset.install(mw)
+    )
+except Exception as _e:
+    try:
+        print(f"[anki-design] fullscreen_inset install failed: {_e}", flush=True)
+    except Exception:
+        pass
+
+
+# Deck list drag (reorder / nest): AnkiWebView drops every drop on the main
+# webview unless `allow_drops` is set, which setHtml resets on each render,
+# so the page's `drop` listener never ran. webview_drops lets drags that
+# started inside the page through (external file drops stay blocked).
+try:
+    from . import webview_drops as _webview_drops
+
+    gui_hooks.main_window_did_init.append(
+        lambda *a: _webview_drops.install(getattr(mw, "web", None))
+    )
+except Exception as _e:
+    try:
+        print(f"[anki-design] webview_drops install failed: {_e}", flush=True)
     except Exception:
         pass
 
@@ -5361,3 +6305,13 @@ gui_hooks.profile_did_open.append(_dev_cmd_start)
 gui_hooks.main_window_did_init.append(_dev_start)
 gui_hooks.main_window_did_init.append(_dev_cmd_start)
 gui_hooks.profile_will_close.append(_dev_shutdown)
+
+
+# Live test harness (tests/live/run_in_app.py). Inert unless the harness set
+# ANKI_DESIGN_LIVE_TEST for a throwaway profile; see tests/live/README.md.
+try:
+    from . import live_test as _live_test
+
+    _live_test.install()
+except Exception:
+    pass

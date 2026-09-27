@@ -16,17 +16,36 @@
   // Lightweight stroke set tuned to feel editorial, not iconographic.
   // Each icon is structured so the parts most worth animating on hover are
   // wrapped in groups with stable class hooks (see sidebar.css).
+  //
+  // Icon keys are named for what they draw, not for the cmd that happens
+  // to use them today — makeRow() looks up `it.icon || it.cmd`, so a row
+  // can point at a glyph that doesn't share its command name. That's how
+  // "layers" ended up on the browse row and "brain" on the decks row: the
+  // rename swapped which destination gets which name/icon without moving
+  // either destination's underlying command.
   var ICONS = {
-    decks:
-      '<g class="ba-i-decks-top"><path d="M3 7l9-4 9 4-9 4-9-4z"/></g>' +
-      '<g class="ba-i-decks-mid"><path d="M3 12l9 4 9-4"/></g>' +
-      '<g class="ba-i-decks-bot"><path d="M3 17l9 4 9-4"/></g>',
-    browse:
-      '<g class="ba-i-search-lens">' +
-        '<circle cx="11" cy="11" r="6.5"/>' +
+    // Stacked-cards glyph. Used by the "Decks" label, which now sits on
+    // the rail's browse row (see the nav array below) — the Browser is
+    // where decks and cards actually live, so it inherited this icon.
+    layers:
+      '<g class="ba-i-layers-top"><path d="M3 7l9-4 9 4-9 4-9-4z"/></g>' +
+      '<g class="ba-i-layers-mid"><path d="M3 12l9 4 9-4"/></g>' +
+      '<g class="ba-i-layers-bot"><path d="M3 17l9 4 9-4"/></g>',
+    // Two-hemisphere brain, split down the middle. Each half is one closed
+    // path: the outer curve is the hemisphere's silhouette and the final
+    // "Z" draws a straight line back up to (12, y) — that shared vertical
+    // edge, doubled by the mirrored other half, IS the central division,
+    // so there's no separate line to keep in sync. Used by "Study": the
+    // deck-browser row is where a session actually starts, and the brain
+    // is the Anki+ namesake.
+    brain:
+      '<g class="ba-i-brain-l">' +
+        '<path d="M12 4.6C9.8 3.3 6.7 4 5.6 6.1C4.6 8 4.6 9.7 5.6 11.3' +
+        'C4.3 13 4.6 15.3 6.6 16.5C8 17.4 9.6 18.3 12 18.4Z"/>' +
       '</g>' +
-      '<g class="ba-i-search-handle">' +
-        '<path d="M20 20l-4.3-4.3"/>' +
+      '<g class="ba-i-brain-r">' +
+        '<path d="M12 4.6C14.2 3.3 17.3 4 18.4 6.1C19.4 8 19.4 9.7 18.4 11.3' +
+        'C19.7 13 19.4 15.3 17.4 16.5C16 17.4 14.4 18.3 12 18.4Z"/>' +
       '</g>',
     stats:
       '<g class="ba-i-bars">' +
@@ -94,9 +113,13 @@
     b.title = it.label;
     if (it.active) b.setAttribute("data-active", "true");
     if (it.cls) b.classList.add(it.cls);
+    // `icon` overrides the glyph when a row's label/icon no longer matches
+    // its cmd name (see the ICONS comment above) — falls back to cmd for
+    // every row that doesn't need one.
+    var iconName = it.icon || it.cmd;
     var iconBlock = (it.cmd === "sync")
-      ? '<span class="ba-sync-iconwrap">' + iconSVG(it.cmd) + SYNC_CHECK_SVG + '</span>'
-      : iconSVG(it.cmd);
+      ? '<span class="ba-sync-iconwrap">' + iconSVG(iconName) + SYNC_CHECK_SVG + '</span>'
+      : iconSVG(iconName);
     // .ba-side-l-text wraps the label so the sync row can rewrite it in
     // place ("Sync" → "Syncing…" → "Synced") without touching siblings.
     var inner = iconBlock
@@ -231,7 +254,7 @@
       // it lives in the head, never inside a part of the rail that
       // collapse itself would hide.
       + '<div class="ba-side-head">'
-      +   '<span class="ad-logo ba-side-mark" aria-label="Anki+ — go to decks">'
+      +   '<span class="ad-logo ba-side-mark" aria-label="Anki+ — go to Study">'
       +     '<span class="ad-mark">anki<span class="ad-plus">+</span></span>'
       +   '</span>'
       +   '<button type="button" class="ba-side-collapse-btn" '
@@ -274,7 +297,7 @@
 
     // Wordmark doubles as the home button: clicking anki+ returns to the
     // deck screen. "decks" also closes any open embed (same command the
-    // rail's Decks item sends), and Python no-ops when already home.
+    // rail's Study item sends), and Python no-ops when already home.
     var mark = aside.querySelector(".ba-side-mark");
     if (mark) {
       mark.setAttribute("role", "button");
@@ -348,10 +371,20 @@
     // Browse (its own "+ Add" button). The "A" shortcut still works (see
     // __init__.py's _setup_sidebar_shortcuts / _open_add): it opens
     // Browse with the Add panel already up, for muscle memory.
+    // "Decks" and "Study" swapped labels/icons from what their cmd names
+    // suggest (Sept 2026 rename): the deck-browser row is where a session
+    // actually starts, so it's "Study" with the brain glyph; the browse
+    // row is where decks and cards actually live, so it took "Decks" and
+    // the layers glyph. `key` still reflects Anki's own global shortcut
+    // for each destination (aqt/main.py's a/d/b/t/y/s bindings, patched in
+    // _setup_sidebar_shortcuts) — those didn't move, so the letters no
+    // longer match their new labels. Rebinding them isn't free: Anki
+    // already claims a/b/d/t/y/s globally, so there's no untaken letter
+    // to give "Study" or "Decks" that would need this same workaround.
     [
-      { cmd: "decks",  label: "Decks",  key: "D" },
-      { cmd: "browse", label: "Browse", key: "B" },
-      { cmd: "stats",  label: "Stats",  key: "T" },
+      { cmd: "decks",  label: "Study", key: "D", icon: "brain" },
+      { cmd: "browse", label: "Decks", key: "B", icon: "layers" },
+      { cmd: "stats",  label: "Stats", key: "T" },
     ].forEach(function (it) { nav.appendChild(makeRow(it)); });
     aside.appendChild(nav);
 
@@ -432,6 +465,8 @@
     document.documentElement.setAttribute(
       "data-ba-sidebar", collapsedState ? "collapsed" : ""
     );
+    // The user's chosen width only applies while expanded (see stampWidth).
+    stampWidth();
     var btn = document.querySelector(".ba-side-collapse-btn");
     if (btn) {
       btn.setAttribute(
@@ -448,6 +483,78 @@
   window.__baSetSidebarCollapsed = function (collapsed) {
     applyCollapsed(collapsed, { silent: true });
   };
+
+  // ---- width (drag the right edge) ----------------------------------- //
+  // The user's chosen expanded width, in px. It rides on the same
+  // `--rf-side-w` custom property the collapse state swings, set inline on
+  // <html> so it wins over theme.css's 264px default; the inline value is
+  // removed while collapsed so the 64px rule can take over, and put back on
+  // expand. Python persists it as `sidebar_width` (see addcard.sidebar_w(),
+  // which the Qt overlays read, and the ba:sidebar-width pycmd handler).
+  var SIDE_W_DEFAULT = 264, SIDE_W_MIN = 200, SIDE_W_MAX = 480;
+  function clampWidth(px) {
+    px = Math.round(Number(px));
+    if (!isFinite(px)) return SIDE_W_DEFAULT;
+    return Math.max(SIDE_W_MIN, Math.min(SIDE_W_MAX, px));
+  }
+  var widthState = clampWidth(
+    (typeof window.__baSidebarWidth === "number") ? window.__baSidebarWidth
+                                                  : SIDE_W_DEFAULT);
+  function stampWidth() {
+    var root = document.documentElement;
+    if (collapsedState) root.style.removeProperty("--rf-side-w");
+    else root.style.setProperty("--rf-side-w", widthState + "px");
+  }
+  function applyWidth(px, opts) {
+    widthState = clampWidth(px);
+    stampWidth();
+    if (!opts || !opts.silent) send("sidebar-width:" + widthState);
+  }
+  window.__baSetSidebarWidth = function (px) { applyWidth(px, { silent: true }); };
+
+  // A thin fixed strip straddling the rail's right border. It sits beside
+  // the aside (not inside it) so the aside's overflow clipping can't hide
+  // it, and its `left` is driven by `--rf-side-w` so it tracks the edge
+  // through collapse and resize alike. sidebar.css shows a highlight on
+  // hover and hides it while collapsed. Plain mouse events: a real drag
+  // and a Qt-synthesised one both arrive as those.
+  function makeResizer() {
+    var h = document.createElement("div");
+    h.className = "ba-side-resizer";
+    h.setAttribute("role", "separator");
+    h.setAttribute("aria-orientation", "vertical");
+    h.setAttribute("aria-label", "Resize sidebar");
+    h.title = "Drag to resize";
+    var startX = 0, startW = 0;
+    function onMove(e) {
+      applyWidth(startW + (e.clientX - startX), { silent: true });
+      e.preventDefault();
+    }
+    function onUp(e) {
+      document.removeEventListener("mousemove", onMove, true);
+      document.removeEventListener("mouseup", onUp, true);
+      document.documentElement.removeAttribute("data-ba-resizing");
+      h.classList.remove("ba-side-resizer--active");
+      // One persist per gesture: the live moves were silent.
+      applyWidth(startW + (e.clientX - startX));
+    }
+    h.addEventListener("mousedown", function (e) {
+      if (e.button !== 0 || collapsedState) return;
+      e.preventDefault();
+      startX = e.clientX;
+      startW = widthState;
+      // Kills the width/padding transitions for the duration so the rail
+      // sticks to the pointer instead of easing after it.
+      document.documentElement.setAttribute("data-ba-resizing", "");
+      h.classList.add("ba-side-resizer--active");
+      document.addEventListener("mousemove", onMove, true);
+      document.addEventListener("mouseup", onUp, true);
+    });
+    h.addEventListener("dblclick", function () {
+      if (!collapsedState) applyWidth(SIDE_W_DEFAULT);
+    });
+    return h;
+  }
   // The sync row drives a small state machine:
   //
   //   idle  ──click──▶  active  ──result(ok)──▶  reveal-ok   ──▶  idle
@@ -522,6 +629,9 @@
     if (document.querySelector(".ba-side")) return;
     var aside = build();
     document.body.insertBefore(aside, document.body.firstChild || null);
+    var old = document.querySelector(".ba-side-resizer");
+    if (old) old.parentNode.removeChild(old);
+    document.body.insertBefore(makeResizer(), aside.nextSibling);
     document.body.classList.add("ba-with-side");
     if (pending.standing) applyStanding(pending.standing);
     if (pending.active)   applyActive(pending.active);
@@ -556,12 +666,12 @@
   // Bootstrap from the <head>-embedded standing data (set by the addon
   // before any body script runs) — eliminates the eval-vs-IIFE race.
   if (window.__baStandingData) pending.standing = window.__baStandingData;
-  // Same for the active rail item. It used to be hardcoded onto the Decks
-  // row, which was only ever right on a cold start: an inline embed (Add,
-  // Browse, Stats, Settings) is an overlay over the deck browser, and any
-  // re-render of the page underneath it rebuilt this rail — pointing at
-  // Decks while Browse was still the thing on screen. Python seeds what it
-  // actually is.
+  // Same for the active rail item. It used to be hardcoded onto the Study
+  // row (cmd "decks"), which was only ever right on a cold start: an
+  // inline embed (Add, Browse, Stats, Settings) is an overlay over the
+  // deck browser, and any re-render of the page underneath it rebuilt this
+  // rail — pointing at Study while Browse (now labelled Decks) was still
+  // the thing on screen. Python seeds what it actually is.
   pending.active = window.__baActiveItem || "decks";
 
   // Stamp the collapse attribute on <html> immediately (before the aside
@@ -571,6 +681,10 @@
   try {
     if (window.__baSidebarCollapsed) {
       document.documentElement.setAttribute("data-ba-sidebar", "collapsed");
+    } else {
+      // Same for a user-chosen width: stamp it inline now so the first
+      // paint already has the page padded to the rail the user left.
+      document.documentElement.style.setProperty("--rf-side-w", widthState + "px");
     }
   } catch (e) {}
 

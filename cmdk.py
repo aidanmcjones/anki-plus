@@ -49,11 +49,15 @@ MAX_TAGS = 6
 # --------------------------------------------------------------------------- #
 _ACTIONS: List[Dict[str, Any]] = [
     {
+        # Same destination as the sidebar's "decks" cmd (mw.moveToState
+        # "deckBrowser" — see __init__.py's _on_js_message). Titled to match
+        # that row's Sept 2026 rename: it's the screen a session starts
+        # from, not just a list.
         "key": "decks",
-        "title": "Go to Decks",
-        "sub": "Return to the deck homepage",
-        "icon": "home",
-        "keywords": ["home", "deck list", "back"],
+        "title": "Study",
+        "sub": "Pick a deck and start studying",
+        "icon": "brain",
+        "keywords": ["home", "deck list", "back", "decks", "study"],
     },
     {
         "key": "add",
@@ -63,11 +67,15 @@ _ACTIONS: List[Dict[str, Any]] = [
         "keywords": ["new card", "new note", "create"],
     },
     {
+        # Same destination as the sidebar's "browse" cmd (mw.onBrowse()).
+        # Titled to match that row's rename — this is where decks and
+        # cards actually live, so it took the "Decks" name. "browse" stays
+        # a keyword so the old muscle memory still finds it.
         "key": "browse",
-        "title": "Open Browser",
-        "sub": "Browse and search all cards",
-        "icon": "browse",
-        "keywords": ["find", "cards", "search"],
+        "title": "Decks",
+        "sub": "Where your decks and cards live",
+        "icon": "deck",
+        "keywords": ["find", "cards", "search", "browse", "browser"],
     },
     {
         "key": "stats",
@@ -179,6 +187,15 @@ _ACTIONS: List[Dict[str, Any]] = [
         "title": "Theme: Match system",
         "icon": "theme",
         "keywords": ["auto", "appearance"],
+    },
+    # No `contexts` — available on every screen (deck list, reviewer,
+    # editor overlays), same as the Cmd+Shift+B hotkey (see bugreport.py).
+    {
+        "key": "report-bug",
+        "title": "Report a bug",
+        "sub": "Save a ticket with a screenshot",
+        "icon": "flag",
+        "keywords": ["bug", "issue", "feedback", "ticket", "problem"],
     },
 ]
 
@@ -762,6 +779,15 @@ def _do_action(key: str) -> None:
                 mw.col.update_card(card)
             except Exception:
                 pass
+        except Exception:
+            pass
+        return
+
+    if key == "report-bug":
+        try:
+            from . import bugreport as _bugreport
+
+            _bugreport.open_dialog()
         except Exception:
             pass
         return

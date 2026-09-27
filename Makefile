@@ -79,8 +79,19 @@ DEMO_PROFILE := User 1
 SANDBOX_ROOT := $(HOME)/Library/Caches/anki-design-sandbox
 SANDBOX      := $(SANDBOX_ROOT)/$(NAME)
 DEMO_SANDBOX := $(SANDBOX_ROOT)/$(DEMO_NAME)
+# user_files/nature/ and meta.json are excluded from every sync, not just
+# the initial sandbox copy: the nature library is a curated multi-hundred-MB
+# media tree that has nothing to do with source edits (re-copying it on
+# every `make sync` after a one-line web/ change would be painfully slow),
+# and meta.json is sandbox-local test config (see the landing-shot recipe
+# below). Practical effect: the sandbox's copies of both are its own —
+# `--delete` never removes a sandbox-side index.json/meta.json/clip the
+# checkout doesn't have, and a checkout-side edit to either never reaches
+# the sandbox. Curate the library and edit meta.json directly under
+# $(SANDBOX)/user_files/nature and $(SANDBOX)/meta.json instead.
 SB_EXCLUDES  := --exclude '.git/' --exclude '__pycache__/' --exclude 'out/' \
-                --exclude 'dist/' --exclude '.context' --exclude '.devmode'
+                --exclude 'dist/' --exclude '.context' --exclude '.devmode' \
+                --exclude 'user_files/nature/' --exclude 'meta.json'
 
 # $(call ba-sandbox,<dir>) — refresh a sandbox, arm it, point .context at it,
 # and make sure the checkout itself is left disarmed.

@@ -51,6 +51,10 @@ try:
     from . import colors as _colors
 except Exception:  # pragma: no cover — standalone import during tooling
     _colors = None
+try:
+    from . import nature as _nature
+except Exception:  # pragma: no cover — standalone import during tooling
+    _nature = None
 
 
 def _icon_url(name: str) -> str:
@@ -797,6 +801,10 @@ class AnkiDesignSettingsPage(QWidget):
         # Strong refs to button groups created in _build; Qt will drop
         # exclusivity if the group goes out of scope.
         self._radio_groups: List[QButtonGroup] = []
+        # config key -> callable(value) that checks that option in the
+        # matching _radio_row, as if clicked. Lets a dependent picker (the
+        # Scene / Nature-video choosers) switch Backdrop to its own mode.
+        self._radio_setters: Dict[str, Any] = {}
         self._build()
         self._apply_styles()
 
@@ -825,6 +833,25 @@ class AnkiDesignSettingsPage(QWidget):
         w: Optional[QWidget] = self.parentWidget()
         while w is not None:
             if isinstance(w, QDialog):
+                # When this page is hosted inline (settings_embed.py
+                # reparents the whole Preferences dialog into its overlay
+                # QFrame), `w` here IS that same reparented instance —
+                # calling `w.accept()` directly goes through
+                # `Preferences.accept()` -> `accept_with_callback(None)`:
+                # saves prefs but runs no callback, so the embed's
+                # overlay/curtain never get torn down and the QFrame is
+                # left stuck over the deck browser. Route through
+                # `close_inline()` instead, which does the identical save
+                # via `accept_with_callback(_teardown_now)` and actually
+                # brings the overlay down. Only the standalone (non-embed)
+                # Preferences dialog falls through to the plain accept().
+                try:
+                    from . import settings_embed
+                    if settings_embed._state.get("prefs") is w:
+                        settings_embed.close_inline()
+                        return
+                except Exception:
+                    pass
                 try:
                     w.accept()
                 except Exception:
@@ -952,6 +979,8 @@ class AnkiDesignSettingsPage(QWidget):
             "Page colour in dark mode.",
         ))
 
+        self._add_backdrop_rows(v)
+
         def feature_row(key: str, label: str, default: bool, hint: str) -> QWidget:
             cb = QCheckBox(label)
             cb.setChecked(bool(self._g(key, default)))
@@ -1013,7 +1042,9 @@ class AnkiDesignSettingsPage(QWidget):
         v.addWidget(feature_row(
             "deck_drag_move", "Drag decks to move them", True,
             "Drop a deck onto another to nest it, or onto the top-level "
-            "zone to un-nest it. “Move to…” in the deck menu does the same.",
+            "zone to un-nest it. “Move to…” in the deck menu does the same. "
+            "Drop it on the top or bottom edge of a sibling to resort the "
+            "list instead.",
         ))
         v.addWidget(feature_row(
             "deck_subsections", "New subsection…", True,
@@ -1080,6 +1111,11 @@ class AnkiDesignSettingsPage(QWidget):
             "Anywhere on the card works like Space.",
         ))
         v.addWidget(feature_row(
+            "arrow_key_grading", "Grade with arrow keys", True,
+            "Up Easy, Right Good, Left Hard, Down Again. On the question "
+            "side any arrow shows the answer.",
+        ))
+        v.addWidget(feature_row(
             "press_feedback", "Press feedback", True,
             "A soft bloom from the key you graded with.",
         ))
@@ -1117,6 +1153,12 @@ class AnkiDesignSettingsPage(QWidget):
             "Off opens Anki's separate Browse window.",
         ))
         v.addWidget(feature_row(
+            "browse_card_drag", "Drag cards in Browse", True,
+            "Pull selected cards onto a deck in the Browse sidebar to move "
+            "them there, or onto another row to reposition new cards "
+            "before it. Change Deck and Reposition stay available.",
+        ))
+        v.addWidget(feature_row(
             "embed_stats", "Stats inside the main window", True,
             "Off opens Anki's separate Stats window.",
         ))
@@ -1147,9 +1189,14 @@ class AnkiDesignSettingsPage(QWidget):
         v.addWidget(_section_block(self._palette, "Heatmap"))
         v.addSpacing(2)
 
-        # Track the heatmap toggle so we can gray out the minimum-weeks
-        # field when the heatmap is off — leaving it active suggests the
-        # value still matters, which it doesn't.
+        # The minimum-weeks field stays live whether or not the heatmap is
+        # on. It used to be disabled while the toggle was off, but the
+        # page's QSS pins the spinbox and label colours, so a disabled row
+        # looked identical to a live one — users saw a normal spinbox that
+        # silently ignored clicks, keys and scroll ("can't adjust minimum
+        # weeks shown"). Editing it with the heatmap off is harmless: the
+        # value is simply stored for when the heatmap is turned on, and
+        # the indent + hint already tie it to the toggle above.
         heatmap_cb = QCheckBox("Show review-activity heatmap")
         heatmap_cb.setChecked(bool(self._g("show_heatmap", True)))
         weeks = QSpinBox()
@@ -1170,12 +1217,9 @@ class AnkiDesignSettingsPage(QWidget):
             "For new collections; older ones extend back to your first review.",
         )
 
-        def _toggle_heatmap(checked: bool) -> None:
-            self._set("show_heatmap", bool(checked))
-            weeks_row.setEnabled(bool(checked))
-
-        heatmap_cb.toggled.connect(_toggle_heatmap)
-        weeks_row.setEnabled(heatmap_cb.isChecked())
+        heatmap_cb.toggled.connect(
+            lambda checked: self._set("show_heatmap", bool(checked))
+        )
 
         heatmap_wrap = QWidget()
         hrow = QVBoxLayout(heatmap_wrap)
@@ -1347,12 +1391,84 @@ class AnkiDesignSettingsPage(QWidget):
 
         outer.addWidget(footer)
 
+    def _add_backdrop_rows(self, v: QVBoxLayout) -> None:
+        """Backdrop — what sits behind the deck list and overview — plus
+        the rows that only matter in one of its modes: the Scene picker,
+        the Nature-video picker and the rotate interval.
+
+        The pickers are always live, whatever mode is active. They used to
+        be `setEnabled(False)` outside their own mode, but the page's
+        stylesheet gives a disabled dropdown or checkbox no distinct look,
+        so a user on Scenes who came to browse their nature library found
+        a dropdown that wouldn't open and a clip list that wouldn't scroll,
+        with nothing saying why. Instead, picking a scene or a clip
+        switches Backdrop to that mode — the same convention the
+        background rows use, where choosing a custom colour selects the
+        Custom radio — so a choice made here is never a dead action."""
+        scene_row, _scene_combo = self._combo_row(
+            "scene", "shuffle",
+            [("shuffle", "Shuffle (all ten)")] + [
+                (name, name.capitalize())
+                for name in (
+                    "peaks", "dunes", "forest", "canyon", "lake",
+                    "volcano", "isles", "tundra", "spires", "ruins",
+                )
+            ],
+            "Scene",
+            "Which illustrated landscape shows when Backdrop is Scenes. "
+            "Picking one switches Backdrop to Scenes.",
+            on_change=lambda _v: self._select_radio("backdrop", "scene"),
+        )
+        video_section = self._video_selection_section(
+            on_change=lambda: self._select_radio("backdrop", "video"),
+        )
+        rotate_row = self._duration_row(
+            "video_rotate_seconds", 300,
+            "Rotate video every",
+            "How often the nature-video backdrop crossfades to the next "
+            "clip. Values below 5 seconds are rounded up to 5 — anything "
+            "faster reads as a glitch rather than a change of scene — and "
+            "above 24 hours are capped at 24 hours. Choose “Never” to "
+            "loop a single clip without rotating.",
+        )
+
+        v.addWidget(self._radio_row(
+            "backdrop", "scene",
+            [
+                ("off", "Off"),
+                ("black", "Pure black"),
+                ("aurora", "Aurora"),
+                ("scene", "Scenes"),
+                ("video", "Nature video"),
+            ],
+            "Backdrop",
+            "What sits behind the deck list and overview. The reviewer "
+            "never gets one — motion behind a card you're recalling is a "
+            "distraction.",
+        ))
+        v.addWidget(scene_row)
+        v.addWidget(video_section)
+        v.addWidget(rotate_row)
+
+    def _select_radio(self, key: str, value: str) -> None:
+        """Check `value` in the `_radio_row` bound to config `key`, exactly
+        as if the user had clicked it: config is written and the row's
+        on_change runs. A no-op when it's already the checked option (Qt
+        emits no `toggled` for a checked button re-checked), so a picker
+        used in its own mode doesn't write config twice."""
+        setter = self._radio_setters.get(key)
+        if setter is not None:
+            setter(value)
+
     # ----- builders ----- #
     def _radio_row(self, key: str, default: str,
                    options: List[Tuple[str, str]],
-                   label: str, hint: Optional[str] = None) -> QWidget:
+                   label: str, hint: Optional[str] = None,
+                   on_change: Optional[Any] = None) -> QWidget:
         """Horizontal radio group as a stacked field row. options is
-        ``[(config_value, display_label), …]``."""
+        ``[(config_value, display_label), …]``. ``on_change``, if given, is
+        called with the new value after the config write — for rows (like
+        Backdrop) that also need to enable/disable other fields."""
         group = QButtonGroup(self)
         # Keep a reference so the group isn't garbage-collected and the
         # exclusivity stops working — Qt notoriously drops un-referenced
@@ -1363,16 +1479,343 @@ class AnkiDesignSettingsPage(QWidget):
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(14)
         current = self._g(key, default)
+        buttons: Dict[str, QRadioButton] = {}
+
+        def _choose(value: str) -> None:
+            self._set(key, value)
+            if on_change is not None:
+                on_change(value)
+
         for value, opt_label in options:
             rb = QRadioButton(opt_label)
             rb.setChecked(current == value)
             group.addButton(rb)
             rb.toggled.connect(
-                lambda checked, k=key, v=value: checked and self._set(k, v)
+                lambda checked, val=value: checked and _choose(val)
             )
             h.addWidget(rb)
+            buttons[value] = rb
+        h.addStretch(1)
+
+        def _select(value: str) -> None:
+            rb = buttons.get(value)
+            if rb is not None and not rb.isChecked():
+                rb.setChecked(True)  # -> toggled -> _choose, like a click
+
+        self._radio_setters[key] = _select
+        return _field_row(label, box, hint)
+
+    def _combo_row(self, key: str, default: Any,
+                    options: List[Tuple[Any, str]],
+                    label: str, hint: Optional[str] = None,
+                    formatter: Optional[Any] = None,
+                    on_change: Optional[Any] = None) -> Tuple[QWidget, QComboBox]:
+        """QComboBox as a stacked field row. ``options`` is
+        ``[(config_value, display_label), …]``. If the current config value
+        isn't one of ``options`` (e.g. it names a video file that's since
+        been removed from the library), a synthetic entry is appended so
+        opening Settings never silently rewrites it — only picking a
+        different option does. Persistence is wired here, not left to the
+        caller: `currentIndexChanged` writes straight to config on every
+        change, then calls ``on_change(value)`` if given — for rows (like
+        Scene) that also need to nudge another field. Returns
+        ``(row, combo)`` so a caller can still get at the combo itself;
+        every current caller discards that half."""
+        combo = QComboBox()
+        current = self._g(key, default)
+        values = [o[0] for o in options]
+        opts = list(options)
+        if current not in values:
+            shown = formatter(current) if formatter else str(current)
+            opts = opts + [(current, shown)]
+        for value, opt_label in opts:
+            combo.addItem(opt_label, value)
+        idx = combo.findData(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+        def _changed(_i: int) -> None:
+            value = combo.currentData()
+            self._set(key, value)
+            if on_change is not None:
+                on_change(value)
+
+        combo.currentIndexChanged.connect(_changed)
+        return _field_row(label, combo, hint), combo
+
+    def _duration_row(self, key: str, default: int, label: str,
+                       hint: Optional[str] = None) -> QWidget:
+        """A real duration input — value spinbox + seconds/minutes/hours
+        unit combo — plus a "Never" checkbox for the 0-means-loop-forever
+        case, replacing what used to be a fixed preset dropdown so any
+        value the user actually wants (47s, 90min, …) is reachable, not
+        just the five presets that shipped. Written to config as a plain
+        integer count of seconds; the floor/ceiling clamp itself lives in
+        nature.rotate_seconds, not here, so this only has to keep the
+        spinbox+combo product in Int32 range and let the render-time
+        clamp do the rest (documented in `hint`, not silently enforced
+        here, so a typed 2 shows as 2 until it's actually used)."""
+        current = self._g(key, default)
+        try:
+            current = int(current)
+        except (TypeError, ValueError):
+            current = default
+        is_never = current <= 0
+
+        box = QWidget()
+        h = QHBoxLayout(box)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(8)
+
+        spin = QSpinBox()
+        spin.setRange(1, 86400)
+        unit = QComboBox()
+        unit.addItem("Seconds", 1)
+        unit.addItem("Minutes", 60)
+        unit.addItem("Hours", 3600)
+        never_cb = QCheckBox("Never (loop one clip)")
+
+        # Pick the coarsest unit that divides the current value evenly, so
+        # a config of 3600 shows as "1 Hour" rather than "3600 Seconds" —
+        # purely a display nicety; the stored value is always in seconds.
+        basis = current if not is_never else default
+        if basis % 3600 == 0 and basis // 3600 >= 1:
+            val, mult_idx = basis // 3600, 2
+        elif basis % 60 == 0 and basis // 60 >= 1:
+            val, mult_idx = basis // 60, 1
+        else:
+            val, mult_idx = basis, 0
+        spin.setValue(max(1, min(86400, val)))
+        unit.setCurrentIndex(mult_idx)
+        never_cb.setChecked(is_never)
+        spin.setEnabled(not is_never)
+        unit.setEnabled(not is_never)
+
+        def _commit() -> None:
+            if never_cb.isChecked():
+                self._set(key, 0)
+            else:
+                mult = int(unit.currentData())
+                self._set(key, int(spin.value()) * mult)
+
+        def _toggle_never(checked: bool) -> None:
+            spin.setEnabled(not checked)
+            unit.setEnabled(not checked)
+            _commit()
+
+        spin.valueChanged.connect(lambda _v: _commit())
+        unit.currentIndexChanged.connect(lambda _i: _commit())
+        never_cb.toggled.connect(_toggle_never)
+
+        h.addWidget(spin)
+        h.addWidget(unit)
+        h.addSpacing(12)
+        h.addWidget(never_cb)
         h.addStretch(1)
         return _field_row(label, box, hint)
+
+    def _video_choices(self) -> Tuple[List[Tuple[Any, str]], str]:
+        """Options + hint for the video-selection combo, built from
+        ``user_files/nature/index.json`` at dialog-open time — a curation
+        run that adds or removes clips is picked up next time Settings
+        opens, no code change needed."""
+        videos: List[Dict[str, str]] = []
+        if _nature is not None:
+            try:
+                videos = _nature.read_index()
+            except Exception:
+                videos = []
+        if not videos:
+            return (
+                [("shuffle", "Shuffle all")],
+                "No clips found in user_files/nature/ yet. Nature video "
+                "will show the plain backdrop until a library is added.",
+            )
+        options: List[Tuple[Any, str]] = [("shuffle", "Shuffle all")]
+        for biome in _nature.biomes(videos):
+            options.append((f"biome:{biome}", f"Biome: {biome.title()}"))
+        for entry in videos:
+            options.append((entry["file"], entry.get("title") or entry["file"]))
+        return options, "Which clip(s) play when Backdrop is Nature video."
+
+    def _video_selection_section(self, on_change: Optional[Any] = None) -> QWidget:
+        """Quick-pick combo (shuffle / one biome / one file) plus a
+        scrollable checkbox list of every clip in the library, grouped
+        under biome headers. ``on_change``, if given, is called (no
+        arguments) after every user-driven config write from either
+        control — the Backdrop block uses it to switch to Nature video.
+        The two controls always agree with config and with each other:
+
+        - Checking (or unchecking down to a non-empty subset of) any clip
+          switches `video_selection` to the explicit `{"mode": "custom",
+          "files": [...]}` form and flips the combo to a synthetic
+          "Custom (checked below)" entry, so the two never silently
+          disagree about which mode is actually active.
+        - Picking anything else from the combo clears every checkbox
+          (left checked, they'd look active but be ignored) and reverts
+          `video_selection` to that plain string.
+        - Unchecking every box falls back to "Shuffle all", matching
+          nature.filtered_for_selection's own empty-selection fallback.
+
+        Bulk toggles (Select all / a biome header) block each child
+        checkbox's `toggled` signal while setting it and commit once at
+        the end, so checking 40 clips writes config once, not 40 times."""
+        CUSTOM = "__custom__"
+        videos: List[Dict[str, str]] = []
+        if _nature is not None:
+            try:
+                videos = _nature.read_index()
+            except Exception:
+                videos = []
+
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 6, 0, 8)
+        outer.setSpacing(4)
+
+        lbl = QLabel("Nature video")
+        lbl.setProperty("role", "field")
+        outer.addWidget(lbl)
+
+        raw = self._g("video_selection", "shuffle")
+        normalized = (
+            _nature.normalize_selection(raw, videos)
+            if _nature is not None else "shuffle"
+        )
+        is_custom = isinstance(normalized, dict) and normalized.get("mode") == "custom"
+        custom_files = set(normalized.get("files") or []) if is_custom else set()
+
+        video_choices, video_hint = self._video_choices()
+        combo = QComboBox()
+        quick_current = "shuffle" if is_custom else normalized
+        opts = list(video_choices)
+        values = [o[0] for o in opts]
+        if quick_current not in values:
+            opts = opts + [(quick_current, str(quick_current))]
+        opts = opts + [(CUSTOM, "Custom (checked below)")]
+        for value, opt_label in opts:
+            combo.addItem(opt_label, value)
+        idx = combo.findData(CUSTOM if is_custom else quick_current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        outer.addWidget(combo)
+
+        hint = QLabel(
+            video_hint + " Check specific clips below to build an exact "
+            "rotation; picking an option above clears the checkboxes. "
+            "Either choice switches Backdrop to Nature video."
+        )
+        hint.setProperty("role", "hint")
+        hint.setWordWrap(True)
+        outer.addWidget(hint)
+
+        if not videos:
+            return container
+
+        by_biome: Dict[str, List[Dict[str, str]]] = {}
+        for entry in videos:
+            key = entry.get("biome") or "other"
+            by_biome.setdefault(key, []).append(entry)
+
+        checkboxes: List[QCheckBox] = []
+        biome_groups: List[Tuple[QCheckBox, List[QCheckBox]]] = []
+
+        list_widget = QWidget()
+        lv = QVBoxLayout(list_widget)
+        lv.setContentsMargins(4, 4, 4, 4)
+        lv.setSpacing(6)
+
+        select_all_cb = QCheckBox("Select all")
+        lv.addWidget(select_all_cb)
+
+        def _current_files() -> List[str]:
+            return [cb.property("file") for cb in checkboxes if cb.isChecked()]
+
+        def _sync_headers() -> None:
+            files = _current_files()
+            select_all_cb.blockSignals(True)
+            select_all_cb.setChecked(bool(files) and len(files) == len(checkboxes))
+            select_all_cb.blockSignals(False)
+            for header_cb, members in biome_groups:
+                header_cb.blockSignals(True)
+                checked = [cb for cb in members if cb.isChecked()]
+                header_cb.setChecked(bool(members) and len(checked) == len(members))
+                header_cb.blockSignals(False)
+
+        def _commit() -> None:
+            files = _current_files()
+            combo.blockSignals(True)
+            if files:
+                combo.setCurrentIndex(combo.findData(CUSTOM))
+                self._set("video_selection", {"mode": "custom", "files": files})
+            else:
+                idx = combo.findData("shuffle")
+                combo.setCurrentIndex(idx if idx >= 0 else 0)
+                self._set("video_selection", "shuffle")
+            combo.blockSignals(False)
+            _sync_headers()
+            if on_change is not None:
+                on_change()
+
+        def _bulk_set(members: List[QCheckBox], checked: bool) -> None:
+            for cb in members:
+                cb.blockSignals(True)
+                cb.setChecked(checked)
+                cb.blockSignals(False)
+            _commit()
+
+        def _on_combo_changed(_i: int) -> None:
+            value = combo.currentData()
+            if value == CUSTOM:
+                return
+            for cb in checkboxes:
+                cb.blockSignals(True)
+                cb.setChecked(False)
+                cb.blockSignals(False)
+            _sync_headers()
+            self._set("video_selection", value)
+            if on_change is not None:
+                on_change()
+
+        for biome in _nature.biomes(videos):
+            members = by_biome.get(biome, [])
+            header_cb = QCheckBox(biome.title())
+            header_cb.setProperty("role", "field")
+            lv.addWidget(header_cb)
+            member_boxes: List[QCheckBox] = []
+            for entry in members:
+                cb = QCheckBox(entry.get("title") or entry["file"])
+                cb.setProperty("file", entry["file"])
+                cb.setChecked(entry["file"] in custom_files)
+                indent = QWidget()
+                ih = QHBoxLayout(indent)
+                ih.setContentsMargins(20, 0, 0, 0)
+                ih.addWidget(cb)
+                lv.addWidget(indent)
+                checkboxes.append(cb)
+                member_boxes.append(cb)
+            biome_groups.append((header_cb, member_boxes))
+
+        # Wire signals only after every checkbox exists with its correct
+        # initial state, so building the list at dialog-open time never
+        # itself writes config.
+        for cb in checkboxes:
+            cb.toggled.connect(lambda _checked: _commit())
+        select_all_cb.toggled.connect(lambda checked: _bulk_set(checkboxes, checked))
+        for header_cb, members in biome_groups:
+            header_cb.toggled.connect(
+                lambda checked, m=members: _bulk_set(m, checked)
+            )
+        combo.currentIndexChanged.connect(_on_combo_changed)
+
+        _sync_headers()
+        lv.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFixedHeight(200)
+        scroll.setWidget(list_widget)
+        outer.addWidget(scroll)
+
+        return container
 
     def _bg_row(self, key: str, label: str,
                 presets: List[Tuple[str, str]], custom_default: str,

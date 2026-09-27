@@ -437,6 +437,12 @@ def open_inline(parent_mw: Any = None) -> None:
                 # The button label escapes ampersands as "&&" for Qt
                 # mnemonics — undo so the title reads naturally.
                 name = name.replace("&&", "&").strip()
+                # By title, not by `::` path (see deck_names.py).
+                try:
+                    from .deck_names import title as _deck_title
+                    name = _deck_title(name)
+                except Exception:
+                    pass
                 title.setText(name or "Your progress")
             except Exception:
                 pass
