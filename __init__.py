@@ -1013,15 +1013,38 @@ def _standing() -> Dict[str, Any]:
         "due": None,
     }
     try:
-        tree = mw.col.sched.deck_due_tree()
-        n = lr = rv = 0
-        for c in getattr(tree, "children", []):
-            n += int(getattr(c, "new_count", 0) or 0)
-            lr += int(getattr(c, "learn_count", 0) or 0)
-            rv += int(getattr(c, "review_count", 0) or 0)
-        out["new"], out["learn"], out["due"] = n, lr, rv
+        t = _tree_totals(mw.col.sched.deck_due_tree())
+        out["new"], out["learn"], out["due"] = t["new"], t["learn"], t["due"]
     except Exception:
         pass
+    return out
+
+
+def _tree_totals(tree: Any) -> Dict[str, int]:
+    """New / learn / due summed across every deck in `deck_due_tree()`.
+
+    A node's counts are clipped by that deck's own daily limits, so a
+    parent whose preset allows 0 new a day reads 0 even while a subdeck
+    with its own preset lists 121 (studying the subdeck does show them).
+    Summing only the top level hid those cards. Each node counts as the
+    larger of its own figure and its children's totals: the own figure
+    already includes the children when the parent's limits let them
+    through, and the children's sum is what the list shows otherwise.
+    """
+    keys = (("new", "new_count"), ("learn", "learn_count"), ("due", "review_count"))
+
+    def node_totals(node: Any) -> Dict[str, int]:
+        kids = [node_totals(c) for c in getattr(node, "children", [])]
+        return {
+            k: max(int(getattr(node, attr, 0) or 0), sum(c[k] for c in kids))
+            for k, attr in keys
+        }
+
+    out = {"new": 0, "learn": 0, "due": 0}
+    for c in getattr(tree, "children", []):
+        t = node_totals(c)
+        for k in out:
+            out[k] += t[k]
     return out
 
 
@@ -2111,24 +2134,18 @@ _STUDY_STATE_SPECS = {
 def _queue_totals() -> Dict[str, int]:
     """The three numbers the sidebar shows — new / learn / due for today.
 
-    Same summation the sidebar's standing uses: the top level of
-    `deck_due_tree()`, whose counts the v3 scheduler has *already* clipped
+    Same summation the sidebar's standing uses (`_tree_totals` over
+    `deck_due_tree()`), whose counts the v3 scheduler has *already* clipped
     to each deck's daily limits. That clipping is the point. `is:new`
     matches every unseen card in the collection (233 in the demo); the
     sidebar says 65, because 65 is what today's limits will actually let
     you see. Clicking "65" and being handed 233 is the button lying about
     what it does, so the count doubles as the queue's limit.
     """
-    out = {"new": 0, "learn": 0, "due": 0}
     try:
-        tree = mw.col.sched.deck_due_tree()
-        for c in getattr(tree, "children", []):
-            out["new"] += int(getattr(c, "new_count", 0) or 0)
-            out["learn"] += int(getattr(c, "learn_count", 0) or 0)
-            out["due"] += int(getattr(c, "review_count", 0) or 0)
+        return _tree_totals(mw.col.sched.deck_due_tree())
     except Exception:
-        pass
-    return out
+        return {"new": 0, "learn": 0, "due": 0}
 
 
 def _paused_exclusions(col: Any) -> str:

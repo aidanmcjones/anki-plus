@@ -248,6 +248,12 @@ Rules for a good live test:
   (new and old parent entries) and the home list's payload; after a last
   order-only drop it closes Browse and reads the real home deck list
   (no refresh by hand). On 7c36688 29 of 44 checks fail.
+- `test_sidebar_totals.py`: gives Parent its own preset with 0 new and 0
+  reviews a day and makes Parent::A's cards due today, so Parent's row
+  reads 0 / 0 while A lists 2 due and B, C 2 new each. After a deck list
+  refresh the sidebar must read Due 2, New 6, Learning 0. On 9690171 it
+  read Due 0 / New 2: only top-level rows were summed, so a parent's
+  limits hid its subdecks' cards (ticket 20260929-101708).
 - `test_sidebar_resize.py`: hover the left rail's right border with the
   real mouse (a resize handle with a col-resize cursor must be there), then
   drag it 80px right. Checks what the user sees: the rail widens with every
