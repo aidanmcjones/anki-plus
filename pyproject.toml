@@ -14,9 +14,10 @@ dependencies = [
 [project.scripts]
 ankibug = "ankibug.cli:main"
 ankifix = "ankifix.cli:main"
+ankiship = "ankiship.cli:main"
 
 [tool.setuptools]
-packages = ["ankibug", "ankifix"]
+packages = ["ankibug", "ankifix", "ankiship"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

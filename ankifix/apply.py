@@ -258,3 +258,42 @@ def apply_ticket(ticket_id: str, cfg: Config, echo=print) -> Dict[str, Any]:
         return load_ticket(cfg.tickets_dir, ticket_id)
     notify(cfg, f"ankifix: {ticket_id} applied, restart Anki+")
     return ticket
+
+
+def patch_paths(patch_text: str) -> List[str]:
+    """Every file a format-patch touches, both sides of a rename."""
+    paths: List[str] = []
+    for line in patch_text.splitlines():
+        if line.startswith("diff --git a/"):
+            a, _, b = line[len("diff --git a/"):].partition(" b/")
+            for p in (a, b):
+                if p and p not in paths:
+                    paths.append(p)
+    return paths
+
+
+def ship_ticket(ticket_id: str, cfg: Config, echo=print) -> List[Any]:
+    """Commit and PR an applied, landed fix with ankiship. Only the files in
+    the ticket's own patch are shipped, so unrelated edits in the live
+    checkout are never swept into a fix commit."""
+    from ankiship import ship as ship_mod
+
+    ticket = load_ticket(cfg.tickets_dir, ticket_id)
+    fix = ticket.get("fix") or {}
+    applied = fix.get("applied") or {}
+    if ticket.get("status") != "fixed" or (applied.get("landed") or {}).get("state") == "not-landed":
+        echo(f"ankifix: {ticket_id} not shipped (status={ticket.get('status')})")
+        return []
+    patch = ticket_dir(cfg.tickets_dir, ticket_id) / PATCH_NAME
+    paths = patch_paths(patch.read_text()) if patch.exists() else []
+    if not paths:
+        echo(f"ankifix: {ticket_id} not shipped (no patch paths)")
+        return []
+    note = (ticket.get("note") or "").strip().splitlines()
+    summary = note[0] if note else ticket_id
+    os.environ["PATH"] = cfg.subprocess_path()  # launchd PATH lacks gh
+    return ship_mod.ship(
+        Path(cfg.app_repo), paths=paths, kind="fix", summary=summary,
+        body=f"Ticket {ticket_id}. {fix.get('summary') or ''}".strip(),
+        trailers=[f"Ticket: {ticket_id}", cfg.co_author], echo=echo,
+    )

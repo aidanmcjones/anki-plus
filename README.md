@@ -108,3 +108,40 @@ written — capture failures are never fatal.
 Tests cover schema validation, the on-disk store/index, and CDP
 capture against a fake `/json` + websocket server (no running Anki+
 required).
+
+## ankiship: grouped commits and standing PRs
+
+`ankiship` turns uncommitted work into clean, grouped history. Each changed
+file is classified to an **area** (browse, sidebar, reviewer, editor,
+backdrop, fullscreen, scheduling, stats, search, settings, stability, theme,
+tags, bug-report, build, docs, test-harness; the engine profile has its own
+set) and each area group to a conventional **type** (feat, fix, perf,
+refactor, test, docs, build, chore). A test file joins the area it tests.
+
+For every `(type, area)` group it:
+
+1. commits locally on the current branch as `type(area): summary`, so the
+   live checkout ends clean;
+2. cherry-picks that commit onto the standing branch `auto/<type>/<area>`
+   (fast-forward only, never forced) and pushes it;
+3. keeps exactly one open PR per branch into the base branch, labelled
+   `type:<type>` and `area:<area>`, with a running commit list.
+
+It never pushes main, master or the base branch, and never merges. A commit
+that does not cherry-pick cleanly stays local and is reported as `conflict`.
+
+```bash
+ankiship plan ~/dev/anki-design                  # dry run: show the groups
+ankiship run  ~/dev/anki-design                  # commit, push, open/update PRs
+ankiship run  ~/dev/anki-design --type perf -m "cache deck tree"
+ankiship install-agent ~/dev/anki-design         # every 15 min, files quiet 10 min
+```
+
+Per-repo settings live in git config: `ship.base`, `ship.prefix`,
+`ship.profile` (`addon` or `engine`), `ship.labels false`,
+`ship.pushCurrent false`. For the engine checkout:
+`git config ship.base engine/main && git config ship.prefix engine/auto/`.
+
+ankifix calls it automatically (`auto_ship`, on by default): when the watcher
+auto-applies a ticket and it lands `fixed`, exactly the files in the ticket's
+patch ship as `fix(<area>): <ticket note>` with a `Ticket:` trailer.

@@ -274,6 +274,10 @@ class Config:
     # after a `fixed`/`needs-review` app ticket in --watch mode, automatically
     # run the apply step (fix branch -> live add-on checkout, uncommitted).
     auto_apply: bool = True
+    # after an auto-applied ticket lands as `fixed`, commit exactly the files
+    # in its patch with ankiship: one fix(<area>) commit per area, cherry-
+    # picked onto the area's standing auto/fix/<area> PR branch and pushed.
+    auto_ship: bool = True
     # NODE_PATH exported while running ticket.fix.tests during `ankifix apply`
     # (the live checkout's own playwright/npx cache, not the fixer worktree's).
     apply_node_path: str = str(HOME / ".npm/_npx/6bcb61ec6d5aea22/node_modules")

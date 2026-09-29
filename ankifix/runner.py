@@ -1201,6 +1201,12 @@ def watch(cfg: Config, interval: float, once: bool = False, echo=print) -> int:
                             apply_mod.apply_ticket(tid, cfg, echo=echo)
                         except Exception as e:  # noqa: BLE001
                             echo(f"ankifix: auto-apply for {tid} failed: {type(e).__name__}: {e}")
+                        else:
+                            if cfg.auto_ship:
+                                try:
+                                    apply_mod.ship_ticket(tid, cfg, echo=echo)
+                                except Exception as e:  # noqa: BLE001 - shipping never stops the watcher
+                                    echo(f"ankifix: auto-ship for {tid} failed: {type(e).__name__}: {e}")
         except LockBusy as e:
             echo(f"ankifix: {e}; waiting")
         except Exception as e:  # noqa: BLE001 - keep the watcher alive
