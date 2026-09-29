@@ -1751,6 +1751,14 @@ def _on_js_message(handled, message, context):
             mw.on_sync_button_clicked()
         elif cmd == "settings":
             _open_settings()
+        elif cmd == "feature":
+            # Sidebar foot's "Request feature" row (sidebar.js), same dialog
+            # as Cmd+Shift+F.
+            try:
+                from . import bugreport as _bugreport
+                _bugreport.open_feature_dialog()
+            except Exception:
+                pass
         elif cmd.startswith("sidebar-collapse:"):
             # Left-rail collapse toggle (Item 2). Persist to the add-on's
             # own config (same key/reader _config() uses) and, if any
@@ -4658,6 +4666,34 @@ def _setup_sidebar_shortcuts() -> None:
                 sc.setAutoRepeat(False)
                 sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
                 sc.activated.connect(_open_bug_report)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # Cmd+Shift+F: Request a feature, from anywhere. Same dialog as the bug
+    # report in feature mode (bugreport.open_feature_dialog): the ticket is
+    # filed kind=app, request=feature, and the ankifix watcher builds it.
+    # Configurable via `feature_request_shortcut`; same belt-and-braces
+    # Meta form as above.
+    def _open_feature_request() -> None:
+        try:
+            from . import bugreport as _bugreport
+            _bugreport.open_feature_dialog()
+        except Exception:
+            pass
+    try:
+        from aqt.qt import QShortcut, QKeySequence, Qt
+        base_seq = str(
+            _config().get("feature_request_shortcut", "Ctrl+Shift+F") or "Ctrl+Shift+F"
+        )
+        seqs = {base_seq, "Ctrl+Shift+F", "Meta+Shift+F"}
+        for seq in seqs:
+            try:
+                sc = QShortcut(QKeySequence(seq), mw)
+                sc.setAutoRepeat(False)
+                sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+                sc.activated.connect(_open_feature_request)
             except Exception:
                 continue
     except Exception:

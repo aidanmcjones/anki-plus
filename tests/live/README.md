@@ -158,6 +158,13 @@ Rules for a good live test:
 
 - `test_smoke.py`: the app starts on the deck list, the add-on is loaded,
   and the home webview lists the fixture decks in tree order.
+- `test_feature_request.py`: Cmd+Shift+F (pressed through the main
+  window's QWindow) opens "Request a feature", a second press does not stack
+  another dialog, an empty description is refused, a typed multi-line
+  description saved with the button files a `kind: app`, `request: feature`
+  ticket (to a temp folder) with its screenshot, the sidebar's "Request
+  feature" row opens the same dialog, and Cmd+Shift+B still opens "Report a
+  bug". On the code before the feature its first check fails.
 - `test_deck_reorder.py`: dragging a deck onto a sibling's top edge
   reorders it in the re-rendered list (page events), and, since the list
   uses HTML5 drag-and-drop, that the home webview hands drag enter / drop to

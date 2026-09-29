@@ -78,6 +78,12 @@
         '<circle cx="12" cy="12" r="3"/>' +
         '<path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3h0a1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 1 1.5h0a1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8v0a1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>' +
       '</g>',
+    // Lightbulb for "Request feature" (Cmd+Shift+F).
+    idea:
+      '<g class="ba-i-idea">' +
+        '<path d="M9 18h6"/><path d="M10 21h4"/>' +
+        '<path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2V16h5.2v-.2c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/>' +
+      '</g>',
     collapse:
       '<path d="M15 5l-7 7 7 7"/>',
   };
@@ -398,11 +404,13 @@
     // Streak + lifetime stats moved out of the sidebar and into the
     // practice/heatmap section on the main page.
 
-    // Foot — sync + settings.
+    // Foot: sync, feature request (Cmd+Shift+F), settings.
     var foot = document.createElement("div");
     foot.className = "ba-side-foot";
     [
       { cmd: "sync",     label: "Sync",     key: "Y", dot: true },
+      { cmd: "feature",  label: "Request feature", key: "\u21e7F", icon: "idea",
+        cls: "ba-side-feature" },
       { cmd: "settings", label: "Settings", key: ",", cls: "ba-side-settings" },
     ].forEach(function (it) { foot.appendChild(makeRow(it)); });
     aside.appendChild(foot);
