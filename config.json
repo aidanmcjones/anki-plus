@@ -41,6 +41,7 @@
   "deadline_passed_mode": "pause",
   "cmdk": true,
   "bug_report_shortcut": "Ctrl+Shift+B",
+  "feature_request_shortcut": "Ctrl+Shift+F",
   "embed_add": true,
   "embed_browse": true,
   "embed_stats": true,

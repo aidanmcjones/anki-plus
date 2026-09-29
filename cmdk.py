@@ -197,6 +197,13 @@ _ACTIONS: List[Dict[str, Any]] = [
         "icon": "flag",
         "keywords": ["bug", "issue", "feedback", "ticket", "problem"],
     },
+    {
+        "key": "request-feature",
+        "title": "Request a feature",
+        "sub": "Describe it; Claude builds and lands it",
+        "icon": "idea",
+        "keywords": ["feature", "idea", "request", "build", "suggest", "wish"],
+    },
 ]
 
 
@@ -779,6 +786,15 @@ def _do_action(key: str) -> None:
                 mw.col.update_card(card)
             except Exception:
                 pass
+        except Exception:
+            pass
+        return
+
+    if key == "request-feature":
+        try:
+            from . import bugreport as _bugreport
+
+            _bugreport.open_feature_dialog()
         except Exception:
             pass
         return

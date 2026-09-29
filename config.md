@@ -255,6 +255,12 @@ in this file are the raw form the settings page writes.
   from the command palette ("Report a bug") on every screen. Saves a
   ticket — a one-line note, an optional "what did you expect", and a
   screenshot by default — under `~/AnkiTickets/<id>/`.
+- **feature_request_shortcut**: Qt key sequence for "Request a feature"
+  (default `"Ctrl+Shift+F"`, ⌘⇧F on macOS). Also the sidebar's "Request
+  feature" row and the command palette's "Request a feature". Describe what
+  Anki+ should do; the ticket is filed under `~/AnkiTickets/<id>/` as
+  `kind: app`, `request: feature`, and the ankifix watcher builds it on a
+  branch, proves it with a live test in a throwaway app, and lands it.
 - **embed_add**, **embed_browse**, **embed_stats**, **embed_settings** — open
   those inside the main window (needs `sidebar_nav`); `false` uses Anki's
   separate windows.

@@ -21,7 +21,11 @@ Covered here:
       screenshot is taken first, the capture times out after 3 s, and the
       ticket is filed with capture.note "webview unresponsive"; a late
       callback after that changes nothing, and a timer that fires after a
-      normal capture changes nothing either.
+      normal capture changes nothing either;
+  (h) a feature request (Cmd+Shift+F, request="feature") is filed as
+      kind "app" with request "feature" and keeps a multi-line description
+      verbatim, while a plain bug report stays kind "unknown" with request
+      "bug".
 
 Runs standalone (no Anki install needed):
 `python3 tests/test_bug_report.py`. Stubs aqt before import, same approach
@@ -416,6 +420,34 @@ def test_slugify_and_make_id_shape():
     when = datetime.datetime(2026, 9, 22, 21, 45, 3)
     tid = br._make_id("Weird crash", when)
     assert tid.startswith("20260922-214503-")
+
+
+
+def test_feature_request_is_filed_as_an_app_build_ticket():
+    tdir = _tmp_tickets_dir()
+    _reset_mw()
+    result = {}
+    desc = "Add a Suspend item to the Browse right-click menu\nwith a Cmd+J shortcut"
+    br.create_ticket(desc, "below Reposition", True, on_done=result.update, request="feature")
+    assert result, "on_done never fired"
+    assert result["kind"] == "app"
+    assert result["request"] == "feature"
+    assert result["status"] == "new"
+    assert result["note"] == desc
+    assert result["expected"] == "below Reposition"
+    with open(os.path.join(tdir, result["id"], "ticket.json")) as fh:
+        on_disk = json.load(fh)
+    assert on_disk["kind"] == "app" and on_disk["request"] == "feature"
+    if ankibug_schema is not None:
+        ankibug_schema.validate(on_disk)
+
+    bug = _run_create_ticket("Plain bug", "", False)
+    assert bug["kind"] == "unknown" and bug["request"] == "bug"
+    # an unknown request value degrades to a bug report, never a crash
+    odd = {}
+    br.create_ticket("Odd", "", False, on_done=odd.update, request="nonsense")
+    assert odd["request"] == "bug" and odd["kind"] == "unknown"
+    shutil.rmtree(tdir, ignore_errors=True)
 
 
 if __name__ == "__main__":
